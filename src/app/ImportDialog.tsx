@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { parseDesign, type Design } from '../model/schema'
 import { copyText, extractJson } from './share'
+import { STARTER_DESIGN } from './starterDesign'
 
 export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d: Design) => void }) {
   const [text, setText] = useState('')
@@ -17,6 +18,10 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
     if (r.ok) onImport(r.design)
     else setErrors(r.errors)
   }
+  const useExample = () => {
+    if (text.trim() && !confirm('Replace what you pasted with the example?')) return
+    setText(JSON.stringify(STARTER_DESIGN, null, 2)); setErrors([]); setFixCopied(false)
+  }
   const readFile = async (f: File | undefined) => {
     if (!f) return
     const raw = await f.text()
@@ -28,8 +33,9 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
       onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); readFile(e.dataTransfer.files[0]) }}>
       <h3>Import a design</h3>
       <p className="muted small">
-        Paste or drop a <code>archstory/v1</code> JSON file, or paste an AI's whole answer: code fences and
-        surrounding text are ignored. Schema: <a href={`${import.meta.env.BASE_URL}schema/archstory-v1.json`} target="_blank">archstory-v1.json</a>.
+        Paste or drop an <code>archstory/v1</code> JSON file, or paste an AI's whole answer: code fences and
+        surrounding text are ignored. Never written one? <button className="link" onClick={useExample}>Start from an example</button>,
+        edit it, then validate. Schema: <a href={`${import.meta.env.BASE_URL}schema/archstory-v1.json`} target="_blank">archstory-v1.json</a>.
       </p>
       <textarea value={text} onChange={e => { setText(e.target.value); setErrors([]); setFixCopied(false) }} spellCheck={false}
         placeholder={'{\n  "schema": "archstory/v1",\n  "id": "my-design",\n  "meta": { "title": "…" },\n  "nodes": [ … ]\n}'} />
