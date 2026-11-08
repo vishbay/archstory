@@ -1,0 +1,125 @@
+{
+  "schema": "archstory/v1",
+  "id": "multi-tenant-saas",
+  "meta": {
+    "title": "Multi-tenant SaaS",
+    "summary": "One product serving thousands of customer organizations: shared pool for most tenants, dedicated silo for enterprise, strict isolation for all.",
+    "tags": ["multi-tenant", "isolation", "auth"],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Many customer organizations (tenants) use the same product",
+      "Each tenant only ever sees its own data",
+      "Enterprise tenants can get dedicated infrastructure",
+      "Per-tenant rate limits and plans"
+    ],
+    "nonFunctional": [
+      "No cross-tenant data leaks, even with an application bug",
+      "One noisy tenant cannot slow down others",
+      "Onboard a new tenant in minutes"
+    ],
+    "scale": [
+      { "label": "Tenants", "value": "10k (95% small)" },
+      { "label": "Load skew", "value": "Top 20 tenants generate ~50% of traffic" }
+    ]
+  },
+  "network": {
+    "cidr": "10.6.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      { "id": "public", "label": "Public", "public": true, "tiers": ["entry"], "cidr": "10.6.0.0/20" },
+      { "id": "app", "label": "App", "tiers": ["services", "async"], "cidr": "10.6.16.0/20" },
+      { "id": "data", "label": "Data", "tiers": ["data"], "cidr": "10.6.32.0/20" }
+    ]
+  },
+  "nodes": [
+    { "id": "client", "label": "User at globex.app.com", "kind": "web_client" },
+    { "id": "dns", "label": "DNS", "kind": "dns", "description": "*.app.com → one entry point", "cloud": { "aws": "Route 53", "gcp": "Cloud DNS" } },
+    { "id": "cdn", "label": "CDN", "kind": "cdn", "cloud": { "aws": "CloudFront", "gcp": "Cloud CDN" } },
+    { "id": "gw", "label": "API Gateway", "kind": "api_gateway", "description": "Verifies tokens, resolves the tenant, applies per-tenant limits", "cloud": { "aws": "API Gateway", "gcp": "API Gateway" } },
+    { "id": "auth", "label": "Identity Provider", "kind": "auth", "description": "OIDC; tokens carry a tenant_id claim", "cloud": { "aws": "Cognito", "gcp": "Identity Platform" } },
+    { "id": "app", "label": "App Service", "kind": "service", "replicas": 6, "description": "Shared, stateless; never trusts a tenant id from the client", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
+    { "id": "catalog", "label": "Tenant Catalog", "kind": "nosql_db", "description": "tenant → plan, tier (pool / silo), database, limits", "cloud": { "aws": "DynamoDB", "gcp": "Firestore" } },
+    { "id": "pool_cache", "label": "Pooled Cache", "kind": "cache", "group": "pool", "description": "Keys prefixed with tenant id", "cloud": { "aws": "ElastiCache Redis", "gcp": "Memorystore Redis" } },
+    { "id": "pool_db", "label": "Pooled DB", "kind": "sql_db", "group": "pool", "description": "All small tenants; every table has tenant_id with row-level security", "cloud": { "aws": "Aurora PostgreSQL", "gcp": "Cloud SQL Postgres" } },
+    { "id": "silo_db", "label": "Acme Dedicated DB", "kind": "sql_db", "group": "silo", "description": "One enterprise tenant; own encryption key", "cloud": { "aws": "Aurora PostgreSQL", "gcp": "Cloud SQL Postgres" } },
+    { "id": "silo_worker", "label": "Acme Workers", "kind": "worker", "group": "silo", "description": "Dedicated background capacity", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
+    { "id": "jobs_q", "label": "Job Queue", "kind": "queue", "description": "Messages carry tenant id", "cloud": { "aws": "SQS", "gcp": "Pub/Sub" } }
+  ],
+  "groups": [
+    { "id": "pool", "label": "Shared pool (most tenants)", "kind": "tenant" },
+    { "id": "silo", "label": "Enterprise silo: Acme", "kind": "tenant" }
+  ],
+  "edges": [
+    { "from": "client", "to": "dns" },
+    { "from": "client", "to": "cdn" },
+    { "from": "cdn", "to": "gw" },
+    { "from": "gw", "to": "auth" },
+    { "from": "gw", "to": "catalog" },
+    { "from": "gw", "to": "app" },
+    { "from": "app", "to": "pool_cache" },
+    { "from": "app", "to": "pool_db" },
+    { "from": "app", "to": "silo_db" },
+    { "from": "app", "to": "jobs_q", "async": true },
+    { "from": "jobs_q", "to": "silo_worker" },
+    { "from": "silo_worker", "to": "silo_db" }
+  ],
+  "flows": [
+    {
+      "id": "pooled",
+      "title": "Request from a pooled tenant",
+      "summary": "Tenant comes from the verified token, limits come from the catalog, and the database itself enforces isolation.",
+      "steps": [
+        { "from": "client", "to": "dns", "kind": "req", "label": "resolve globex.app.com", "detail": "A wildcard record sends every tenant subdomain to the same entry point." },
+        { "from": "dns", "to": "client", "kind": "res", "label": "CDN address" },
+        { "from": "client", "to": "cdn", "kind": "req", "label": "GET /api/projects", "payload": "GET /api/projects HTTP/2\nHost: globex.app.com\nAuthorization: Bearer eyJ…  (claims: sub=u_17, tenant_id=globex)" },
+        { "from": "cdn", "to": "gw", "kind": "req", "label": "forward" },
+        { "from": "gw", "to": "auth", "kind": "req", "label": "verify JWT", "detail": "Usually a local signature check with cached public keys. The tenant comes from the signed token, never from a header or body field the client controls." },
+        { "from": "auth", "to": "gw", "kind": "res", "label": "valid, tenant=globex", "detail": "The gateway also checks the token's tenant matches the subdomain." },
+        { "from": "gw", "to": "catalog", "kind": "req", "label": "GET tenant globex", "detail": "Cached at the gateway for a minute." },
+        { "from": "catalog", "to": "gw", "kind": "res", "label": "pooled, 100 rps", "payload": "{ \"tenant\": \"globex\", \"plan\": \"team\", \"tier\": \"pool\", \"db\": \"pool-1\", \"rate_limit_rps\": 100 }" },
+        { "from": "gw", "to": "gw", "kind": "local", "label": "per-tenant rate limit", "detail": "Noisy-neighbor protection: a tenant over its limit gets 429s; everyone else is unaffected." },
+        { "from": "gw", "to": "app", "kind": "req", "label": "+ tenant context", "detail": "Forwarded as a signed internal header so services cannot be tricked by a client-supplied value." },
+        { "from": "app", "to": "pool_cache", "kind": "req", "label": "GET globex:projects", "detail": "Every cache key is prefixed with the tenant id." },
+        { "from": "pool_cache", "to": "app", "kind": "res", "label": "MISS" },
+        { "from": "app", "to": "pool_db", "kind": "req", "label": "SELECT with RLS", "detail": "Row-level security: even if a query forgets WHERE tenant_id = …, the database only returns this tenant's rows.",
+          "payload": "SET app.tenant_id = 'globex';\nSELECT id, name FROM projects;   -- policy: tenant_id = current_setting('app.tenant_id')" },
+        { "from": "pool_db", "to": "app", "kind": "res", "label": "rows (globex only)" },
+        { "from": "app", "to": "gw", "kind": "res", "label": "200 OK" },
+        { "from": "gw", "to": "cdn", "kind": "res", "label": "200 OK" },
+        { "from": "cdn", "to": "client", "kind": "res", "label": "200 OK" }
+      ]
+    },
+    {
+      "id": "silo",
+      "title": "Request from an enterprise tenant",
+      "summary": "Same code path; the catalog routes Acme to its dedicated database and workers.",
+      "steps": [
+        { "from": "client", "to": "cdn", "kind": "req", "label": "POST /api/exports", "payload": "POST /api/exports HTTP/2\nHost: acme.app.com\nAuthorization: Bearer eyJ…  (claims: tenant_id=acme)" },
+        { "from": "cdn", "to": "gw", "kind": "req", "label": "forward" },
+        { "from": "gw", "to": "auth", "kind": "req", "label": "verify JWT" },
+        { "from": "auth", "to": "gw", "kind": "res", "label": "valid, tenant=acme" },
+        { "from": "gw", "to": "catalog", "kind": "req", "label": "GET tenant acme" },
+        { "from": "catalog", "to": "gw", "kind": "res", "label": "silo, db=acme", "payload": "{ \"tenant\": \"acme\", \"plan\": \"enterprise\", \"tier\": \"silo\", \"db\": \"acme-db\", \"rate_limit_rps\": 2000 }" },
+        { "from": "gw", "to": "app", "kind": "req", "label": "+ tenant context" },
+        { "from": "app", "to": "silo_db", "kind": "req", "label": "INSERT export job", "detail": "Connection chosen from the catalog entry. The app code is identical for pooled and siloed tenants." },
+        { "from": "silo_db", "to": "app", "kind": "res", "label": "job_9" },
+        { "from": "app", "to": "jobs_q", "kind": "async", "label": "enqueue (tenant=acme)" },
+        { "from": "app", "to": "gw", "kind": "res", "label": "202 Accepted" },
+        { "from": "gw", "to": "cdn", "kind": "res", "label": "202 Accepted" },
+        { "from": "cdn", "to": "client", "kind": "res", "label": "export started" },
+        { "from": "jobs_q", "to": "silo_worker", "kind": "async", "label": "job_9", "detail": "Acme's heavy exports run on Acme's own workers, so they never compete with pooled tenants." },
+        { "from": "silo_worker", "to": "silo_db", "kind": "async", "label": "read + write results" }
+      ]
+    }
+  ],
+  "notes": [
+    { "kind": "tradeoff", "text": "Pool (shared everything) is cheapest and easiest to operate. Silo (dedicated per tenant) gives the strongest isolation and per-tenant tuning at higher cost. Most products pool by default and silo enterprise customers." },
+    { "target": "pool_db", "kind": "security", "text": "Defense in depth: tenant from the signed token, tenant-scoped connections, and row-level security in the database, so one forgotten WHERE clause cannot leak data." },
+    { "target": "catalog", "kind": "scaling", "text": "Because routing comes from the catalog, a tenant that outgrows the pool can be migrated to its own database by copying data and flipping its catalog entry." },
+    { "target": "gw", "kind": "failure", "text": "Per-tenant limits and per-tenant queues contain incidents: one tenant's runaway script cannot exhaust shared capacity." },
+    { "target": "silo_db", "kind": "security", "text": "Enterprise silos often get customer-managed encryption keys and a dedicated network for compliance." }
+  ]
+}

@@ -1,0 +1,376 @@
+{
+  "schema": "archstory/v1",
+  "id": "typeahead",
+  "meta": {
+    "title": "Search Autocomplete",
+    "summary": "Suggest popular completions on every keystroke from a precomputed in-memory trie, rebuilt from search logs every hour.",
+    "tags": [
+      "caching",
+      "trie",
+      "read-heavy"
+    ],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Return the top 10 completions for a typed prefix",
+      "Rank suggestions by popularity",
+      "Trending queries show up within about an hour"
+    ],
+    "nonFunctional": [
+      "< 100 ms p99 per keystroke, including the network",
+      "Very high availability",
+      "Suggestions may be slightly stale"
+    ],
+    "scale": [
+      {
+        "label": "Searches",
+        "value": "10B / day"
+      },
+      {
+        "label": "Suggest requests",
+        "value": "~5 keystrokes per search → ~600k/s avg"
+      },
+      {
+        "label": "Distinct queries kept",
+        "value": "Top ~100M"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.7.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.7.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.7.16.0/20"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Search Box",
+      "kind": "web_client"
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Caches responses per prefix for a few minutes",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "suggest",
+      "label": "Suggest Service",
+      "kind": "service",
+      "replicas": 20,
+      "description": "Holds the whole trie in memory; top-10 precomputed at every node",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "snapshots",
+      "label": "Trie Snapshots",
+      "kind": "object_store",
+      "description": "Versioned, serialized tries",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "counts",
+      "label": "Query Counts",
+      "kind": "nosql_db",
+      "description": "query → decayed popularity score",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Bigtable"
+      }
+    },
+    {
+      "id": "logs",
+      "label": "Search Log",
+      "kind": "stream",
+      "cloud": {
+        "aws": "Kinesis Data Streams",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "aggregator",
+      "label": "Aggregator",
+      "kind": "worker",
+      "description": "Counts queries per hour with time decay",
+      "cloud": {
+        "aws": "AWS Glue",
+        "gcp": "Dataflow"
+      }
+    },
+    {
+      "id": "builder",
+      "label": "Trie Builder",
+      "kind": "worker",
+      "description": "Hourly batch job",
+      "cloud": {
+        "aws": "AWS Batch",
+        "gcp": "Cloud Run Job"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "suggest"
+    },
+    {
+      "from": "suggest",
+      "to": "snapshots"
+    },
+    {
+      "from": "suggest",
+      "to": "logs",
+      "async": true
+    },
+    {
+      "from": "logs",
+      "to": "aggregator"
+    },
+    {
+      "from": "aggregator",
+      "to": "counts"
+    },
+    {
+      "from": "builder",
+      "to": "counts"
+    },
+    {
+      "from": "builder",
+      "to": "snapshots"
+    }
+  ],
+  "flows": [
+    {
+      "id": "hit",
+      "title": "Keystroke (cache hit)",
+      "summary": "Most prefixes are short and popular, so the CDN answers without reaching the origin.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "debounce 100 ms",
+          "detail": "Wait until typing pauses briefly. Fast typists send far fewer requests."
+        },
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET /suggest?q=sys",
+          "payload": "GET /suggest?q=sys&lang=en HTTP/2"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "HIT (max-age 300)",
+          "detail": "Prefix popularity follows a power law, so a few thousand short prefixes cover most traffic."
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "label": "top 10",
+          "payload": "[\"system design\", \"system of a down\", \"systemctl\", …]"
+        }
+      ]
+    },
+    {
+      "id": "miss",
+      "title": "Keystroke (cache miss)",
+      "summary": "A longer, rarer prefix reaches the origin, where one trie walk returns the precomputed answer.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET /suggest?q=system%20des"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "MISS"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "suggest",
+          "kind": "req",
+          "label": "route"
+        },
+        {
+          "from": "suggest",
+          "to": "suggest",
+          "kind": "local",
+          "label": "walk trie, read top-10",
+          "detail": "Each trie node stores its own top-10 list, so the lookup costs O(length of prefix). No subtree search, no database."
+        },
+        {
+          "from": "suggest",
+          "to": "logs",
+          "kind": "async",
+          "label": "log query",
+          "detail": "Only submitted searches are logged for popularity, not every keystroke."
+        },
+        {
+          "from": "suggest",
+          "to": "lb",
+          "kind": "res",
+          "label": "200, max-age=300"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "label": "200"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "label": "top 10",
+          "detail": "Now cached at this edge for the next five minutes."
+        }
+      ]
+    },
+    {
+      "id": "rebuild",
+      "title": "Hourly trie rebuild",
+      "summary": "Popularity is computed offline; serving nodes swap to a new snapshot without downtime.",
+      "steps": [
+        {
+          "from": "logs",
+          "to": "aggregator",
+          "kind": "async",
+          "label": "batch of search events"
+        },
+        {
+          "from": "aggregator",
+          "to": "counts",
+          "kind": "async",
+          "label": "upsert decayed scores",
+          "detail": "score = old_score × decay + new_count, so trending queries rise fast and stale ones fade."
+        },
+        {
+          "from": "builder",
+          "to": "counts",
+          "kind": "async",
+          "label": "scan top 100M queries"
+        },
+        {
+          "from": "counts",
+          "to": "builder",
+          "kind": "async",
+          "label": "queries + scores"
+        },
+        {
+          "from": "builder",
+          "to": "builder",
+          "kind": "local",
+          "label": "build trie, top-k per node",
+          "detail": "Also filters offensive and policy-blocked phrases before they can be suggested."
+        },
+        {
+          "from": "builder",
+          "to": "snapshots",
+          "kind": "async",
+          "label": "PUT trie-v1234"
+        },
+        {
+          "from": "suggest",
+          "to": "snapshots",
+          "kind": "req",
+          "label": "load trie-v1234 (rolling)",
+          "detail": "Instances load the new version one at a time and swap atomically in memory. Rolling back is loading the previous snapshot."
+        },
+        {
+          "from": "snapshots",
+          "to": "suggest",
+          "kind": "res",
+          "label": "snapshot"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "suggest",
+      "kind": "scaling",
+      "text": "If the trie no longer fits in one machine's memory, shard by prefix range (a-f, g-m, …) and route by first characters."
+    },
+    {
+      "target": "cdn",
+      "kind": "tradeoff",
+      "text": "Caching responses for 5 minutes removes most origin load at the cost of a few minutes of staleness, which suggestions tolerate."
+    },
+    {
+      "target": "builder",
+      "kind": "tradeoff",
+      "text": "Offline rebuilds keep the serving path read-only and simple. Real-time trending needs a second, small, frequently updated trie merged at query time."
+    },
+    {
+      "target": "suggest",
+      "kind": "failure",
+      "text": "Serving nodes are stateless after loading a snapshot; a failed node is replaced and loads the latest version."
+    },
+    {
+      "kind": "note",
+      "text": "Personalization (your own recent searches) is usually a separate small per-user list merged in on the client or at the service."
+    }
+  ]
+}

@@ -1,0 +1,497 @@
+{
+  "schema": "archstory/v1",
+  "id": "chat",
+  "meta": {
+    "title": "Chat Messaging",
+    "summary": "1:1 and group messaging (WhatsApp / Messenger style) over persistent connections, with offline delivery and push notifications.",
+    "tags": [
+      "realtime",
+      "websockets",
+      "messaging"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Send 1:1 and small-group text messages",
+      "Sent, delivered and read receipts",
+      "Offline users get a push notification and receive missed messages on reconnect",
+      "Message history syncs across a user's devices"
+    ],
+    "nonFunctional": [
+      "Delivery < 500 ms when both users are online",
+      "No message is ever lost once the sender sees ✓",
+      "Messages appear in the same order for everyone in a conversation"
+    ],
+    "scale": [
+      {
+        "label": "Daily active users",
+        "value": "500M"
+      },
+      {
+        "label": "Messages",
+        "value": "40B / day (~460k/s avg)"
+      },
+      {
+        "label": "Concurrent connections",
+        "value": "~200M"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.3.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.3.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.3.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.3.32.0/20"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "alice",
+      "label": "Alice (sender)",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "bob",
+      "label": "Bob (recipient)",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "lb",
+      "label": "Network Load Balancer",
+      "kind": "network_load_balancer",
+      "description": "Layer 4: passes long-lived TCP connections straight to the gateways",
+      "cloud": {
+        "aws": "NLB",
+        "gcp": "External passthrough Network Load Balancer"
+      }
+    },
+    {
+      "id": "ws",
+      "label": "Chat Gateway",
+      "kind": "websocket_gateway",
+      "description": "Terminates WebSockets; each node holds ~1M connections",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "chat_svc",
+      "label": "Message Service",
+      "kind": "service",
+      "description": "Persists, routes and syncs messages",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "sessions",
+      "label": "Session Registry",
+      "kind": "cache",
+      "description": "user → gateway node holding their connection, with a heartbeat TTL",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "msg_db",
+      "label": "Message Store",
+      "kind": "nosql_db",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "Cassandra-style: partition = conversation, clustering = message id",
+      "cloud": {
+        "aws": "Cassandra on EC2",
+        "gcp": "Cassandra on GKE"
+      }
+    },
+    {
+      "id": "push_q",
+      "label": "Push Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "push_worker",
+      "label": "Push Workers",
+      "kind": "worker",
+      "cloud": {
+        "aws": "Lambda",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "apns",
+      "label": "APNs / FCM",
+      "kind": "notification_provider",
+      "description": "Apple and Google push services"
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "alice",
+      "to": "lb"
+    },
+    {
+      "from": "bob",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "ws"
+    },
+    {
+      "from": "ws",
+      "to": "chat_svc"
+    },
+    {
+      "from": "chat_svc",
+      "to": "msg_db"
+    },
+    {
+      "from": "chat_svc",
+      "to": "sessions"
+    },
+    {
+      "from": "chat_svc",
+      "to": "push_q",
+      "async": true
+    },
+    {
+      "from": "push_q",
+      "to": "push_worker"
+    },
+    {
+      "from": "push_worker",
+      "to": "apns"
+    },
+    {
+      "from": "apns",
+      "to": "bob"
+    }
+  ],
+  "flows": [
+    {
+      "id": "online",
+      "title": "Send (recipient online)",
+      "summary": "Persist first, acknowledge the sender, then route to the exact gateway holding the recipient's connection.",
+      "steps": [
+        {
+          "from": "alice",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS frame: send",
+          "detail": "The client generates its own message id so a resend after a dropped connection can be deduplicated.",
+          "payload": "{ \"type\": \"send\", \"conv_id\": \"c_alice_bob\", \"client_msg_id\": \"a1-0042\", \"body\": \"<ciphertext>\" }"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "same TCP connection",
+          "detail": "A layer-4 balancer just pins connections; the gateway terminates the WebSocket."
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "send"
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "label": "INSERT (QUORUM)",
+          "detail": "Write before delivering: if anything crashes after this, the message still exists. A quorum write survives one replica being down.",
+          "payload": "INSERT INTO messages (conv_id, msg_id, sender, body)\nVALUES ('c_alice_bob', 0x18f3…, 'alice', <ciphertext>)\nIF NOT EXISTS;  -- dedupe on client_msg_id"
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "OK, msg_id",
+          "detail": "The time-sortable msg_id fixes the order within the conversation for every reader."
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "label": "ack ✓"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "label": "ack ✓"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "res",
+          "label": "✓ sent",
+          "detail": "Alice's single tick means: stored on the server, will not be lost."
+        },
+        {
+          "from": "chat_svc",
+          "to": "sessions",
+          "kind": "req",
+          "label": "GET session:bob"
+        },
+        {
+          "from": "sessions",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "gateway-17",
+          "detail": "Bob is online; his connection lives on gateway node 17."
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "req",
+          "label": "deliver via gateway-17",
+          "detail": "Internal RPC straight to the node that holds Bob's socket. No broadcast to all gateways."
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS push"
+        },
+        {
+          "from": "lb",
+          "to": "bob",
+          "kind": "req",
+          "label": "new message"
+        },
+        {
+          "from": "bob",
+          "to": "lb",
+          "kind": "req",
+          "label": "delivered receipt"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "receipt"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "delivered(msg_id)",
+          "detail": "Relayed to Alice the same way, turning ✓ into ✓✓."
+        }
+      ]
+    },
+    {
+      "id": "offline",
+      "title": "Send (recipient offline)",
+      "summary": "Store, notify through APNs/FCM, and let the recipient pull missed messages when they reconnect.",
+      "steps": [
+        {
+          "from": "alice",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS frame: send"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "same TCP connection"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "send"
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "label": "INSERT (QUORUM)",
+          "detail": "The message store is also the offline inbox: nothing extra to keep in sync."
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "OK, msg_id"
+        },
+        {
+          "from": "chat_svc",
+          "to": "sessions",
+          "kind": "req",
+          "label": "GET session:bob"
+        },
+        {
+          "from": "sessions",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "(none)",
+          "detail": "No heartbeat for 60 s, so the session entry expired: Bob is offline."
+        },
+        {
+          "from": "chat_svc",
+          "to": "push_q",
+          "kind": "async",
+          "label": "enqueue push",
+          "detail": "Push providers are slow and rate-limited; a queue keeps them off the send path."
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "label": "ack ✓"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "label": "ack ✓"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "res",
+          "label": "✓ sent"
+        },
+        {
+          "from": "push_q",
+          "to": "push_worker",
+          "kind": "async",
+          "label": "deliver job"
+        },
+        {
+          "from": "push_worker",
+          "to": "apns",
+          "kind": "async",
+          "label": "send notification",
+          "detail": "With end-to-end encryption the push carries no message text, just \"New message\" and a conversation id."
+        },
+        {
+          "from": "apns",
+          "to": "bob",
+          "kind": "async",
+          "label": "push shown"
+        },
+        {
+          "from": "bob",
+          "to": "lb",
+          "kind": "req",
+          "label": "reconnect + sync",
+          "payload": "{ \"type\": \"sync\", \"since\": { \"c_alice_bob\": \"0x18f2…\" } }"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "new connection"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "sync since cursor",
+          "detail": "The gateway also registers Bob in the session registry again."
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "label": "SELECT msg_id > cursor",
+          "detail": "One partition read per conversation, already sorted by msg_id."
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "missed messages"
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "label": "batch"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "label": "batch"
+        },
+        {
+          "from": "lb",
+          "to": "bob",
+          "kind": "res",
+          "label": "3 new messages"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "msg_db",
+      "kind": "scaling",
+      "text": "Partition by conversation so one conversation's history is a single sorted read. Very large groups need bucketing (conv_id + month) to keep partitions bounded."
+    },
+    {
+      "target": "msg_db",
+      "kind": "failure",
+      "text": "Quorum reads and writes across 3 zones keep working with one zone down; the cluster still has 2 of 3 replicas."
+    },
+    {
+      "target": "sessions",
+      "kind": "failure",
+      "text": "If a gateway node dies, its clients reconnect to another node and re-register. Messages sent in between wait in the store and arrive on sync."
+    },
+    {
+      "target": "ws",
+      "kind": "tradeoff",
+      "text": "WebSockets give instant delivery; long polling is simpler but costs far more requests. Gateways must drain connections gradually on deploys to avoid reconnect storms."
+    },
+    {
+      "kind": "security",
+      "text": "End-to-end encryption (Signal protocol): the server stores and routes ciphertext only and never sees message content."
+    },
+    {
+      "kind": "tradeoff",
+      "text": "Groups: small groups fan out on write (one delivery per member). Large broadcast channels switch to fan-out on read."
+    }
+  ]
+}

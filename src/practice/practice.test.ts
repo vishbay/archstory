@@ -1,0 +1,70 @@
+import { describe, expect, it } from 'vitest'
+import { LIBRARY } from '../library'
+import { addFlow, addNode, appendStep, blankAttempt, connect, removeNode, stepKindFor, stepProblem } from './attempt'
+import { runChecks } from './checks'
+import type { Design } from '../model/schema'
+
+const url = LIBRARY.find(d => d.id === 'url-shortener')!
+
+/** Build an attempt from a list of kinds, returning ids in the same order. */
+function build(kinds: string[]): { d: Design; ids: string[] } {
+  let d = blankAttempt(url)
+  const ids: string[] = []
+  for (const k of kinds) { const r = addNode(d, k); d = r.design; ids.push(r.id) }
+  return { d, ids }
+}
+
+describe('attempt editing', () => {
+  it('gives unique ids and labels to repeated kinds', () => {
+    const { d, ids } = build(['service', 'service'])
+    expect(ids).toEqual(['service', 'service_2'])
+    expect(d.nodes.map(n => n.label)).toEqual(['Service', 'Service 2'])
+  })
+  it('ignores self-loops and duplicate connections in either direction', () => {
+    const { d, ids: [a, b] } = build(['service', 'cache'])
+    const once = connect(d, a, b)
+    expect(connect(connect(once, b, a), a, a).edges).toHaveLength(1)
+  })
+  it('infers step kinds from the drawing and flags hops with no connection', () => {
+    const { d: d0, ids: [c, lb, svc, db] } = build(['web_client', 'load_balancer', 'service', 'sql_db'])
+    let d = connect(connect(d0, c, lb), lb, svc)
+    expect(stepKindFor(d, c, lb)).toBe('req')
+    expect(stepKindFor(d, lb, c)).toBe('res')
+    expect(stepKindFor(d, svc, svc)).toBe('local')
+    const f = addFlow(d); d = f.design
+    d = appendStep(appendStep(d, f.id, c, lb), f.id, svc, db)
+    expect(stepProblem(d, d.flows[0].steps[0])).toBeNull()
+    expect(stepProblem(d, d.flows[0].steps[1])).toBe('No connection between Service and SQL database')
+  })
+  it('removing a component removes its edges and flow steps', () => {
+    const { d: d0, ids: [a, b] } = build(['service', 'cache'])
+    let d = connect(d0, a, b); const f = addFlow(d); d = appendStep(f.design, f.id, a, b)
+    const out = removeNode(d, b)
+    expect(out.edges).toEqual([]); expect(out.flows[0].steps).toEqual([])
+  })
+})
+
+describe('practice checks', () => {
+  it('every reference design passes its own checks', () => {
+    for (const ref of LIBRARY) {
+      const { checks } = runChecks({ ...ref, id: `attempt-${ref.id}` }, ref)
+      expect(checks.filter(c => c.level === 'fail' || c.level === 'warn').map(c => c.title), ref.id).toEqual([])
+    }
+  })
+  it('asks for more when the attempt is nearly empty', () => {
+    expect(runChecks(build(['service']).d, url).checks[0].id).toBe('size')
+  })
+  it('names missing pieces, anti-patterns and broken flows', () => {
+    const { d: d0, ids: [c, svc, db] } = build(['web_client', 'service', 'sql_db'])
+    let d = connect(connect(connect(d0, c, svc), svc, db), c, db)
+    const f = addFlow(d); d = appendStep(appendStep(f.design, f.id, c, svc), f.id, svc, c)
+    d = appendStep(d, f.id, c, 'nowhere')
+    const titles = runChecks(d, url).checks.map(c => `${c.level}: ${c.title}`)
+    expect(titles).toContain('fail: Missing a cache')
+    expect(titles).toContain('fail: Missing a load balancer or API gateway')
+    expect(titles).toContain('fail: Clients talk to a datastore directly')
+    expect(titles).toContain('warn: Clients reach services without a load balancer or gateway')
+    expect(titles).toContain('pass: Uses a database')
+    expect(titles.some(t => t.startsWith('fail: "Flow 1" cannot run'))).toBe(true)
+  })
+})

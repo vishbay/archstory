@@ -1,0 +1,39 @@
+import { describe, expect, it } from 'vitest'
+import { compressToEncodedURIComponent } from 'lz-string'
+import { extractJson, generationPrompt, readSharedDesign } from './share'
+import { parseDesign } from '../model/schema'
+import { LIBRARY } from '../library'
+
+describe('share links', () => {
+  it('round-trips every library design through the URL hash', () => {
+    for (const d of LIBRARY) {
+      const r = readSharedDesign(`#design=${compressToEncodedURIComponent(JSON.stringify(d))}`)
+      expect(r?.ok && r.design).toEqual(d)
+    }
+  })
+  it('keeps links reasonably short', () => {
+    const longest = Math.max(...LIBRARY.map(d => compressToEncodedURIComponent(JSON.stringify(d)).length))
+    expect(longest).toBeLessThan(16000)
+  })
+  it('reports damaged links instead of throwing', () => {
+    expect(readSharedDesign('#design=not-a-real-payload')?.ok).toBe(false)
+    expect(readSharedDesign('#other=1')).toBeNull()
+  })
+})
+
+describe('AI answers', () => {
+  it('extracts JSON from a fenced answer with prose around it', () => {
+    const answer = 'Sure! Here is the design:\n\n```json\n{ "a": { "b": 1 } }\n```\n\nLet me know if you want changes.'
+    expect(JSON.parse(extractJson(answer))).toEqual({ a: { b: 1 } })
+    expect(JSON.parse(extractJson('{"x":1}'))).toEqual({ x: 1 })
+  })
+  it('builds a prompt with the task, rules, schema and a valid example', () => {
+    const p = generationPrompt('Design Dropbox', LIBRARY[0])
+    expect(p).toContain('Task: Design Dropbox')
+    expect(p).toContain('"archstory/v1"')
+    expect(p).toContain('Each flow step travels exactly one edge')
+    expect(p).not.toContain('—')
+    const example = JSON.parse(extractJson(p.slice(p.indexOf('Example of a valid design'))))
+    expect(parseDesign(example).ok).toBe(true)
+  })
+})

@@ -1,0 +1,561 @@
+{
+  "schema": "archstory/v1",
+  "id": "url-shortener",
+  "meta": {
+    "title": "URL Shortener",
+    "summary": "Turn long URLs into short codes and redirect at very high read volume.",
+    "tags": [
+      "caching",
+      "read-heavy",
+      "id-generation"
+    ],
+    "difficulty": "easy"
+  },
+  "requirements": {
+    "functional": [
+      "Create a short link for a long URL",
+      "Redirect a short link to its long URL",
+      "Count clicks per link"
+    ],
+    "nonFunctional": [
+      "Redirect latency < 100 ms p99",
+      "99.99% availability for redirects",
+      "Short codes never collide"
+    ],
+    "scale": [
+      {
+        "label": "New links",
+        "value": "100M / month (~40 writes/s)"
+      },
+      {
+        "label": "Redirects",
+        "value": "100:1 read:write (~4,000/s avg)"
+      },
+      {
+        "label": "Storage",
+        "value": "~6B links over 5 years × ~500 B ≈ 3 TB"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.0.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.0.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.0.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.0.32.0/20"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "Browser / app"
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Edge cache + TLS",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "description": "L7 load balancer",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "api",
+      "label": "API Service",
+      "kind": "service",
+      "description": "Stateless API",
+      "replicas": 3,
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "kgs",
+      "label": "Key Gen Service",
+      "kind": "key_gen",
+      "description": "Pre-generated keys",
+      "cloud": {
+        "aws": "ECS service",
+        "gcp": "Cloud Run service"
+      }
+    },
+    {
+      "id": "cache",
+      "label": "Cache",
+      "kind": "cache",
+      "description": "Hot links",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "db",
+      "label": "Primary DB",
+      "kind": "sql_db",
+      "description": "Source of truth",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "replica",
+      "label": "Read Replica",
+      "kind": "db_replica",
+      "description": "Serves reads",
+      "replicas": 2,
+      "cloud": {
+        "aws": "Aurora Replica",
+        "gcp": "Cloud SQL Replica"
+      }
+    },
+    {
+      "id": "queue",
+      "label": "Event Queue",
+      "kind": "queue",
+      "description": "Click events",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "worker",
+      "label": "Analytics Worker",
+      "kind": "worker",
+      "description": "Batch consumer",
+      "cloud": {
+        "aws": "Lambda",
+        "gcp": "Cloud Run Job"
+      }
+    },
+    {
+      "id": "analytics",
+      "label": "Analytics Store",
+      "kind": "analytics",
+      "description": "Columnar store",
+      "cloud": {
+        "aws": "Redshift",
+        "gcp": "BigQuery"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "api"
+    },
+    {
+      "from": "api",
+      "to": "kgs"
+    },
+    {
+      "from": "api",
+      "to": "cache"
+    },
+    {
+      "from": "api",
+      "to": "db"
+    },
+    {
+      "from": "api",
+      "to": "replica"
+    },
+    {
+      "from": "db",
+      "to": "replica",
+      "async": true
+    },
+    {
+      "from": "api",
+      "to": "queue",
+      "async": true
+    },
+    {
+      "from": "queue",
+      "to": "worker"
+    },
+    {
+      "from": "worker",
+      "to": "analytics"
+    }
+  ],
+  "flows": [
+    {
+      "id": "create",
+      "title": "Create link",
+      "summary": "Write path: the client submits a long URL and gets back a short code.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "label": "POST /api/links",
+          "detail": "The browser sends the long URL. Every request enters through the nearest CDN edge, which terminates TLS.",
+          "payload": "POST /api/links HTTP/2\nHost: sho.rt\nContent-Type: application/json\n\n{ \"url\": \"https://example.com/some/very/long/path?utm_source=…\" }"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "POST: never cached",
+          "detail": "Writes bypass the cache entirely. The CDN still adds value: TLS close to the user and DDoS absorption."
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "label": "forward to origin",
+          "detail": "The load balancer is the single public origin. It health-checks API instances and routes only to healthy ones."
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "label": "route → api-1",
+          "detail": "Any instance can take the request. Stateless servers are what let us scale out horizontally."
+        },
+        {
+          "from": "api",
+          "to": "kgs",
+          "kind": "req",
+          "label": "next key",
+          "detail": "Rather than hash the URL and check for collisions, take a pre-generated unique key. KGS hands each API instance a batch of keys, so this is usually an in-memory pop."
+        },
+        {
+          "from": "kgs",
+          "to": "api",
+          "kind": "res",
+          "label": "\"aZ3k9Q\"",
+          "detail": "6 base62 chars → 62⁶ ≈ 56.8B codes. A key batch is marked used atomically when issued, so two servers never get the same key.",
+          "payload": "{ \"key\": \"aZ3k9Q\" }"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "label": "INSERT link",
+          "detail": "The primary is the source of truth. The short code is the primary key, so every later lookup is a single index seek.",
+          "payload": "INSERT INTO links (code, long_url, created_at)\nVALUES ('aZ3k9Q', 'https://example.com/…', now());"
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "label": "COMMIT ok",
+          "detail": "Durable once committed to the primary."
+        },
+        {
+          "from": "db",
+          "to": "replica",
+          "kind": "async",
+          "label": "replicate (WAL)",
+          "detail": "Replication is asynchronous: the write was acknowledged before replicas have it. A read hitting a replica in the next few ms could miss, which is why we warm the cache next."
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "label": "SET aZ3k9Q ttl=24h",
+          "detail": "Write-through warm-up: freshly created links are clicked almost immediately (the creator tests it), and this hides replica lag."
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "label": "201 Created",
+          "detail": "Return the short URL.",
+          "payload": "HTTP/2 201\nContent-Type: application/json\n\n{ \"short\": \"https://sho.rt/aZ3k9Q\" }"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "label": "201 Created",
+          "detail": "Back out through the load balancer."
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "label": "201 Created",
+          "detail": "Done. Server-side cost is dominated by the DB commit (~5–10 ms); the user sees roughly one network round trip on top."
+        }
+      ]
+    },
+    {
+      "id": "hit",
+      "title": "Redirect (cache hit)",
+      "summary": "The hot path, ~99% of traffic: resolve a code from cache and redirect.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET /aZ3k9Q",
+          "detail": "Someone clicks the short link. DNS points sho.rt at the nearest CDN edge, which terminates TLS.",
+          "payload": "GET /aZ3k9Q HTTP/2\nHost: sho.rt\nUser-Agent: Mozilla/5.0 …\nReferer: https://twitter.com/"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "MISS: 302s not cached",
+          "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "label": "forward to origin",
+          "detail": "The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "label": "route → api-2",
+          "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
+          "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\nX-Request-Id: 7f3c…"
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "label": "GET aZ3k9Q",
+          "detail": "Check the cache first (cache-aside)."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "label": "HIT → long URL",
+          "detail": "Link popularity is heavily skewed, so a cache holding the hot set answers most redirects in under a millisecond without touching the database."
+        },
+        {
+          "from": "api",
+          "to": "queue",
+          "kind": "async",
+          "label": "publish click",
+          "detail": "Fire-and-forget: the API publishes and does not wait. A slow analytics pipeline can never slow down a redirect.",
+          "payload": "{ \"code\": \"aZ3k9Q\", \"ts\": 1762600000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "label": "302 Found",
+          "detail": "The API answers with a redirect. Total time inside the origin is a couple of milliseconds.",
+          "payload": "HTTP/2 302\nLocation: https://example.com/some/very/long/path?utm_source=…\nCache-Control: private, no-store"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "label": "302 Found",
+          "detail": "Response travels back through the load balancer."
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "label": "302 → long URL",
+          "detail": "Browser follows Location. The user is gone; everything after this is background work."
+        },
+        {
+          "from": "queue",
+          "to": "worker",
+          "kind": "async",
+          "label": "deliver batch (500)",
+          "detail": "Workers pull events in batches. If they fall behind, the queue absorbs the backlog instead of the API."
+        },
+        {
+          "from": "worker",
+          "to": "analytics",
+          "kind": "async",
+          "label": "INSERT batch",
+          "detail": "Aggregated into a columnar store for dashboards: clicks per link per hour, referrers, countries."
+        }
+      ]
+    },
+    {
+      "id": "miss",
+      "title": "Redirect (cache miss)",
+      "summary": "A cold link: fall back to a read replica, then populate the cache.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET /aZ3k9Q",
+          "detail": "Someone clicks the short link. DNS points sho.rt at the nearest CDN edge, which terminates TLS.",
+          "payload": "GET /aZ3k9Q HTTP/2\nHost: sho.rt\nUser-Agent: Mozilla/5.0 …\nReferer: https://twitter.com/"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "MISS: 302s not cached",
+          "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "label": "forward to origin",
+          "detail": "The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "label": "route → api-2",
+          "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
+          "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\nX-Request-Id: 7f3c…"
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "label": "GET aZ3k9Q",
+          "detail": "Check the cache first."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "label": "MISS",
+          "detail": "Cold or evicted link."
+        },
+        {
+          "from": "api",
+          "to": "replica",
+          "kind": "req",
+          "label": "SELECT long_url",
+          "detail": "Reads go to replicas so the primary only handles writes. At 100:1 read:write this is where read capacity scales.",
+          "payload": "SELECT long_url FROM links WHERE code = 'aZ3k9Q';"
+        },
+        {
+          "from": "replica",
+          "to": "api",
+          "kind": "res",
+          "label": "row",
+          "detail": "Single primary-key lookup, ~1–2 ms."
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "label": "SET ttl=24h",
+          "detail": "Populate on miss so the next click is a hit. The TTL bounds staleness if a link is edited or deleted."
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "label": "302 Found",
+          "detail": "The API answers with a redirect. Total time inside the origin is a couple of milliseconds.",
+          "payload": "HTTP/2 302\nLocation: https://example.com/some/very/long/path?utm_source=…\nCache-Control: private, no-store"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "label": "302 Found",
+          "detail": "Response travels back through the load balancer."
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "label": "302 → long URL",
+          "detail": "Slightly slower than a hit (extra DB round trip), still well within the 100 ms budget."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "kgs",
+      "kind": "tradeoff",
+      "text": "Pre-generated keys avoid hash collisions and retry loops. Alternative: base62(counter) per range-allocated instance; simpler but codes become guessable."
+    },
+    {
+      "target": "cdn",
+      "kind": "tradeoff",
+      "text": "302 + no-store keeps every click visible to analytics. 301 would let browsers and the CDN serve repeats, cutting origin load at the cost of click counts."
+    },
+    {
+      "target": "replica",
+      "kind": "scaling",
+      "text": "Reads dominate 100:1. Replicas scale reads; cache absorbs the hot set. Replica lag is hidden by warming the cache on create."
+    },
+    {
+      "target": "db",
+      "kind": "scaling",
+      "text": "~3 TB over 5 years fits one primary; shard by code hash only if write volume grows by orders of magnitude."
+    },
+    {
+      "target": "queue",
+      "kind": "failure",
+      "text": "If analytics is down, events back up in the queue; redirects are unaffected."
+    },
+    {
+      "kind": "security",
+      "text": "Only the load balancer is in public subnets. API servers, caches and databases have no public IPs; the API reaches the queue through a private endpoint, and security groups only allow LB → API → data on the needed ports."
+    },
+    {
+      "kind": "failure",
+      "text": "Every tier spans 3 availability zones: losing one zone removes a third of capacity, the database fails over to a replica in another zone, and redirects keep working."
+    }
+  ]
+}

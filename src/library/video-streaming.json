@@ -1,0 +1,539 @@
+{
+  "schema": "archstory/v1",
+  "id": "video-streaming",
+  "meta": {
+    "title": "Video Streaming",
+    "summary": "Upload, transcode and stream video to a global audience (YouTube style), with adaptive bitrate playback from a CDN.",
+    "tags": [
+      "media",
+      "cdn",
+      "async-processing"
+    ],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Creators upload videos up to several GB",
+      "Videos are transcoded into multiple resolutions",
+      "Viewers stream on any device and network",
+      "Show approximate view counts"
+    ],
+    "nonFunctional": [
+      "Playback starts in < 2 s",
+      "Uploads are resumable",
+      "Transcoding may take minutes (async)",
+      "Serves a global audience cheaply"
+    ],
+    "scale": [
+      {
+        "label": "Uploads",
+        "value": "500 hours of video per minute"
+      },
+      {
+        "label": "Watch time",
+        "value": "1B hours / day"
+      },
+      {
+        "label": "Renditions",
+        "value": "~6 per video (240p to 4K)"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.4.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.4.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.4.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.4.32.0/20"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "creator",
+      "label": "Creator",
+      "kind": "web_client"
+    },
+    {
+      "id": "viewer",
+      "label": "Viewer",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Caches video segments near viewers",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "upload_svc",
+      "label": "Upload Service",
+      "kind": "service",
+      "description": "Creates uploads and signs URLs; never touches video bytes",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "meta_svc",
+      "label": "Playback API",
+      "kind": "service",
+      "description": "Video metadata and manifest URLs",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "meta_db",
+      "label": "Metadata DB",
+      "kind": "sql_db",
+      "description": "videos(id, owner, title, status, manifest_url, views)",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "raw",
+      "label": "Raw Uploads",
+      "kind": "object_store",
+      "description": "Original files as uploaded",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "segments",
+      "label": "Video Segments",
+      "kind": "object_store",
+      "description": "HLS/DASH manifests and 4 s segments per rendition",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "transcode_q",
+      "label": "Transcode Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "transcoder",
+      "label": "Transcoders",
+      "kind": "worker",
+      "description": "Encode chunks in parallel",
+      "cloud": {
+        "aws": "AWS Elemental MediaConvert",
+        "gcp": "Transcoder API"
+      }
+    },
+    {
+      "id": "views",
+      "label": "View Events",
+      "kind": "stream",
+      "cloud": {
+        "aws": "Kinesis Data Streams",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "counter",
+      "label": "View Aggregator",
+      "kind": "worker",
+      "cloud": {
+        "aws": "Lambda",
+        "gcp": "Cloud Run Job"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "creator",
+      "to": "lb"
+    },
+    {
+      "from": "creator",
+      "to": "raw"
+    },
+    {
+      "from": "viewer",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "lb"
+    },
+    {
+      "from": "cdn",
+      "to": "segments"
+    },
+    {
+      "from": "lb",
+      "to": "upload_svc"
+    },
+    {
+      "from": "lb",
+      "to": "meta_svc"
+    },
+    {
+      "from": "upload_svc",
+      "to": "meta_db"
+    },
+    {
+      "from": "upload_svc",
+      "to": "raw"
+    },
+    {
+      "from": "raw",
+      "to": "transcode_q",
+      "async": true
+    },
+    {
+      "from": "transcode_q",
+      "to": "transcoder"
+    },
+    {
+      "from": "transcoder",
+      "to": "raw"
+    },
+    {
+      "from": "transcoder",
+      "to": "segments"
+    },
+    {
+      "from": "transcoder",
+      "to": "meta_db"
+    },
+    {
+      "from": "meta_svc",
+      "to": "meta_db"
+    },
+    {
+      "from": "meta_svc",
+      "to": "views",
+      "async": true
+    },
+    {
+      "from": "views",
+      "to": "counter"
+    },
+    {
+      "from": "counter",
+      "to": "meta_db"
+    }
+  ],
+  "flows": [
+    {
+      "id": "upload",
+      "title": "Upload and transcode",
+      "summary": "Bytes go straight to object storage with signed URLs; an event kicks off parallel transcoding.",
+      "steps": [
+        {
+          "from": "creator",
+          "to": "lb",
+          "kind": "req",
+          "label": "POST /uploads",
+          "payload": "POST /uploads HTTP/2\n\n{ \"title\": \"My trip\", \"size_bytes\": 3221225472, \"content_type\": \"video/mp4\" }"
+        },
+        {
+          "from": "lb",
+          "to": "upload_svc",
+          "kind": "req",
+          "label": "route"
+        },
+        {
+          "from": "upload_svc",
+          "to": "meta_db",
+          "kind": "req",
+          "label": "INSERT status=UPLOADING"
+        },
+        {
+          "from": "meta_db",
+          "to": "upload_svc",
+          "kind": "res",
+          "label": "video v_123"
+        },
+        {
+          "from": "upload_svc",
+          "to": "raw",
+          "kind": "req",
+          "label": "create multipart upload",
+          "detail": "The service asks storage for an upload id and signs one URL per 64 MB part. It never proxies the video itself."
+        },
+        {
+          "from": "raw",
+          "to": "upload_svc",
+          "kind": "res",
+          "label": "upload id"
+        },
+        {
+          "from": "upload_svc",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 signed part URLs"
+        },
+        {
+          "from": "lb",
+          "to": "creator",
+          "kind": "res",
+          "label": "200 signed part URLs"
+        },
+        {
+          "from": "creator",
+          "to": "raw",
+          "kind": "req",
+          "label": "PUT parts directly",
+          "detail": "Gigabytes go straight to object storage. A failed part is retried on its own, which makes uploads resumable.",
+          "payload": "PUT https://raw-uploads…/v_123?partNumber=7&uploadId=…&X-Amz-Signature=…\nContent-Length: 67108864"
+        },
+        {
+          "from": "raw",
+          "to": "creator",
+          "kind": "res",
+          "label": "200 per part, then complete"
+        },
+        {
+          "from": "raw",
+          "to": "transcode_q",
+          "kind": "async",
+          "label": "ObjectCreated event",
+          "detail": "Storage emits an event when the upload completes; no polling needed."
+        },
+        {
+          "from": "transcode_q",
+          "to": "transcoder",
+          "kind": "async",
+          "label": "job v_123"
+        },
+        {
+          "from": "transcoder",
+          "to": "raw",
+          "kind": "async",
+          "label": "GET original"
+        },
+        {
+          "from": "raw",
+          "to": "transcoder",
+          "kind": "async",
+          "label": "bytes"
+        },
+        {
+          "from": "transcoder",
+          "to": "transcoder",
+          "kind": "local",
+          "label": "split + encode in parallel",
+          "detail": "Split into ~4 s chunks and encode every chunk × every resolution in parallel. A 1-hour video finishes in minutes instead of hours."
+        },
+        {
+          "from": "transcoder",
+          "to": "segments",
+          "kind": "async",
+          "label": "PUT segments + manifests",
+          "payload": "v_123/master.m3u8\nv_123/240p/seg_0001.ts …\nv_123/1080p/seg_0001.ts …"
+        },
+        {
+          "from": "transcoder",
+          "to": "meta_db",
+          "kind": "async",
+          "label": "UPDATE status=READY",
+          "detail": "The video becomes watchable. The creator is notified."
+        }
+      ]
+    },
+    {
+      "id": "watch",
+      "title": "Watch a video",
+      "summary": "A tiny API call for the manifest, then every byte of video comes from the CDN edge.",
+      "steps": [
+        {
+          "from": "viewer",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET /api/videos/v_123"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "label": "MISS → origin",
+          "detail": "Metadata can be cached for a few seconds; this request misses."
+        },
+        {
+          "from": "lb",
+          "to": "meta_svc",
+          "kind": "req",
+          "label": "route"
+        },
+        {
+          "from": "meta_svc",
+          "to": "meta_db",
+          "kind": "req",
+          "label": "SELECT title, manifest_url"
+        },
+        {
+          "from": "meta_db",
+          "to": "meta_svc",
+          "kind": "res",
+          "label": "row"
+        },
+        {
+          "from": "meta_svc",
+          "to": "views",
+          "kind": "async",
+          "label": "view started",
+          "detail": "One event per view, never a database write per view."
+        },
+        {
+          "from": "meta_svc",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 manifest URL"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "label": "200"
+        },
+        {
+          "from": "cdn",
+          "to": "viewer",
+          "kind": "res",
+          "label": "200",
+          "payload": "{ \"title\": \"My trip\", \"manifest\": \"https://cdn.example.com/v_123/master.m3u8\" }"
+        },
+        {
+          "from": "viewer",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET master.m3u8"
+        },
+        {
+          "from": "cdn",
+          "to": "segments",
+          "kind": "req",
+          "label": "MISS → origin fetch",
+          "detail": "First viewer in this region; the edge fetches once and caches."
+        },
+        {
+          "from": "segments",
+          "to": "cdn",
+          "kind": "res",
+          "label": "manifest"
+        },
+        {
+          "from": "cdn",
+          "to": "viewer",
+          "kind": "res",
+          "label": "manifest",
+          "detail": "Lists every rendition and its bandwidth."
+        },
+        {
+          "from": "viewer",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET 720p/seg_0001.ts"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "HIT",
+          "detail": "Popular videos are fully cached at the edge; hit rates above 95% are normal."
+        },
+        {
+          "from": "cdn",
+          "to": "viewer",
+          "kind": "res",
+          "label": "segment (4 s)",
+          "detail": "Adaptive bitrate: the player measures throughput and picks the resolution for each next segment, so playback adapts instead of stalling."
+        },
+        {
+          "from": "views",
+          "to": "counter",
+          "kind": "async",
+          "label": "batch of events"
+        },
+        {
+          "from": "counter",
+          "to": "meta_db",
+          "kind": "async",
+          "label": "UPDATE views += N",
+          "detail": "Counts are aggregated per minute, so the number shown is slightly behind and the database sees a handful of writes instead of millions."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "upload_svc",
+      "kind": "tradeoff",
+      "text": "Signed URLs keep video bytes off your servers entirely. The service handles a few small API calls per upload."
+    },
+    {
+      "target": "cdn",
+      "kind": "scaling",
+      "text": "Popularity follows a long tail: a small fraction of videos gets most views. Edge caches serve those; rarely watched videos come from origin storage."
+    },
+    {
+      "target": "segments",
+      "kind": "scaling",
+      "text": "Move old, unwatched renditions to colder storage classes; storage is the biggest cost after bandwidth."
+    },
+    {
+      "target": "transcoder",
+      "kind": "failure",
+      "text": "Jobs are idempotent per chunk. A crashed worker's message becomes visible again and another worker redoes only that chunk."
+    },
+    {
+      "target": "counter",
+      "kind": "tradeoff",
+      "text": "Exact real-time view counts are expensive and not needed. Batch aggregation trades a minute of delay for orders of magnitude fewer writes."
+    }
+  ]
+}

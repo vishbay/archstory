@@ -1,0 +1,441 @@
+{
+  "title": "archstory/v1 design",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "archstory/v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tags": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        "author": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ]
+    },
+    "requirements": {
+      "default": {
+        "functional": [],
+        "nonFunctional": [],
+        "scale": []
+      },
+      "type": "object",
+      "properties": {
+        "functional": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nonFunctional": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scale": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "value"
+            ]
+          }
+        }
+      }
+    },
+    "nodes": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Cloud-neutral display name, e.g. \"Load Balancer\""
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Component type, e.g. load_balancer (L7, HTTP), network_load_balancer (L4, TCP/UDP), service, cache, sql_db. Unknown kinds are allowed."
+          },
+          "tier": {
+            "description": "Band on the canvas. Defaults from kind when omitted.",
+            "type": "string",
+            "enum": [
+              "client",
+              "edge",
+              "entry",
+              "services",
+              "data",
+              "async",
+              "external"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "group": {
+            "description": "Id of a group (region, tenant, …) this node sits inside",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "subnet": {
+            "description": "Override the subnet chosen by tier; \"none\" places the node outside the VPC (managed service)",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "zones": {
+            "description": "Availability zones this node spans; defaults to network.zones",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ha": {
+            "description": "How it survives a zone failure. Defaults by kind: services active-active, SQL/cache primary-standby, managed services regional",
+            "type": "string",
+            "enum": [
+              "active-active",
+              "primary-standby",
+              "quorum",
+              "regional",
+              "single"
+            ]
+          },
+          "replicas": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "icon": {
+            "description": "Emoji override",
+            "type": "string"
+          },
+          "cloud": {
+            "description": "Provider-specific product names, e.g. { \"aws\": \"ALB\", \"gcp\": \"Cloud Load Balancing\" }",
+            "type": "object",
+            "properties": {
+              "aws": {
+                "type": "string"
+              },
+              "gcp": {
+                "type": "string"
+              },
+              "azure": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind"
+        ]
+      }
+    },
+    "groups": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "boundary",
+            "type": "string",
+            "enum": [
+              "region",
+              "zone",
+              "network",
+              "tenant",
+              "cluster",
+              "boundary"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      }
+    },
+    "edges": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "label": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "async": {
+            "description": "Fire-and-forget / queued connection",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ]
+      }
+    },
+    "flows": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "steps": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                },
+                "to": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "req",
+                    "res",
+                    "async",
+                    "local"
+                  ],
+                  "description": "req/res/async travel an edge (either direction); local happens inside one node (from === to)"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Short wire label, e.g. \"GET /aZ3k9Q\" or \"SET key ttl=24h\""
+                },
+                "detail": {
+                  "description": "Why this hop happens; the teaching text",
+                  "type": "string"
+                },
+                "payload": {
+                  "description": "Example message: HTTP, SQL, JSON event…",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "kind",
+                "label"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "steps"
+        ]
+      }
+    },
+    "notes": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "description": "Node, group or flow id; omit for a design-wide note",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "kind": {
+            "default": "note",
+            "type": "string",
+            "enum": [
+              "tradeoff",
+              "scaling",
+              "failure",
+              "security",
+              "note"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "cidr": {
+          "description": "VPC address range, e.g. 10.0.0.0/16",
+          "type": "string"
+        },
+        "zones": {
+          "default": 1,
+          "description": "Availability zones the VPC spans",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6
+        },
+        "subnets": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$"
+              },
+              "label": {
+                "type": "string"
+              },
+              "public": {
+                "default": false,
+                "description": "Has a route to the internet gateway",
+                "type": "boolean"
+              },
+              "tiers": {
+                "default": [],
+                "description": "Nodes in these tiers land in this subnet unless they override it",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "client",
+                    "edge",
+                    "entry",
+                    "services",
+                    "data",
+                    "async",
+                    "external"
+                  ]
+                }
+              },
+              "cidr": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ]
+          }
+        },
+        "egress": {
+          "default": "nat",
+          "description": "How private subnets reach the internet",
+          "type": "string",
+          "enum": [
+            "nat",
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "subnets"
+      ],
+      "description": "Optional network layer: VPC, subnets and availability zones"
+    },
+    "reasoning": {
+      "description": "Practice mode written answers keyed by section, e.g. { \"estimates\": \"…\", \"api\": \"…\" }",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "meta",
+    "nodes"
+  ]
+}

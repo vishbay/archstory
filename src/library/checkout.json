@@ -1,0 +1,142 @@
+{
+  "schema": "archstory/v1",
+  "id": "checkout",
+  "meta": {
+    "title": "E-commerce Checkout",
+    "summary": "Place an order, reserve stock and charge the card exactly once, with a saga to undo work when payment fails.",
+    "tags": ["payments", "consistency", "idempotency"],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Place an order from a cart",
+      "Reserve inventory for the items",
+      "Charge the customer's card",
+      "Send an order confirmation email"
+    ],
+    "nonFunctional": [
+      "Never charge a customer twice",
+      "Never sell more units than are in stock",
+      "Checkout responds in < 2 s p99",
+      "Survive payment provider timeouts and outages"
+    ],
+    "scale": [
+      { "label": "Orders", "value": "5k/s at flash-sale peak" },
+      { "label": "Catalog", "value": "50M SKUs" }
+    ]
+  },
+  "network": {
+    "cidr": "10.5.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      { "id": "public", "label": "Public", "public": true, "tiers": ["entry"], "cidr": "10.5.0.0/20" },
+      { "id": "app", "label": "App", "tiers": ["services", "async"], "cidr": "10.5.16.0/20" },
+      { "id": "data", "label": "Data", "tiers": ["data"], "cidr": "10.5.32.0/20" }
+    ]
+  },
+  "nodes": [
+    { "id": "client", "label": "Shopper", "kind": "web_client" },
+    { "id": "cdn", "label": "CDN", "kind": "cdn", "cloud": { "aws": "CloudFront", "gcp": "Cloud CDN" } },
+    { "id": "gw", "label": "API Gateway", "kind": "api_gateway", "description": "Auth, rate limits, routing", "cloud": { "aws": "API Gateway", "gcp": "API Gateway" } },
+    { "id": "order_svc", "label": "Order Service", "kind": "service", "description": "Orchestrates the checkout saga", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
+    { "id": "inventory_svc", "label": "Inventory Service", "kind": "service", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
+    { "id": "payment_svc", "label": "Payment Service", "kind": "service", "description": "Wraps the payment provider; owns idempotency and reconciliation", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
+    { "id": "orders_db", "label": "Orders DB", "kind": "sql_db", "description": "orders + outbox tables in one database", "cloud": { "aws": "Aurora PostgreSQL", "gcp": "Cloud SQL Postgres" } },
+    { "id": "inventory_db", "label": "Inventory DB", "kind": "sql_db", "description": "stock(sku, available, reserved)", "cloud": { "aws": "Aurora PostgreSQL", "gcp": "Cloud SQL Postgres" } },
+    { "id": "events", "label": "Order Events", "kind": "stream", "subnet": "data", "ha": "quorum", "description": "Kafka topic: OrderPaid, OrderFailed …", "cloud": { "aws": "MSK (Kafka)", "gcp": "Kafka on GKE" } },
+    { "id": "relay", "label": "Outbox Relay", "kind": "worker", "description": "Publishes committed outbox rows to the event stream", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
+    { "id": "email_worker", "label": "Email Worker", "kind": "worker", "cloud": { "aws": "Lambda", "gcp": "Cloud Run" } },
+    { "id": "psp", "label": "Payment Provider", "kind": "payment_provider", "description": "Stripe, Adyen, …" },
+    { "id": "email", "label": "Email Provider", "kind": "notification_provider", "cloud": { "aws": "SES" } }
+  ],
+  "groups": [],
+  "edges": [
+    { "from": "client", "to": "cdn" },
+    { "from": "cdn", "to": "gw" },
+    { "from": "gw", "to": "order_svc" },
+    { "from": "order_svc", "to": "orders_db" },
+    { "from": "order_svc", "to": "inventory_svc" },
+    { "from": "order_svc", "to": "payment_svc" },
+    { "from": "inventory_svc", "to": "inventory_db" },
+    { "from": "payment_svc", "to": "psp" },
+    { "from": "relay", "to": "orders_db" },
+    { "from": "relay", "to": "events", "async": true },
+    { "from": "events", "to": "email_worker" },
+    { "from": "email_worker", "to": "email" }
+  ],
+  "flows": [
+    {
+      "id": "place",
+      "title": "Place order",
+      "summary": "Idempotent order creation, atomic stock reservation, an idempotent charge, and a transactional outbox for the follow-up events.",
+      "steps": [
+        { "from": "client", "to": "cdn", "kind": "req", "label": "POST /orders", "detail": "The client creates an idempotency key once per checkout attempt and reuses it on retries.",
+          "payload": "POST /orders HTTP/2\nIdempotency-Key: 9b2e4c1a-…\n\n{ \"cart_id\": \"cart_88\", \"items\": [{ \"sku\": \"SHOE-42\", \"qty\": 1 }], \"payment_method\": \"pm_visa\" }" },
+        { "from": "cdn", "to": "gw", "kind": "req", "label": "forward" },
+        { "from": "gw", "to": "gw", "kind": "local", "label": "auth + rate limit", "detail": "During flash sales the gateway can also hold excess users in a virtual waiting room." },
+        { "from": "gw", "to": "order_svc", "kind": "req", "label": "create order" },
+        { "from": "order_svc", "to": "orders_db", "kind": "req", "label": "INSERT order PENDING", "detail": "A unique constraint on the idempotency key: a retry gets the existing order back instead of creating a second one.",
+          "payload": "INSERT INTO orders (id, idempotency_key, status, total)\nVALUES ('o_501', '9b2e4c1a-…', 'PENDING', 12900)\nON CONFLICT (idempotency_key) DO NOTHING RETURNING id;" },
+        { "from": "orders_db", "to": "order_svc", "kind": "res", "label": "o_501" },
+        { "from": "order_svc", "to": "inventory_svc", "kind": "req", "label": "reserve SHOE-42 ×1" },
+        { "from": "inventory_svc", "to": "inventory_db", "kind": "req", "label": "conditional UPDATE", "detail": "One atomic statement: it only succeeds while stock remains, so two buyers can never both get the last pair. No distributed lock needed.",
+          "payload": "UPDATE stock\nSET available = available - 1, reserved = reserved + 1\nWHERE sku = 'SHOE-42' AND available >= 1;" },
+        { "from": "inventory_db", "to": "inventory_svc", "kind": "res", "label": "1 row updated", "detail": "Zero rows would mean sold out. Reservations expire after 15 minutes if the order never completes." },
+        { "from": "inventory_svc", "to": "order_svc", "kind": "res", "label": "reserved" },
+        { "from": "order_svc", "to": "payment_svc", "kind": "req", "label": "charge o_501" },
+        { "from": "payment_svc", "to": "psp", "kind": "req", "label": "charge, key = o_501", "detail": "If the provider times out, retry with the same key. The provider returns the original result rather than charging twice.",
+          "payload": "POST /v1/payment_intents\nIdempotency-Key: o_501\n\n{ \"amount\": 12900, \"currency\": \"usd\", \"payment_method\": \"pm_visa\", \"confirm\": true }" },
+        { "from": "psp", "to": "payment_svc", "kind": "res", "label": "succeeded" },
+        { "from": "payment_svc", "to": "order_svc", "kind": "res", "label": "paid" },
+        { "from": "order_svc", "to": "orders_db", "kind": "req", "label": "UPDATE PAID + INSERT outbox", "detail": "Transactional outbox: the status change and the OrderPaid event commit together. There is never a paid order without its event, or an event without the order.",
+          "payload": "BEGIN;\nUPDATE orders SET status = 'PAID' WHERE id = 'o_501';\nINSERT INTO outbox (topic, payload) VALUES ('orders', '{\"type\":\"OrderPaid\",\"id\":\"o_501\"}');\nCOMMIT;" },
+        { "from": "orders_db", "to": "order_svc", "kind": "res", "label": "COMMIT" },
+        { "from": "order_svc", "to": "gw", "kind": "res", "label": "201 Created" },
+        { "from": "gw", "to": "cdn", "kind": "res", "label": "201 Created" },
+        { "from": "cdn", "to": "client", "kind": "res", "label": "Order confirmed" },
+        { "from": "relay", "to": "orders_db", "kind": "async", "label": "poll outbox", "detail": "Or tail the database change log (CDC). Either way, only committed rows are published." },
+        { "from": "orders_db", "to": "relay", "kind": "async", "label": "new rows" },
+        { "from": "relay", "to": "events", "kind": "async", "label": "publish OrderPaid", "detail": "At-least-once: consumers deduplicate by event id." },
+        { "from": "events", "to": "email_worker", "kind": "async", "label": "OrderPaid" },
+        { "from": "email_worker", "to": "email", "kind": "async", "label": "send confirmation" }
+      ]
+    },
+    {
+      "id": "declined",
+      "title": "Payment declined (saga rollback)",
+      "summary": "No distributed transaction: each completed step has a compensating action that undoes it.",
+      "steps": [
+        { "from": "client", "to": "cdn", "kind": "req", "label": "POST /orders" },
+        { "from": "cdn", "to": "gw", "kind": "req", "label": "forward" },
+        { "from": "gw", "to": "order_svc", "kind": "req", "label": "create order" },
+        { "from": "order_svc", "to": "orders_db", "kind": "req", "label": "INSERT order PENDING" },
+        { "from": "orders_db", "to": "order_svc", "kind": "res", "label": "o_502" },
+        { "from": "order_svc", "to": "inventory_svc", "kind": "req", "label": "reserve SHOE-42 ×1" },
+        { "from": "inventory_svc", "to": "inventory_db", "kind": "req", "label": "conditional UPDATE" },
+        { "from": "inventory_db", "to": "inventory_svc", "kind": "res", "label": "1 row updated" },
+        { "from": "inventory_svc", "to": "order_svc", "kind": "res", "label": "reserved" },
+        { "from": "order_svc", "to": "payment_svc", "kind": "req", "label": "charge o_502" },
+        { "from": "payment_svc", "to": "psp", "kind": "req", "label": "charge, key = o_502" },
+        { "from": "psp", "to": "payment_svc", "kind": "res", "label": "card_declined" },
+        { "from": "payment_svc", "to": "order_svc", "kind": "res", "label": "declined" },
+        { "from": "order_svc", "to": "inventory_svc", "kind": "req", "label": "release reservation", "detail": "Compensating action for the reservation. It is idempotent too, so a retried release cannot add stock twice." },
+        { "from": "inventory_svc", "to": "inventory_db", "kind": "req", "label": "UPDATE available + 1", "payload": "UPDATE stock SET available = available + 1, reserved = reserved - 1\nWHERE sku = 'SHOE-42';  -- guarded by reservation id" },
+        { "from": "inventory_db", "to": "inventory_svc", "kind": "res", "label": "OK" },
+        { "from": "inventory_svc", "to": "order_svc", "kind": "res", "label": "released" },
+        { "from": "order_svc", "to": "orders_db", "kind": "req", "label": "UPDATE FAILED + outbox", "detail": "OrderFailed is published the same way as OrderPaid." },
+        { "from": "orders_db", "to": "order_svc", "kind": "res", "label": "COMMIT" },
+        { "from": "order_svc", "to": "gw", "kind": "res", "label": "402 Payment Required" },
+        { "from": "gw", "to": "cdn", "kind": "res", "label": "402" },
+        { "from": "cdn", "to": "client", "kind": "res", "label": "Card declined, try another", "detail": "The same cart can be retried with a new idempotency key." }
+      ]
+    }
+  ],
+  "notes": [
+    { "kind": "tradeoff", "text": "Saga instead of a distributed transaction: services stay independent and available; the cost is writing a compensating action for every step and accepting brief intermediate states." },
+    { "target": "orders_db", "kind": "tradeoff", "text": "Transactional outbox fixes the dual-write problem: writing to the database and publishing an event separately can fail halfway; one transaction cannot." },
+    { "target": "psp", "kind": "failure", "text": "On a timeout the charge state is unknown. Retry with the same idempotency key; if still unknown, leave the order PENDING and let a reconciliation job query the provider." },
+    { "target": "inventory_db", "kind": "scaling", "text": "A single hot SKU in a flash sale concentrates writes on one row. Split its stock into several buckets (rows) and reserve from any bucket with stock." },
+    { "target": "events", "kind": "failure", "text": "Kafka replicates each partition across 3 zones; with one zone down it still has a majority of replicas and keeps accepting writes." }
+  ]
+}

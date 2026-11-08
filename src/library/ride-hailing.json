@@ -1,0 +1,555 @@
+{
+  "schema": "archstory/v1",
+  "id": "ride-hailing",
+  "meta": {
+    "title": "Ride Hailing",
+    "summary": "Match riders to nearby drivers in real time (Uber / Lyft style), with live location streaming and payment at trip end.",
+    "tags": [
+      "geo",
+      "realtime",
+      "websockets"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Drivers stream their location while online",
+      "Riders request a ride and are matched to a nearby available driver",
+      "Driver accepts or declines an offer; rider sees the assigned driver and ETA",
+      "Fare is computed and charged when the trip ends"
+    ],
+    "nonFunctional": [
+      "Match within ~5 s",
+      "A driver can never be assigned to two trips at once",
+      "Location updates every ~4 s per active driver",
+      "Each city keeps working if one zone fails"
+    ],
+    "scale": [
+      {
+        "label": "Concurrent drivers",
+        "value": "1M at peak"
+      },
+      {
+        "label": "Location writes",
+        "value": "~250k/s (1M drivers / 4 s)"
+      },
+      {
+        "label": "Trips",
+        "value": "20M / day (~1k/s peak requests)"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.2.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.2.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.2.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.2.32.0/20"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "rider",
+      "label": "Rider App",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "driver",
+      "label": "Driver App",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "description": "Terminates TLS; keeps each WebSocket pinned to one gateway",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "ws",
+      "label": "WebSocket Gateway",
+      "kind": "websocket_gateway",
+      "description": "Holds one persistent connection per online driver and rider",
+      "cloud": {
+        "aws": "API Gateway WebSocket",
+        "gcp": "Cloud Run (WebSockets)"
+      }
+    },
+    {
+      "id": "location_svc",
+      "label": "Location Service",
+      "kind": "service",
+      "description": "Ingests driver positions",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "matching",
+      "label": "Matching Service",
+      "kind": "service",
+      "description": "Finds and locks the best nearby driver",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "trip_svc",
+      "label": "Trip Service",
+      "kind": "service",
+      "description": "Trip lifecycle and fares",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "geo_index",
+      "label": "Driver Geo Index",
+      "kind": "geo_index",
+      "ha": "primary-standby",
+      "description": "In-memory index of available drivers by location (Redis GEO or H3 cells)",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "trips_db",
+      "label": "Trips DB",
+      "kind": "sql_db",
+      "description": "Trips, status, fares",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "events",
+      "label": "Location Stream",
+      "kind": "stream",
+      "description": "Every location ping, for trip tracking, ETA models and analytics",
+      "cloud": {
+        "aws": "Kinesis Data Streams",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "maps",
+      "label": "Maps & Routing",
+      "kind": "external_api",
+      "description": "Road-network ETAs and distances",
+      "cloud": {
+        "aws": "Amazon Location Service",
+        "gcp": "Google Maps Platform"
+      }
+    },
+    {
+      "id": "psp",
+      "label": "Payment Provider",
+      "kind": "payment_provider",
+      "description": "Card processor (Stripe, Adyen, …)"
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "rider",
+      "to": "lb"
+    },
+    {
+      "from": "driver",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "ws"
+    },
+    {
+      "from": "lb",
+      "to": "trip_svc"
+    },
+    {
+      "from": "ws",
+      "to": "location_svc"
+    },
+    {
+      "from": "location_svc",
+      "to": "geo_index"
+    },
+    {
+      "from": "location_svc",
+      "to": "events",
+      "async": true
+    },
+    {
+      "from": "trip_svc",
+      "to": "matching"
+    },
+    {
+      "from": "trip_svc",
+      "to": "trips_db"
+    },
+    {
+      "from": "trip_svc",
+      "to": "maps"
+    },
+    {
+      "from": "trip_svc",
+      "to": "psp"
+    },
+    {
+      "from": "matching",
+      "to": "geo_index"
+    },
+    {
+      "from": "matching",
+      "to": "maps"
+    },
+    {
+      "from": "matching",
+      "to": "ws"
+    }
+  ],
+  "flows": [
+    {
+      "id": "location",
+      "title": "Driver location update",
+      "summary": "Every ~4 s each online driver sends a position. This is the highest-volume path in the system.",
+      "steps": [
+        {
+          "from": "driver",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS frame: location",
+          "detail": "Sent over an already-open WebSocket: no new connection or TLS handshake per update.",
+          "payload": "{ \"type\": \"loc\", \"driver_id\": \"d_7781\", \"lat\": 37.7793, \"lng\": -122.4192, \"heading\": 270, \"ts\": 1762601000 }"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "same connection",
+          "detail": "The load balancer keeps each WebSocket pinned to the gateway instance that accepted it."
+        },
+        {
+          "from": "ws",
+          "to": "location_svc",
+          "kind": "req",
+          "label": "update(d_7781, lat, lng)"
+        },
+        {
+          "from": "location_svc",
+          "to": "geo_index",
+          "kind": "req",
+          "label": "GEOADD available:sf",
+          "detail": "Only the latest position matters, so this is an in-memory overwrite. ~250k writes/s fits a Redis cluster sharded by city; a disk-based database would struggle.",
+          "payload": "GEOADD drivers:available:sf -122.4192 37.7793 d_7781"
+        },
+        {
+          "from": "geo_index",
+          "to": "location_svc",
+          "kind": "res",
+          "label": "OK"
+        },
+        {
+          "from": "location_svc",
+          "to": "events",
+          "kind": "async",
+          "label": "append location event",
+          "detail": "The full history goes to a stream for live trip tracking, ETA models and analytics. The geo index stays small and hot."
+        }
+      ]
+    },
+    {
+      "id": "request",
+      "title": "Request a ride",
+      "summary": "Find nearby drivers, rank by real road ETA, lock one so nobody else can take it, and offer the trip.",
+      "steps": [
+        {
+          "from": "rider",
+          "to": "lb",
+          "kind": "req",
+          "label": "POST /trips",
+          "payload": "POST /trips HTTP/2\nIdempotency-Key: 6f1c…\n\n{ \"pickup\": [37.7793, -122.4192], \"dropoff\": [37.8080, -122.4177], \"product\": \"standard\" }"
+        },
+        {
+          "from": "lb",
+          "to": "trip_svc",
+          "kind": "req",
+          "label": "route"
+        },
+        {
+          "from": "trip_svc",
+          "to": "trips_db",
+          "kind": "req",
+          "label": "INSERT trip REQUESTED",
+          "detail": "The idempotency key makes a retried tap return the same trip instead of creating two."
+        },
+        {
+          "from": "trips_db",
+          "to": "trip_svc",
+          "kind": "res",
+          "label": "trip t_552"
+        },
+        {
+          "from": "trip_svc",
+          "to": "matching",
+          "kind": "req",
+          "label": "match(t_552)"
+        },
+        {
+          "from": "matching",
+          "to": "geo_index",
+          "kind": "req",
+          "label": "GEOSEARCH 2 km",
+          "payload": "GEOSEARCH drivers:available:sf FROMLONLAT -122.4192 37.7793 BYRADIUS 2 km ASC COUNT 10"
+        },
+        {
+          "from": "geo_index",
+          "to": "matching",
+          "kind": "res",
+          "label": "10 nearest drivers",
+          "detail": "Straight-line nearest, which is only a first cut."
+        },
+        {
+          "from": "matching",
+          "to": "maps",
+          "kind": "req",
+          "label": "ETA matrix 10×1",
+          "detail": "Rivers, bridges and one-way streets make straight-line distance misleading, so candidates are ranked by road ETA."
+        },
+        {
+          "from": "maps",
+          "to": "matching",
+          "kind": "res",
+          "label": "ETAs"
+        },
+        {
+          "from": "matching",
+          "to": "geo_index",
+          "kind": "req",
+          "label": "SET lock:d_7781 NX EX 15",
+          "detail": "Atomic claim. Two matchers serving two riders can never offer the same driver at once. The 15 s expiry frees the driver if they ignore the offer."
+        },
+        {
+          "from": "geo_index",
+          "to": "matching",
+          "kind": "res",
+          "label": "OK (locked)"
+        },
+        {
+          "from": "matching",
+          "to": "ws",
+          "kind": "req",
+          "label": "push offer to d_7781",
+          "detail": "Routed to the gateway instance holding that driver's connection."
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS push: offer"
+        },
+        {
+          "from": "lb",
+          "to": "driver",
+          "kind": "req",
+          "label": "offer (15 s to accept)",
+          "payload": "{ \"type\": \"offer\", \"trip_id\": \"t_552\", \"pickup_eta_s\": 180, \"expires_in\": 15 }"
+        },
+        {
+          "from": "driver",
+          "to": "lb",
+          "kind": "req",
+          "label": "accept"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "accept"
+        },
+        {
+          "from": "ws",
+          "to": "matching",
+          "kind": "req",
+          "label": "accepted(t_552)"
+        },
+        {
+          "from": "matching",
+          "to": "trip_svc",
+          "kind": "res",
+          "label": "driver d_7781"
+        },
+        {
+          "from": "trip_svc",
+          "to": "trips_db",
+          "kind": "req",
+          "label": "UPDATE … WHERE status='REQUESTED'",
+          "detail": "Conditional update: if the rider cancelled meanwhile, zero rows change and the driver is released.",
+          "payload": "UPDATE trips SET status = 'ACCEPTED', driver_id = 'd_7781'\nWHERE id = 't_552' AND status = 'REQUESTED';"
+        },
+        {
+          "from": "trips_db",
+          "to": "trip_svc",
+          "kind": "res",
+          "label": "1 row"
+        },
+        {
+          "from": "trip_svc",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 driver + ETA"
+        },
+        {
+          "from": "lb",
+          "to": "rider",
+          "kind": "res",
+          "label": "driver arriving in 3 min",
+          "detail": "From here, the rider app follows the driver's position over its own WebSocket."
+        }
+      ]
+    },
+    {
+      "id": "complete",
+      "title": "Complete trip and pay",
+      "summary": "Compute the fare from the actual route, then charge exactly once.",
+      "steps": [
+        {
+          "from": "driver",
+          "to": "lb",
+          "kind": "req",
+          "label": "POST /trips/t_552/complete"
+        },
+        {
+          "from": "lb",
+          "to": "trip_svc",
+          "kind": "req",
+          "label": "route"
+        },
+        {
+          "from": "trip_svc",
+          "to": "maps",
+          "kind": "req",
+          "label": "route distance + duration",
+          "detail": "Uses the recorded GPS trace, snapped to roads."
+        },
+        {
+          "from": "maps",
+          "to": "trip_svc",
+          "kind": "res",
+          "label": "4.1 km, 14 min"
+        },
+        {
+          "from": "trip_svc",
+          "to": "trip_svc",
+          "kind": "local",
+          "label": "fare = base + km + min × surge",
+          "detail": "Surge comes from supply and demand per city cell at request time; it was shown to the rider up front."
+        },
+        {
+          "from": "trip_svc",
+          "to": "psp",
+          "kind": "req",
+          "label": "charge, key = t_552",
+          "detail": "The trip id is the idempotency key: if the call times out and is retried, the provider returns the first result instead of charging twice.",
+          "payload": "POST /v1/payment_intents\nIdempotency-Key: t_552\n\n{ \"amount\": 1840, \"currency\": \"usd\", \"customer\": \"cus_19\" }"
+        },
+        {
+          "from": "psp",
+          "to": "trip_svc",
+          "kind": "res",
+          "label": "succeeded"
+        },
+        {
+          "from": "trip_svc",
+          "to": "trips_db",
+          "kind": "req",
+          "label": "UPDATE COMPLETED, fare"
+        },
+        {
+          "from": "trips_db",
+          "to": "trip_svc",
+          "kind": "res",
+          "label": "OK"
+        },
+        {
+          "from": "trip_svc",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 receipt"
+        },
+        {
+          "from": "lb",
+          "to": "driver",
+          "kind": "res",
+          "label": "trip complete",
+          "detail": "The driver goes back into the available pool on their next location update."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "geo_index",
+      "kind": "scaling",
+      "text": "Shard by city (or by H3 / geohash prefix). A rider's search only touches one shard, and hot cities get more shards."
+    },
+    {
+      "target": "geo_index",
+      "kind": "failure",
+      "text": "It holds only current positions, which drivers resend every 4 s. After a failover the index refills itself within seconds; nothing needs restoring."
+    },
+    {
+      "target": "ws",
+      "kind": "tradeoff",
+      "text": "WebSockets push offers instantly and avoid 1M clients polling. Cost: stateful connections, so gateways need connection draining on deploys and clients must auto-reconnect."
+    },
+    {
+      "target": "matching",
+      "kind": "tradeoff",
+      "text": "Nearest driver is not always best. Production systems batch requests for a second or two and solve a small assignment problem to lower total pickup time."
+    },
+    {
+      "target": "psp",
+      "kind": "failure",
+      "text": "Payment provider down: mark the trip COMPLETED with payment pending and retry from a background job. Never block the driver's next trip on payment."
+    },
+    {
+      "target": "lb",
+      "kind": "tradeoff",
+      "text": "ALB vs NLB: an application (L7) load balancer handles WebSockets and adds TLS termination and path routing. At ~1M long-lived driver connections, many teams put a network (L4) load balancer in front of the WebSocket gateways instead: higher connection limits, lower latency, static IPs, and the gateways terminate TLS themselves."
+    }
+  ]
+}

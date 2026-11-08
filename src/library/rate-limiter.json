@@ -1,0 +1,372 @@
+{
+  "schema": "archstory/v1",
+  "id": "rate-limiter",
+  "meta": {
+    "title": "Distributed Rate Limiter",
+    "summary": "Enforce per-API-key limits consistently across many gateway instances with an atomic token bucket in Redis.",
+    "tags": [
+      "rate-limiting",
+      "redis",
+      "gateway"
+    ],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Limit each API key to N requests per second, with short bursts allowed",
+      "Return 429 with Retry-After when over the limit",
+      "Limits differ by plan and can change without a deploy"
+    ],
+    "nonFunctional": [
+      "Adds < 2 ms to each request",
+      "Limits hold across all gateway instances combined",
+      "If the limiter itself fails, the API keeps serving (fail open)"
+    ],
+    "scale": [
+      {
+        "label": "Traffic",
+        "value": "1M requests/s across 50 gateway instances"
+      },
+      {
+        "label": "API keys",
+        "value": "5M"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.8.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.8.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services"
+        ],
+        "cidr": "10.8.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.8.32.0/20"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "API Client",
+      "kind": "client"
+    },
+    {
+      "id": "lb",
+      "label": "Network Load Balancer",
+      "kind": "network_load_balancer",
+      "cloud": {
+        "aws": "NLB",
+        "gcp": "External passthrough Network Load Balancer"
+      },
+      "description": "Layer 4 in front of the gateways; Envoy does all HTTP-level work"
+    },
+    {
+      "id": "gw",
+      "label": "Gateway + Limiter",
+      "kind": "api_gateway",
+      "replicas": 50,
+      "description": "Rate-limit middleware runs in every gateway instance",
+      "cloud": {
+        "aws": "Envoy on ECS Fargate",
+        "gcp": "Envoy on GKE"
+      }
+    },
+    {
+      "id": "api",
+      "label": "Backend API",
+      "kind": "service",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "counters",
+      "label": "Counter Store",
+      "kind": "cache",
+      "description": "Token buckets, sharded by API key",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "config",
+      "label": "Limits Config",
+      "kind": "nosql_db",
+      "description": "plan → rate, burst; per-key overrides",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Firestore"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "client",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "gw"
+    },
+    {
+      "from": "gw",
+      "to": "counters"
+    },
+    {
+      "from": "gw",
+      "to": "config"
+    },
+    {
+      "from": "gw",
+      "to": "api"
+    }
+  ],
+  "flows": [
+    {
+      "id": "allowed",
+      "title": "Allowed request",
+      "summary": "One atomic round trip to Redis decides, then the request continues to the backend.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "label": "GET /v1/orders",
+          "payload": "GET /v1/orders HTTP/2\nX-API-Key: key_abc"
+        },
+        {
+          "from": "lb",
+          "to": "gw",
+          "kind": "req",
+          "label": "any gateway",
+          "detail": "Requests from one key land on many gateways, which is why the count must be shared and not kept in local memory."
+        },
+        {
+          "from": "gw",
+          "to": "gw",
+          "kind": "local",
+          "label": "limit for key_abc (cached)",
+          "detail": "Plan limits are cached in the gateway and refreshed in the background, so config is not on the hot path."
+        },
+        {
+          "from": "gw",
+          "to": "counters",
+          "kind": "req",
+          "label": "EVALSHA token_bucket",
+          "detail": "A Lua script runs atomically inside Redis: refill tokens for the time elapsed, then take one. No race between gateways, one network round trip.",
+          "payload": "-- KEYS[1]=tb:key_abc  ARGV: rate=100/s, burst=200, now\nlocal t = redis.call('HMGET', KEYS[1], 'tokens', 'ts')\nlocal tokens = math.min(burst, (t[1] or burst) + (now - (t[2] or now)) * rate)\nif tokens < 1 then return {0, tokens} end\nredis.call('HSET', KEYS[1], 'tokens', tokens - 1, 'ts', now)\nreturn {1, tokens - 1}"
+        },
+        {
+          "from": "counters",
+          "to": "gw",
+          "kind": "res",
+          "label": "allowed, 143 left"
+        },
+        {
+          "from": "gw",
+          "to": "api",
+          "kind": "req",
+          "label": "forward"
+        },
+        {
+          "from": "api",
+          "to": "gw",
+          "kind": "res",
+          "label": "200 OK"
+        },
+        {
+          "from": "gw",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 + rate headers",
+          "payload": "HTTP/2 200\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 143"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK"
+        }
+      ]
+    },
+    {
+      "id": "throttled",
+      "title": "Throttled request",
+      "summary": "The bucket is empty: reject at the edge without touching the backend.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "label": "GET /v1/orders"
+        },
+        {
+          "from": "lb",
+          "to": "gw",
+          "kind": "req",
+          "label": "any gateway"
+        },
+        {
+          "from": "gw",
+          "to": "counters",
+          "kind": "req",
+          "label": "EVALSHA token_bucket"
+        },
+        {
+          "from": "counters",
+          "to": "gw",
+          "kind": "res",
+          "label": "denied, refill in 0.4 s"
+        },
+        {
+          "from": "gw",
+          "to": "lb",
+          "kind": "res",
+          "label": "429 Too Many Requests",
+          "detail": "The backend never sees the request; rejected traffic costs almost nothing.",
+          "payload": "HTTP/2 429\nRetry-After: 1\nX-RateLimit-Remaining: 0"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "429, retry after 1 s",
+          "detail": "Well-behaved clients back off with jitter."
+        }
+      ]
+    },
+    {
+      "id": "fail-open",
+      "title": "Counter store down (fail open)",
+      "summary": "A limiter outage must not become an API outage.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "label": "GET /v1/orders"
+        },
+        {
+          "from": "lb",
+          "to": "gw",
+          "kind": "req",
+          "label": "any gateway"
+        },
+        {
+          "from": "gw",
+          "to": "counters",
+          "kind": "req",
+          "label": "EVALSHA token_bucket"
+        },
+        {
+          "from": "gw",
+          "to": "gw",
+          "kind": "local",
+          "label": "timeout 5 ms → local fallback",
+          "detail": "Fail open with a coarse local limit (key limit ÷ number of gateways). Briefly over-admitting is better than rejecting all traffic."
+        },
+        {
+          "from": "gw",
+          "to": "api",
+          "kind": "req",
+          "label": "forward"
+        },
+        {
+          "from": "api",
+          "to": "gw",
+          "kind": "res",
+          "label": "200 OK"
+        },
+        {
+          "from": "gw",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 OK"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "title": "Limits refresh",
+      "summary": "Background refresh keeps plan changes live without a deploy.",
+      "steps": [
+        {
+          "from": "gw",
+          "to": "config",
+          "kind": "req",
+          "label": "GET limits changed since t",
+          "detail": "Every ~30 s each gateway pulls changes. A customer upgrade takes effect within a minute."
+        },
+        {
+          "from": "config",
+          "to": "gw",
+          "kind": "res",
+          "label": "3 changed keys",
+          "payload": "[{ \"key\": \"key_abc\", \"rate\": 500, \"burst\": 1000 }, …]"
+        },
+        {
+          "from": "gw",
+          "to": "gw",
+          "kind": "local",
+          "label": "swap in-memory table"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "tradeoff",
+      "text": "Algorithms: fixed window (simple, bursty at window edges), sliding log (exact, memory-heavy), sliding window counter (good approximation), token bucket (allows controlled bursts). Token bucket is the usual pick for APIs."
+    },
+    {
+      "target": "counters",
+      "kind": "scaling",
+      "text": "Shard Redis by API key so each key's bucket lives on one shard; one round trip per request at 1M/s needs a cluster, not a single node."
+    },
+    {
+      "target": "counters",
+      "kind": "tradeoff",
+      "text": "Redis keeps the timestamps, so gateway clock skew does not matter. A replica promoted after failover may have slightly old counts, which is acceptable for rate limiting."
+    },
+    {
+      "target": "gw",
+      "kind": "scaling",
+      "text": "Hybrid for very hot keys: each gateway takes tokens from Redis in small batches and spends them locally, cutting Redis calls by 10× at a small cost in precision."
+    },
+    {
+      "target": "lb",
+      "kind": "tradeoff",
+      "text": "A network (L4) load balancer is enough here because the gateways already parse HTTP. It adds less latency, handles huge connection counts and can expose static IPs that customers allowlist."
+    }
+  ]
+}
