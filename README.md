@@ -4,6 +4,8 @@
 
 Explore real architectures and watch each request travel through them hop by hop. Then build your own answer, check it against a reference, and get it reviewed.
 
+**[Try the live demo →](https://vishbay.github.io/archstory/)**
+
 ![A request moving through the URL shortener design in AWS view](docs/screenshot.png)
 
 ## Features
