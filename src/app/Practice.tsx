@@ -8,6 +8,7 @@ import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
 import { addNode, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
+import { Seg, Toggle, Toolbar, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
@@ -171,30 +172,25 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
       )}
 
       <main className="stage">
-        <div className="stage-tools">
-          <div className="seg view-toggle" role="group" aria-label="View">
-            <button className={view === 'canvas' ? 'on' : ''} onClick={() => setView('canvas')}>Architecture</button>
-            <button className={view === 'timeline' ? 'on' : ''} onClick={() => setView('timeline')} disabled={!flow?.steps.length}>Timeline</button>
-          </div>
-          <div className="seg view-toggle" role="group" aria-label="Whose design">
-            <button className={showRef ? '' : 'on'} onClick={() => { setShowRef(false); setSelected(null) }}>Mine</button>
-            <button className={showRef ? 'on' : ''} onClick={() => { setShowRef(true); stopRecording(); setSelected(null); setPicked(null) }}>Reference</button>
-          </div>
-          {view === 'canvas' && (
-            <button className={`network-toggle${network && shown.network ? ' on' : ''}`} disabled={!shown.network} onClick={() => setNetwork(v => !v)}>Network</button>
-          )}
-          {!showRef && (
-            <div className="seg view-toggle edit-tools" role="group" aria-label="Edit">
-              <button title="Undo (⌘Z / Ctrl+Z)" disabled={!hist.past.length} onClick={() => setHist(undo)}>Undo</button>
-              <button title="Redo (⇧⌘Z / Ctrl+Y)" disabled={!hist.future.length} onClick={() => setHist(redo)}>Redo</button>
-              <button className={connecting ? 'on' : ''} title="Connect mode (C): click a caller, then what it calls"
-                onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</button>
-            </div>
-          )}
-          {!showRef && saved !== 'idle' && (
-            <span className={`save-state ${saved}`}>{saved === 'saved' ? 'Saved' : 'Not saved: browser storage is blocked'}</span>
-          )}
-        </div>
+        <Toolbar>
+          <Seg label="View" value={view} onChange={setView}
+            options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow?.steps.length }]} />
+          <Seg label="Whose design" value={showRef ? 'ref' : 'mine'}
+            onChange={k => { if (k === 'ref') { setShowRef(true); stopRecording(); stopConnecting(); setPicked(null) } else setShowRef(false); setSelected(null) }}
+            options={[{ key: 'mine', label: 'Mine' }, { key: 'ref', label: 'Reference' }]} />
+          {view === 'canvas' && <>
+            <ToolbarSep />
+            <Toggle on={network && !!shown.network} disabled={!shown.network} onClick={() => setNetwork(v => !v)} title="Show VPC and subnets">Network</Toggle>
+          </>}
+          <ToolbarSpacer />
+          {!showRef && <>
+            {saved !== 'idle' && <span className={`save-state ${saved}`}>{saved === 'saved' ? 'Saved' : 'Not saved: browser storage is blocked'}</span>}
+            <button className="tb-btn" title="Undo (⌘Z / Ctrl+Z)" disabled={!hist.past.length} onClick={() => setHist(undo)}>Undo</button>
+            <button className="tb-btn" title="Redo (⇧⌘Z / Ctrl+Y)" disabled={!hist.future.length} onClick={() => setHist(redo)}>Redo</button>
+            <Toggle on={connecting} title="Connect mode (C): click a caller, then what it calls"
+              onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</Toggle>
+          </>}
+        </Toolbar>
         {connecting && !showRef && (
           <div className="rec-banner conn">
             <span className="rec-dot" />

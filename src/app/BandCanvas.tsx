@@ -143,7 +143,7 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
   // target handle. The component where the drag started is always the caller.
   const dragFrom = useRef<string | null>(null)
   const count = design.nodes.length
-  useEffect(() => { if (edit) requestAnimationFrame(() => rf.fitView({ duration: 250, padding: { top: '96px', bottom: '24px', left: '24px', right: '24px' } })) },
+  useEffect(() => { if (edit) requestAnimationFrame(() => rf.fitView({ duration: 250, padding: { top: '24px', bottom: '24px', left: '24px', right: '24px' } })) },
     // refit the editor when components are added or removed
     [count]) // eslint-disable-line react-hooks/exhaustive-deps
   const net = network && !!design.network
@@ -154,8 +154,8 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
   // Camera follows the request: frame the two components of the current hop; zoom back out on reset.
   const [follow, setFollow] = useState(() => store.get('archstory.follow', true))
   const toggleFollow = () => setFollow(f => { store.set('archstory.follow', !f); return !f })
-  const FRAME = { top: '110px', bottom: '150px', left: '80px', right: '80px' } as const
-  const OVERVIEW = { top: '96px', bottom: '24px', left: '24px', right: '24px' } as const
+  const FRAME = { top: '40px', bottom: '150px', left: '80px', right: '80px' } as const
+  const OVERVIEW = { top: '24px', bottom: '24px', left: '24px', right: '24px' } as const
   useEffect(() => {
     if (!follow || edit?.mode) return
     const duration = reducedMotion() ? 0 : 450
@@ -266,7 +266,7 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
       }}
       onEdgeClick={(_, e) => edit?.onEdgeClick(e.source, e.target)}
       onNodeClick={(_, n) => onSelect(n.type === 'component' ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
-      fitView fitViewOptions={{ padding: { top: '96px', bottom: '24px', left: '24px', right: '24px' } }}
+      fitView fitViewOptions={{ padding: { top: '24px', bottom: '24px', left: '24px', right: '24px' } }}
       minZoom={0.2} maxZoom={1.3} proOptions={{ hideAttribution: true }}>
       <Background gap={24} color="var(--grid)" />
       <Controls showInteractive={false} position="top-right">

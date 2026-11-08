@@ -7,8 +7,8 @@ import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
 import { store, usePlayer, useTheme } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
+import { AvailabilityMenu, Seg, Toggle, Toolbar, ToolbarSep } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
-import { zoneName } from '../model/availability'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
@@ -17,6 +17,9 @@ import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
 import { copyText, readSharedDesign, shareUrl } from './share'
 import { Practice } from './Practice'
+import { Home } from './Home'
+import { Tour } from './Tour'
+import { EXPLORE_TOUR, PRACTICE_TOUR } from './tourSteps'
 
 type View = 'canvas' | 'timeline'
 const MINE_KEY = 'archstory.myDesigns'
@@ -42,7 +45,16 @@ export function App() {
   const all = [...LIBRARY, ...(shared ? [shared] : []), ...mine]
   const [designId, setDesignId] = useState(() => sharedAtLoad.design?.id ?? params.get('d') ?? LIBRARY[0].id)
   const [toast, setToast] = useState<string | null>(sharedAtLoad.error)
-  const [mode, setMode] = useState<'explore' | 'practice'>(() => (params.get('mode') === 'practice' && !sharedAtLoad.design ? 'practice' : 'explore'))
+  // A bare URL opens the home page; links with a design, a practice problem or a shared design open that directly.
+  const [mode, setMode] = useState<'home' | 'explore' | 'practice'>(() =>
+    sharedAtLoad.design ? 'explore' : params.get('mode') === 'practice' ? 'practice' : params.get('d') ? 'explore' : 'home')
+  const [tour, setTour] = useState<'explore' | 'practice' | null>(null)
+  useEffect(() => {
+    if (mode === 'home' || store.get(`archstory.tour.${mode}`, false)) return
+    const t = setTimeout(() => setTour(mode), 700)   // let the canvas lay out before measuring targets
+    return () => clearTimeout(t)
+  }, [mode])
+  const endTour = () => { if (tour) store.set(`archstory.tour.${tour}`, true); setTour(null) }
   const [problemId, setProblemId] = useState(() => params.get('p') ?? 'url-shortener')
   const [generating, setGenerating] = useState(false)
   const design = all.find(d => d.id === designId) ?? LIBRARY[0]
@@ -70,6 +82,7 @@ export function App() {
 
   useEffect(() => {
     const u = new URL(location.href)
+    if (mode === 'home') { u.search = ''; u.hash = ''; history.replaceState(null, '', u); return }
     if (mode === 'practice') {
       u.search = ''; u.hash = ''
       u.searchParams.set('mode', 'practice'); u.searchParams.set('p', problemId)
@@ -100,7 +113,7 @@ export function App() {
   const importDesign = (d: Design) => {
     const id = LIBRARY.some(x => x.id === d.id) ? `${d.id}-mine` : d.id
     saveMine([...mine.filter(x => x.id !== id), { ...d, id }])
-    setImporting(false); open(id)
+    setImporting(false); open(id); setMode('explore')
   }
   const exportDesign = (d: Design = design) => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }))
@@ -125,12 +138,14 @@ export function App() {
   const themeIcon = theme.pref === 'system' ? '◐' : theme.pref === 'light' ? '☀' : '☾'
 
   return (
-    <div className={`app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
+    <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
       <header className="topbar">
-        <button className="icon ghost" title="Toggle library" onClick={() => setLeftOpen(o => !o)}>☰</button>
-        <span className="brand">Arch<span>Story</span></span>
-        <span className="sep" />
-        <span className="title">{mode === 'practice' ? `Practice: ${(LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title}` : design.meta.title}</span>
+        {mode !== 'home' && <button className="icon ghost" title="Toggle side panel" onClick={() => setLeftOpen(o => !o)}>☰</button>}
+        <button className="brand" onClick={() => setMode('home')} title="Home">Arch<span>Story</span></button>
+        {mode !== 'home' && <>
+          <span className="sep" />
+          <span className="title">{mode === 'practice' ? `Practice: ${(LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title}` : design.meta.title}</span>
+        </>}
         {mode === 'explore' && isShared && (
           <span className="shared-pill">Shared link · not saved
             <button className="link" onClick={saveShared}>Save to My designs</button>
@@ -149,10 +164,18 @@ export function App() {
         </div>
         {mode === 'explore' && <button onClick={share} title="Copy a link to this design, flow and view">Share</button>}
         <button className="icon ghost" title={`Theme: ${theme.pref}`} onClick={theme.cycle}>{themeIcon}</button>
-        <button className="icon ghost" title="Toggle inspector" onClick={() => setRightOpen(o => !o)}>◫</button>
+        {mode !== 'home' && <button className="icon ghost" title="Toggle inspector" onClick={() => setRightOpen(o => !o)}>◫</button>}
       </header>
 
-      {mode === 'practice' ? (
+      {mode === 'home' ? (
+        <main className="home-main">
+          <Home library={LIBRARY} mine={mine}
+            onExplore={id => { open(id); setMode('explore') }}
+            onPractice={id => { setProblemId(id); setMode('practice') }}
+            onImport={() => setImporting(true)} onGenerate={() => setGenerating(true)}
+            onTour={() => { store.set('archstory.tour.explore', false); open(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setLeftOpen(true); setRightOpen(true); setMode('explore'); setTour('explore') }} />
+        </main>
+      ) : mode === 'practice' ? (
         <Practice problemId={problemId} onProblem={setProblemId} cloud={cloud} colorMode={theme.resolved}
           leftOpen={leftOpen} rightOpen={rightOpen} onExport={exportDesign} />
       ) : (<>
@@ -165,40 +188,19 @@ export function App() {
       )}
 
       <main className="stage">
-        <div className="stage-tools">
-        <div className="seg view-toggle" role="group" aria-label="View">
-          <button className={view === 'canvas' ? 'on' : ''} onClick={() => setView('canvas')}>Architecture</button>
-          <button className={view === 'timeline' ? 'on' : ''} onClick={() => setView('timeline')} disabled={!flow}>Timeline</button>
-        </div>
-        {view === 'canvas' && (
-          <button className={`network-toggle${network && design.network ? ' on' : ''}`} aria-pressed={network && !!design.network}
-            disabled={!design.network} onClick={() => setNetwork(v => !v)}
-            title={design.network ? 'Show VPC, subnets and availability zones' : 'This design has no network section'}>
-            Network
-          </button>
-        )}
-        </div>
-        {view === 'canvas' && net && zoneCount > 1 && (
-          <div className="zone-tools">
-            <div className="seg" role="group" aria-label="Layout">
-              <button className={zonesView ? '' : 'on'} onClick={() => setZonesView(false)}>Tiers</button>
-              <button className={zonesView ? 'on' : ''} onClick={() => setZonesView(true)}>Zones</button>
-            </div>
-            <label className="zone-pick">Fail
-              <select value={failedZone ?? ''} onChange={e => setFailed(e.target.value === '' ? null : Number(e.target.value))}>
-                <option value="">nothing</option>
-                {Array.from({ length: zoneCount }, (_, i) => <option key={i} value={i}>{zoneName(i, cloud)}</option>)}
-              </select>
-            </label>
-            {zonesView && (
-              <label className="zone-pick">Request enters
-                <select value={homeZone} onChange={e => setHome(Number(e.target.value))}>
-                  {Array.from({ length: zoneCount }, (_, i) => <option key={i} value={i}>{zoneName(i, cloud)}</option>)}
-                </select>
-              </label>
+        <Toolbar>
+          <Seg label="View" value={view} onChange={setView}
+            options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow }]} />
+          {view === 'canvas' && <>
+            <ToolbarSep />
+            <Toggle on={net} disabled={!design.network} onClick={() => setNetwork(v => !v)}
+              title={design.network ? 'Show VPC, subnets and availability zones' : 'This design has no network section'}>Network</Toggle>
+            {net && zoneCount > 1 && (
+              <AvailabilityMenu zoneCount={zoneCount} cloud={cloud} zonesView={zonesView} onZonesView={setZonesView}
+                failed={failedZone} onFailed={setFailed} home={homeZone} onHome={setHome} />
             )}
-          </div>
-        )}
+          </>}
+        </Toolbar>
         <div className="stage-body">
           {view === 'timeline' && flow
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
@@ -223,6 +225,7 @@ export function App() {
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={() => { setGenerating(false); setImporting(true) }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
+      {tour && <Tour key={tour} steps={tour === 'explore' ? EXPLORE_TOUR : PRACTICE_TOUR} onDone={endTour} />}
     </div>
   )
 }
