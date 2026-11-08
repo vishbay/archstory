@@ -29,7 +29,7 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
       <h3>Import a design</h3>
       <p className="muted small">
         Paste or drop a <code>archstory/v1</code> JSON file, or paste an AI's whole answer: code fences and
-        surrounding text are ignored. Schema: <a href="/schema/archstory-v1.json" target="_blank">archstory-v1.json</a>.
+        surrounding text are ignored. Schema: <a href={`${import.meta.env.BASE_URL}schema/archstory-v1.json`} target="_blank">archstory-v1.json</a>.
       </p>
       <textarea value={text} onChange={e => { setText(e.target.value); setErrors([]); setFixCopied(false) }} spellCheck={false}
         placeholder={'{\n  "schema": "archstory/v1",\n  "id": "my-design",\n  "meta": { "title": "…" },\n  "nodes": [ … ]\n}'} />
