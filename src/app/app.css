@@ -111,8 +111,8 @@ select, input[type="text"], .search, textarea {
 .design-tags { display: flex; gap: 4px; flex-wrap: wrap; }
 .tag, .diff { font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
 .diff-easy { color: var(--easy); } .diff-medium { color: var(--medium); } .diff-hard { color: var(--hard); }
-details { margin: 4px 0 8px; } summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-.reqs { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); } .reqs li { margin: 2px 0; }
+details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summary { cursor: pointer; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.reqs { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); } .reqs li { margin: 3px 0; }
 .kv { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0; }
 .kv th { text-align: left; font-weight: 500; color: var(--muted); padding: 3px 8px 3px 0; white-space: nowrap; vertical-align: top; }
 .kv td { padding: 3px 0; }

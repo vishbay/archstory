@@ -31,10 +31,8 @@ export function Sidebar({ library, mine, current, onOpen, onDelete, onImport, on
     <li key={d.id} className={d.id === current.id ? 'cur' : ''}>
       <button className="design-item" onClick={() => onOpen(d.id)}>
         <span className="design-title">{d.meta.title}</span>
-        <span className="design-tags">
-          {d.meta.difficulty && <span className={`diff diff-${d.meta.difficulty}`}>{d.meta.difficulty}</span>}
-          {d.meta.tags.slice(0, 3).map(t => <span key={t} className="tag">{t}</span>)}
-        </span>
+        {d.meta.difficulty && <span className="design-tags"><span className={`diff diff-${d.meta.difficulty}`}>{d.meta.difficulty}</span></span>}
+        {d.meta.tags.length > 0 && <span className="design-tags">{d.meta.tags.slice(0, 3).map(t => <span key={t} className="tag">{t}</span>)}</span>}
       </button>
       {deletable && <button className="icon ghost" title="Remove from my designs" onClick={() => onDelete(d.id)}>×</button>}
     </li>
