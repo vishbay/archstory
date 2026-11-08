@@ -6,7 +6,7 @@
 ```
 npm install
 npm run dev      # http://localhost:5173
-npm test         # schema, layout and legacy validator tests
+npm test         # schema, layout, library, practice and review tests
 npm run schema   # regenerate public/schema/archstory-v1.json from the zod source
 ```
 
@@ -50,7 +50,6 @@ With the Network toggle on (and `network.zones` > 1):
 - `src/library/*.json`: built-in designs, validated at load
 - `src/app/`: explorer UI (architecture canvas, timeline, player, inspector, import/export, light/dark theme)
 - `src/practice/`: practice attempts (pure edit operations) and the checks that compare an attempt with its reference
-- The original drag-anywhere lab still exists at `/practice-legacy.html` but is no longer linked
 
 ## Practice mode
 Pick any library design as a problem and build your own answer on the same tier-band canvas:
