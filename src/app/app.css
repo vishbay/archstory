@@ -529,11 +529,12 @@ kbd { font: 600 10.5px var(--mono); padding: 1px 6px; border: 1px solid var(--bo
 button.title-btn { gap: 6px; border: 0; background: none; padding: 4px 8px; font-weight: 600; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 button.title-btn:hover:not(:disabled) { background: var(--surface-2); }
 .chev-down { color: var(--faint); font-size: 11px; }
-dialog.picker { width: min(640px, calc(100vw - 32px)); max-height: min(560px, 80vh); margin: 11vh auto 0; padding: 0; border-radius: 16px; color: var(--text); overflow: hidden; }
+dialog.picker { width: min(640px, calc(100vw - 32px)); height: min(560px, 80vh); margin: 11vh auto 0; padding: 0; border-radius: 16px; color: var(--text); overflow: hidden; }
 dialog.picker[open] { display: flex; flex-direction: column; }
 dialog.picker::backdrop { background: #0006; }
 .picker-input { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 14px 18px; font-size: 15px; background: transparent; outline: none; }
-.picker-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+.picker-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1 1 0; min-height: 0; }
+.picker-input, .picker-foot { flex: none; }
 .picker-list li[role="option"] { position: relative; padding: 9px 12px; border-radius: 10px; cursor: pointer; }
 .picker-list li.sel { background: var(--accent-soft); }
 .pick-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
