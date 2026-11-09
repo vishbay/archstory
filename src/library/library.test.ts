@@ -4,6 +4,7 @@ import { layoutZones, resolveFlow } from '../layout/zones'
 import { resilience } from '../model/availability'
 import { layoutBands, NODE_W } from '../layout/bands'
 import { tierOf } from '../model/kinds'
+import { phaseGroups } from '../model/phases'
 
 describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
   const zones = d.network?.zones ?? 1
@@ -13,6 +14,18 @@ describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
     expect(d.flows.length).toBeGreaterThan(0)
     for (const f of d.flows) expect(f.steps.some(s => s.detail), f.id).toBe(true)
     expect(d.notes.length).toBeGreaterThan(2)
+  })
+
+  it('names a phase on every step, in consecutive groups of a sensible number', () => {
+    for (const f of d.flows) {
+      expect(f.steps.every(s => s.phase?.trim()), `${f.id}: a step has no phase`).toBe(true)
+      const groups = phaseGroups(f.steps)!
+      const names = groups.map(g => g.name)
+      expect(new Set(names).size, `${f.id}: a phase name comes back after another phase`).toBe(names.length)
+      expect(groups.length, `${f.id}: phases`).toBeGreaterThanOrEqual(f.steps.length <= 3 ? 1 : 2)
+      expect(groups.length, `${f.id}: too many phases`).toBeLessThanOrEqual(10)
+      for (const n of names) expect(n.length, n).toBeLessThanOrEqual(32)
+    }
   })
 
   // Any client that calls the system has to find it by name. Designs where clients are only called (push

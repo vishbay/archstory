@@ -1,14 +1,16 @@
-import { useEffect, useRef } from 'react'
 import type { Design, Flow } from '../model/schema'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
 import { MonitoringPanel } from './MonitoringPanel'
+import { StepList } from './StepList'
+import { Legend } from './Legend'
+import { resolvePhases } from '../model/phases'
 import { cloudIconUrl } from '../model/cloudIcons'
 import { crossing, placement } from '../model/network'
 import { haOf, impactOf, placementsOf, resilience, zoneName } from '../model/availability'
 import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
-import { reducedMotion, type Player } from './hooks'
+import type { Player } from './hooks'
 
 export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes'
 
@@ -29,11 +31,6 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const byId = Object.fromEntries(design.nodes.map(n => [n.id, n]))
   const name = (id: string) => nameOf(byId[id], cloud)
   const { step, jump } = player
-  // Keep the current step in view while the flow plays.
-  const listRef = useRef<HTMLOListElement>(null)
-  useEffect(() => {
-    listRef.current?.querySelector('li.cur')?.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' })
-  }, [step, flow?.id, tab])
   const cur = flow?.steps[step]
   const node = selected ? byId[selected] : undefined
   const zones = network && (design.network?.zones ?? 1) > 1
@@ -63,9 +60,9 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             <h3>{flow.title}</h3>
             {flow.summary && <p className="muted">{flow.summary}</p>}
             {cur ? (
-              <div className="card">
+              <div className="card current-card">
                 <div className="card-meta">
-                  <span>Step {step + 1} of {flow.steps.length}</span>
+                  <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}</span>
                   <span className="pill" style={{ color: KIND_VAR[cur.kind], borderColor: KIND_VAR[cur.kind] }}>{KIND_TEXT[cur.kind]}</span>
                 </div>
                 <div className="card-hop">
@@ -83,20 +80,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             ) : (
               <div className="card muted">Press ▶ or space to send a request through the system. ← → step through it.</div>
             )}
-            <ol className="steps" ref={listRef}>
-              {flow.steps.map((s, i) => (
-                <li key={i} className={i === step ? 'cur' : i < step ? 'done' : ''} onClick={() => jump(i)}
-                  role="button" tabIndex={0} aria-current={i === step ? 'step' : undefined} aria-label={`Step ${i + 1}: ${name(s.from)}${s.from !== s.to ? ` to ${name(s.to)}` : ''}, ${s.label}`}
-                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(i) } }}>
-                  <span className="dot" style={{ background: KIND_VAR[s.kind] }} />
-                  <span>{name(s.from)}{s.from !== s.to && ` → ${name(s.to)}`}</span>
-                  <span className="mono muted">{s.label}</span>
-                </li>
-              ))}
-            </ol>
-            <div className="legend">
-              {Object.entries(KIND_VAR).map(([k, c]) => <span key={k}><i style={{ background: c }} />{KIND_TEXT[k as keyof typeof KIND_TEXT]}</span>)}
-            </div>
+            <StepList flow={flow} step={step} jump={jump} name={name} />
           </>
         )}
         {shown === 'step' && !flow && <p className="muted">This design has no request flows yet.</p>}
@@ -172,6 +156,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             ))
         )}
       </div>
+      {shown === 'step' && flow && <Legend monitoring={monitoring && !!design.observability} />}
     </>
   )
 }

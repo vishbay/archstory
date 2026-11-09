@@ -386,6 +386,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve feed.example.com",
           "detail": "The app resolves the API hostname, which points at the CDN. The answer is cached on the phone and by resolvers."
         },
@@ -393,6 +394,7 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "feed.example.com.  60  IN A  203.0.113.10"
         },
@@ -400,6 +402,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /api/posts",
           "detail": "Images were already uploaded separately; the post references them by id.",
           "payload": "POST /api/posts HTTP/2\nAuthorization: Bearer eyJ…\n\n{ \"text\": \"Shipping v2 today!\", \"media_ids\": [\"m_81f2\"] }"
@@ -408,6 +411,7 @@
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward to origin",
           "detail": "Writes are never cached; the CDN forwards them to the origin."
         },
@@ -415,6 +419,7 @@
           "from": "lb",
           "to": "post_svc",
           "kind": "req",
+          "phase": "Request in",
           "label": "route",
           "detail": "Stateless Post Service instances sit behind the load balancer."
         },
@@ -422,6 +427,7 @@
           "from": "post_svc",
           "to": "posts_db",
           "kind": "req",
+          "phase": "Store post",
           "label": "PutItem post",
           "detail": "The post id is a time-sortable Snowflake-style id (timestamp + machine + sequence), so ids sort by time without a global counter.",
           "payload": "{ \"post_id\": 1857261298011340800, \"author_id\": 42, \"text\": \"Shipping v2 today!\", \"media\": [\"m_81f2\"] }"
@@ -430,6 +436,7 @@
           "from": "posts_db",
           "to": "post_svc",
           "kind": "res",
+          "phase": "Store post",
           "label": "OK",
           "detail": "The post is durable. Everything after this point can be retried."
         },
@@ -437,6 +444,7 @@
           "from": "post_svc",
           "to": "fanout_q",
           "kind": "async",
+          "phase": "Respond & queue fan-out",
           "label": "publish PostCreated",
           "detail": "Fan-out is slow for popular authors, so it happens off the request path.",
           "payload": "{ \"type\": \"PostCreated\", \"post_id\": 1857261298011340800, \"author_id\": 42 }"
@@ -445,6 +453,7 @@
           "from": "post_svc",
           "to": "lb",
           "kind": "res",
+          "phase": "Respond & queue fan-out",
           "label": "201 Created",
           "detail": "The author gets an immediate response."
         },
@@ -452,6 +461,7 @@
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Respond & queue fan-out",
           "label": "201 Created",
           "detail": "Back out through the edge."
         },
@@ -459,6 +469,7 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Respond & queue fan-out",
           "label": "201 Created",
           "detail": "The client shows the post in the author's own timeline right away, even before fan-out finishes."
         },
@@ -466,6 +477,7 @@
           "from": "fanout_q",
           "to": "fanout_worker",
           "kind": "async",
+          "phase": "Fan out to followers",
           "label": "deliver PostCreated",
           "detail": "Workers scale with queue depth. A celebrity post does not slow down anyone's request."
         },
@@ -473,6 +485,7 @@
           "from": "fanout_worker",
           "to": "graph_svc",
           "kind": "async",
+          "phase": "Fan out to followers",
           "label": "GET followers(42) page 1",
           "detail": "Followers are read in pages of a few thousand."
         },
@@ -480,6 +493,7 @@
           "from": "graph_svc",
           "to": "graph_db",
           "kind": "async",
+          "phase": "Fan out to followers",
           "label": "SELECT follower_id",
           "payload": "SELECT follower_id FROM follows\nWHERE followee_id = 42 AND follower_id > :cursor\nORDER BY follower_id LIMIT 5000;"
         },
@@ -487,6 +501,7 @@
           "from": "graph_db",
           "to": "graph_svc",
           "kind": "async",
+          "phase": "Fan out to followers",
           "label": "5,000 ids",
           "detail": "Index on (followee_id, follower_id) makes this a range scan."
         },
@@ -494,6 +509,7 @@
           "from": "graph_svc",
           "to": "fanout_worker",
           "kind": "async",
+          "phase": "Fan out to followers",
           "label": "followers page",
           "detail": "Inactive followers (no login for 30 days) are skipped to save cache memory; their timeline is rebuilt when they return."
         },
@@ -501,6 +517,7 @@
           "from": "fanout_worker",
           "to": "timeline_cache",
           "kind": "async",
+          "phase": "Fan out to followers",
           "label": "LPUSH + LTRIM ×N",
           "detail": "Fan-out on write: one small write per follower, pipelined. Each list is trimmed to ~800 ids so memory stays bounded.",
           "payload": "MULTI\nLPUSH timeline:1001 1857261298011340800\nLTRIM timeline:1001 0 799\n…\nEXEC"
@@ -516,6 +533,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /api/timeline",
           "payload": "GET /api/timeline?limit=50 HTTP/2\nAuthorization: Bearer eyJ…"
         },
@@ -523,6 +541,7 @@
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Request in",
           "label": "private: pass through",
           "detail": "Timelines are per-user, so the CDN does not cache them. It still serves every image and video in them."
         },
@@ -530,18 +549,21 @@
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward to origin"
         },
         {
           "from": "lb",
           "to": "timeline_svc",
           "kind": "req",
+          "phase": "Request in",
           "label": "route"
         },
         {
           "from": "timeline_svc",
           "to": "timeline_cache",
           "kind": "req",
+          "phase": "Read cached timeline",
           "label": "LRANGE timeline:1001 0 49",
           "detail": "The timeline was built ahead of time by fan-out, so reading it is one memory lookup."
         },
@@ -549,6 +571,7 @@
           "from": "timeline_cache",
           "to": "timeline_svc",
           "kind": "res",
+          "phase": "Read cached timeline",
           "label": "50 post ids",
           "detail": "Sub-millisecond. This is why fan-out on write pays off: reads outnumber writes ~100:1."
         },
@@ -556,6 +579,7 @@
           "from": "timeline_svc",
           "to": "graph_svc",
           "kind": "req",
+          "phase": "Merge celebrity posts",
           "label": "celebrities I follow",
           "detail": "Hybrid model: accounts with more than ~100k followers are not fanned out, since one post would mean millions of cache writes. Their posts are pulled at read time instead."
         },
@@ -563,6 +587,7 @@
           "from": "graph_svc",
           "to": "timeline_svc",
           "kind": "res",
+          "phase": "Merge celebrity posts",
           "label": "[nasa, elonmusk]",
           "detail": "This list is small and heavily cached."
         },
@@ -570,6 +595,7 @@
           "from": "timeline_svc",
           "to": "posts_db",
           "kind": "req",
+          "phase": "Merge celebrity posts",
           "label": "BatchGet + recent celeb posts",
           "detail": "Hydrate the 50 ids into full posts and fetch the latest posts by followed celebrities."
         },
@@ -577,12 +603,14 @@
           "from": "posts_db",
           "to": "timeline_svc",
           "kind": "res",
+          "phase": "Merge celebrity posts",
           "label": "posts"
         },
         {
           "from": "timeline_svc",
           "to": "timeline_svc",
           "kind": "local",
+          "phase": "Merge celebrity posts",
           "label": "merge by time",
           "detail": "Merge the two sorted lists by post id (which is time-ordered), then apply ranking if the product has one."
         },
@@ -590,6 +618,7 @@
           "from": "timeline_svc",
           "to": "lb",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK",
           "payload": "{ \"posts\": [ { \"id\": \"1857261298011340800\", \"author\": \"@dev\", \"media\": [\"https://cdn.example.com/m_81f2.jpg\"] }, … ], \"next_cursor\": \"…\" }"
         },
@@ -597,12 +626,14 @@
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         },
         {
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK",
           "detail": "Media URLs point at the CDN, so images load from the edge."
         },
@@ -610,12 +641,14 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Load media",
           "label": "GET /m_81f2.jpg"
         },
         {
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Load media",
           "label": "HIT",
           "detail": "Popular media is almost always cached at the edge."
         },
@@ -623,6 +656,7 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Load media",
           "label": "image"
         }
       ]

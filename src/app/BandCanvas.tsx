@@ -12,7 +12,7 @@ import { ZNODE_W, type Hop, type ZoneLayout } from '../layout/zones'
 import { emits, signalsFor, telemetryNodes, TELEMETRY_EDGES, traceId } from '../model/observability'
 import { NodeIcon } from './NodeIcon'
 import { Packet } from './Packet'
-import { KIND_VAR } from './stepKinds'
+import { KIND_GLYPH, KIND_VAR } from './stepKinds'
 import { reducedMotion, store, type Player } from './hooks'
 import { KIND_TEXT } from './stepKinds'
 
@@ -74,8 +74,10 @@ function ComponentNode({ data }: NodeProps) {
       </div>
       {n.replicas && <span className="node-rep">×{n.replicas}</span>}
       {signals && (signals.metrics || signals.logs || signals.traces) && (
-        <span className="node-signals" title="Telemetry this component emits: metrics, logs, traces">
-          {signals.metrics && <i>M</i>}{signals.logs && <i>L</i>}{signals.traces && <i>T</i>}
+        <span className="node-signals" role="group" aria-label="Telemetry this component emits">
+          {signals.metrics && <i title="Emits metrics" aria-label="emits metrics">M</i>}
+          {signals.logs && <i title="Emits logs" aria-label="emits logs">L</i>}
+          {signals.traces && <i title="Emits traces" aria-label="emits traces">T</i>}
         </span>
       )}
       {SIDES.map(([s, p]) => <Handle key={`s-${s}`} id={`s-${s}`} type="source" position={p} isConnectable={!!editable} />)}
@@ -95,6 +97,7 @@ const edgeColor = (d: EdgeData) =>
 function FlowEdge(p: EdgeProps) {
   const d = p.data as EdgeData
   const [path, lx, ly] = getBezierPath(p)
+  const sideways = p.sourcePosition === Position.Left || p.sourcePosition === Position.Right   // same lane: keep the tag above the nodes
   const color = d.picked ? 'var(--accent)' : edgeColor(d)
   const dashed = d.state === 'active' ? d.kind === 'async' : d.async
   const label = d.state === 'active' ? undefined : d.note   // the active step's label travels with the packet
@@ -107,8 +110,8 @@ function FlowEdge(p: EdgeProps) {
       {d.packet && d.label && (
         <EdgeLabelRenderer>
           <div key={d.packet.key} className="packet-tag" title={d.label}
-            style={{ offsetPath: `path("${path}")`, animationDuration: `${d.packet.ms}ms`, animationDirection: d.packet.reverse ? 'reverse' : 'normal', borderColor: color, color }}>
-            {d.label}
+            style={{ offsetPath: `path("${path}")`, offsetAnchor: sideways ? '-12px 64px' : undefined, animationDuration: `${d.packet.ms}ms`, animationDirection: d.packet.reverse ? 'reverse' : 'normal', borderColor: color, color }}>
+            {KIND_GLYPH[d.kind!]} {d.label}
           </div>
         </EdgeLabelRenderer>
       )}

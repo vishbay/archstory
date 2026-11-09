@@ -310,6 +310,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve search.example.com",
           "detail": "Cached by the browser and by resolvers, so the lookup happens once per session and autocomplete keystrokes never wait on DNS."
         },
@@ -317,6 +318,7 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "search.example.com.  60  IN A  203.0.113.10"
         },
@@ -324,6 +326,7 @@
           "from": "client",
           "to": "client",
           "kind": "local",
+          "phase": "Debounce",
           "label": "debounce 100 ms",
           "detail": "Wait until typing pauses briefly. Fast typists send far fewer requests."
         },
@@ -331,6 +334,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Edge cache hit",
           "label": "GET /suggest?q=sys",
           "payload": "GET /suggest?q=sys&lang=en HTTP/2"
         },
@@ -338,6 +342,7 @@
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Edge cache hit",
           "label": "HIT (max-age 300)",
           "detail": "Prefix popularity follows a power law, so a few thousand short prefixes cover most traffic."
         },
@@ -345,6 +350,7 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Edge cache hit",
           "label": "top 10",
           "payload": "[\"system design\", \"system of a down\", \"systemctl\", …]"
         }
@@ -359,30 +365,35 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Edge cache miss",
           "label": "GET /suggest?q=system%20des"
         },
         {
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Edge cache miss",
           "label": "MISS"
         },
         {
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Reach the origin",
           "label": "forward to origin"
         },
         {
           "from": "lb",
           "to": "suggest",
           "kind": "req",
+          "phase": "Reach the origin",
           "label": "route"
         },
         {
           "from": "suggest",
           "to": "suggest",
           "kind": "local",
+          "phase": "Look up the trie",
           "label": "walk trie, read top-10",
           "detail": "Each trie node stores its own top-10 list, so the lookup costs O(length of prefix). No subtree search, no database."
         },
@@ -390,6 +401,7 @@
           "from": "suggest",
           "to": "logs",
           "kind": "async",
+          "phase": "Look up the trie",
           "label": "log query",
           "detail": "Only submitted searches are logged for popularity, not every keystroke."
         },
@@ -397,18 +409,21 @@
           "from": "suggest",
           "to": "lb",
           "kind": "res",
+          "phase": "Respond",
           "label": "200, max-age=300"
         },
         {
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Respond",
           "label": "200"
         },
         {
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Respond",
           "label": "top 10",
           "detail": "Now cached at this edge for the next five minutes."
         }
@@ -423,12 +438,14 @@
           "from": "logs",
           "to": "aggregator",
           "kind": "async",
+          "phase": "Count queries",
           "label": "batch of search events"
         },
         {
           "from": "aggregator",
           "to": "counts",
           "kind": "async",
+          "phase": "Count queries",
           "label": "upsert decayed scores",
           "detail": "score = old_score × decay + new_count, so trending queries rise fast and stale ones fade."
         },
@@ -436,18 +453,21 @@
           "from": "builder",
           "to": "counts",
           "kind": "async",
+          "phase": "Build the trie",
           "label": "scan top 100M queries"
         },
         {
           "from": "counts",
           "to": "builder",
           "kind": "async",
+          "phase": "Build the trie",
           "label": "queries + scores"
         },
         {
           "from": "builder",
           "to": "builder",
           "kind": "local",
+          "phase": "Build the trie",
           "label": "build trie, top-k per node",
           "detail": "Also filters offensive and policy-blocked phrases before they can be suggested."
         },
@@ -455,12 +475,14 @@
           "from": "builder",
           "to": "snapshots",
           "kind": "async",
+          "phase": "Build the trie",
           "label": "PUT trie-v1234"
         },
         {
           "from": "suggest",
           "to": "snapshots",
           "kind": "req",
+          "phase": "Roll out",
           "label": "load trie-v1234 (rolling)",
           "detail": "Instances load the new version one at a time and swap atomically in memory. Rolling back is loading the previous snapshot."
         },
@@ -468,6 +490,7 @@
           "from": "snapshots",
           "to": "suggest",
           "kind": "res",
+          "phase": "Roll out",
           "label": "snapshot"
         }
       ]

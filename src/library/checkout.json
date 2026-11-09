@@ -384,6 +384,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve shop.example.com",
           "detail": "The shop hostname points at the CDN, which terminates TLS near the shopper. Resolvers cache the answer."
         },
@@ -391,6 +392,7 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "shop.example.com.  60  IN A  203.0.113.10"
         },
@@ -398,6 +400,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /orders",
           "detail": "The client creates an idempotency key once per checkout attempt and reuses it on retries.",
           "payload": "POST /orders HTTP/2\nIdempotency-Key: 9b2e4c1a-…\n\n{ \"cart_id\": \"cart_88\", \"items\": [{ \"sku\": \"SHOE-42\", \"qty\": 1 }], \"payment_method\": \"pm_visa\" }"
@@ -406,12 +409,14 @@
           "from": "cdn",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward"
         },
         {
           "from": "gw",
           "to": "gw",
           "kind": "local",
+          "phase": "Request in",
           "label": "auth + rate limit",
           "detail": "During flash sales the gateway can also hold excess users in a virtual waiting room."
         },
@@ -419,12 +424,14 @@
           "from": "gw",
           "to": "order_svc",
           "kind": "req",
+          "phase": "Create order",
           "label": "create order"
         },
         {
           "from": "order_svc",
           "to": "orders_db",
           "kind": "req",
+          "phase": "Create order",
           "label": "INSERT order PENDING",
           "detail": "A unique constraint on the idempotency key: a retry gets the existing order back instead of creating a second one.",
           "payload": "INSERT INTO orders (id, idempotency_key, status, total)\nVALUES ('o_501', '9b2e4c1a-…', 'PENDING', 12900)\nON CONFLICT (idempotency_key) DO NOTHING RETURNING id;"
@@ -433,18 +440,21 @@
           "from": "orders_db",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Create order",
           "label": "o_501"
         },
         {
           "from": "order_svc",
           "to": "inventory_svc",
           "kind": "req",
+          "phase": "Reserve stock",
           "label": "reserve SHOE-42 ×1"
         },
         {
           "from": "inventory_svc",
           "to": "inventory_db",
           "kind": "req",
+          "phase": "Reserve stock",
           "label": "conditional UPDATE",
           "detail": "One atomic statement: it only succeeds while stock remains, so two buyers can never both get the last pair. No distributed lock needed.",
           "payload": "UPDATE stock\nSET available = available - 1, reserved = reserved + 1\nWHERE sku = 'SHOE-42' AND available >= 1;"
@@ -453,6 +463,7 @@
           "from": "inventory_db",
           "to": "inventory_svc",
           "kind": "res",
+          "phase": "Reserve stock",
           "label": "1 row updated",
           "detail": "Zero rows would mean sold out. Reservations expire after 15 minutes if the order never completes."
         },
@@ -460,18 +471,21 @@
           "from": "inventory_svc",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Reserve stock",
           "label": "reserved"
         },
         {
           "from": "order_svc",
           "to": "payment_svc",
           "kind": "req",
+          "phase": "Charge card",
           "label": "charge o_501"
         },
         {
           "from": "payment_svc",
           "to": "psp",
           "kind": "req",
+          "phase": "Charge card",
           "label": "charge, key = o_501",
           "detail": "If the provider times out, retry with the same key. The provider returns the original result rather than charging twice.",
           "payload": "POST /v1/payment_intents\nIdempotency-Key: o_501\n\n{ \"amount\": 12900, \"currency\": \"usd\", \"payment_method\": \"pm_visa\", \"confirm\": true }"
@@ -480,18 +494,21 @@
           "from": "psp",
           "to": "payment_svc",
           "kind": "res",
+          "phase": "Charge card",
           "label": "succeeded"
         },
         {
           "from": "payment_svc",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Charge card",
           "label": "paid"
         },
         {
           "from": "order_svc",
           "to": "orders_db",
           "kind": "req",
+          "phase": "Confirm order",
           "label": "UPDATE PAID + INSERT outbox",
           "detail": "Transactional outbox: the status change and the OrderPaid event commit together. There is never a paid order without its event, or an event without the order.",
           "payload": "BEGIN;\nUPDATE orders SET status = 'PAID' WHERE id = 'o_501';\nINSERT INTO outbox (topic, payload) VALUES ('orders', '{\"type\":\"OrderPaid\",\"id\":\"o_501\"}');\nCOMMIT;"
@@ -500,30 +517,35 @@
           "from": "orders_db",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Confirm order",
           "label": "COMMIT"
         },
         {
           "from": "order_svc",
           "to": "gw",
           "kind": "res",
+          "phase": "Response",
           "label": "201 Created"
         },
         {
           "from": "gw",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "201 Created"
         },
         {
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "Order confirmed"
         },
         {
           "from": "relay",
           "to": "orders_db",
           "kind": "async",
+          "phase": "Events & email",
           "label": "poll outbox",
           "detail": "Or tail the database change log (CDC). Either way, only committed rows are published."
         },
@@ -531,12 +553,14 @@
           "from": "orders_db",
           "to": "relay",
           "kind": "async",
+          "phase": "Events & email",
           "label": "new rows"
         },
         {
           "from": "relay",
           "to": "events",
           "kind": "async",
+          "phase": "Events & email",
           "label": "publish OrderPaid",
           "detail": "At-least-once: consumers deduplicate by event id."
         },
@@ -544,12 +568,14 @@
           "from": "events",
           "to": "email_worker",
           "kind": "async",
+          "phase": "Events & email",
           "label": "OrderPaid"
         },
         {
           "from": "email_worker",
           "to": "email",
           "kind": "async",
+          "phase": "Events & email",
           "label": "send confirmation"
         }
       ]
@@ -563,84 +589,98 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /orders"
         },
         {
           "from": "cdn",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward"
         },
         {
           "from": "gw",
           "to": "order_svc",
           "kind": "req",
+          "phase": "Request in",
           "label": "create order"
         },
         {
           "from": "order_svc",
           "to": "orders_db",
           "kind": "req",
+          "phase": "Create order",
           "label": "INSERT order PENDING"
         },
         {
           "from": "orders_db",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Create order",
           "label": "o_502"
         },
         {
           "from": "order_svc",
           "to": "inventory_svc",
           "kind": "req",
+          "phase": "Reserve stock",
           "label": "reserve SHOE-42 ×1"
         },
         {
           "from": "inventory_svc",
           "to": "inventory_db",
           "kind": "req",
+          "phase": "Reserve stock",
           "label": "conditional UPDATE"
         },
         {
           "from": "inventory_db",
           "to": "inventory_svc",
           "kind": "res",
+          "phase": "Reserve stock",
           "label": "1 row updated"
         },
         {
           "from": "inventory_svc",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Reserve stock",
           "label": "reserved"
         },
         {
           "from": "order_svc",
           "to": "payment_svc",
           "kind": "req",
+          "phase": "Payment declined",
           "label": "charge o_502"
         },
         {
           "from": "payment_svc",
           "to": "psp",
           "kind": "req",
+          "phase": "Payment declined",
           "label": "charge, key = o_502"
         },
         {
           "from": "psp",
           "to": "payment_svc",
           "kind": "res",
+          "phase": "Payment declined",
           "label": "card_declined"
         },
         {
           "from": "payment_svc",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Payment declined",
           "label": "declined"
         },
         {
           "from": "order_svc",
           "to": "inventory_svc",
           "kind": "req",
+          "phase": "Roll back (saga)",
           "label": "release reservation",
           "detail": "Compensating action for the reservation. It is idempotent too, so a retried release cannot add stock twice."
         },
@@ -648,6 +688,7 @@
           "from": "inventory_svc",
           "to": "inventory_db",
           "kind": "req",
+          "phase": "Roll back (saga)",
           "label": "UPDATE available + 1",
           "payload": "UPDATE stock SET available = available + 1, reserved = reserved - 1\nWHERE sku = 'SHOE-42';  -- guarded by reservation id"
         },
@@ -655,18 +696,21 @@
           "from": "inventory_db",
           "to": "inventory_svc",
           "kind": "res",
+          "phase": "Roll back (saga)",
           "label": "OK"
         },
         {
           "from": "inventory_svc",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Roll back (saga)",
           "label": "released"
         },
         {
           "from": "order_svc",
           "to": "orders_db",
           "kind": "req",
+          "phase": "Roll back (saga)",
           "label": "UPDATE FAILED + outbox",
           "detail": "OrderFailed is published the same way as OrderPaid."
         },
@@ -674,24 +718,28 @@
           "from": "orders_db",
           "to": "order_svc",
           "kind": "res",
+          "phase": "Roll back (saga)",
           "label": "COMMIT"
         },
         {
           "from": "order_svc",
           "to": "gw",
           "kind": "res",
+          "phase": "Response",
           "label": "402 Payment Required"
         },
         {
           "from": "gw",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "402"
         },
         {
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "Card declined, try another",
           "detail": "The same cart can be retried with a new idempotency key."
         }

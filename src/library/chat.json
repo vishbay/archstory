@@ -391,6 +391,7 @@
           "from": "alice",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve chat.example.com",
           "detail": "Clients look the service up by name, and DNS answers with the nearest region's load balancer (geo or latency routing). A short TTL (about 60 s) lets traffic move away from a failing region. This happens once per connect, not per message.",
           "payload": "chat.example.com.  IN A"
@@ -399,6 +400,7 @@
           "from": "dns",
           "to": "alice",
           "kind": "res",
+          "phase": "DNS",
           "label": "NLB address (nearest region)",
           "detail": "Apps also ship a fallback hostname and a list of IPs, because DNS can be slow or blocked on some networks.",
           "payload": "chat.example.com.  60  IN A  203.0.113.10"
@@ -407,6 +409,7 @@
           "from": "alice",
           "to": "lb",
           "kind": "req",
+          "phase": "Connect",
           "label": "TCP + TLS + WebSocket upgrade",
           "detail": "One connection stays open for hours, so the cost of setting it up is paid once. The layer-4 balancer just passes the bytes through.",
           "payload": "GET /ws HTTP/1.1\nUpgrade: websocket\nAuthorization: Bearer eyJ…"
@@ -415,6 +418,7 @@
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Connect",
           "label": "pick a gateway (least connections)",
           "detail": "Spreading connections evenly matters more than spreading requests: each gateway holds about a million sockets."
         },
@@ -422,6 +426,7 @@
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Register session",
           "label": "authenticate + register",
           "detail": "The gateway checks the token, then tells the message service this user is online here."
         },
@@ -429,6 +434,7 @@
           "from": "chat_svc",
           "to": "sessions",
           "kind": "req",
+          "phase": "Register session",
           "label": "SET session:alice gateway-17 EX 60",
           "detail": "This entry is how every later message finds Alice. The gateway refreshes it with a heartbeat every 30 s, so if the gateway dies the entry expires within a minute and she is treated as offline.",
           "payload": "SET session:alice gateway-17 EX 60"
@@ -437,24 +443,28 @@
           "from": "sessions",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Register session",
           "label": "OK"
         },
         {
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
+          "phase": "Ready",
           "label": "ready"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "res",
+          "phase": "Ready",
           "label": "101 Switching Protocols"
         },
         {
           "from": "lb",
           "to": "alice",
           "kind": "res",
+          "phase": "Ready",
           "label": "connected",
           "detail": "From here Alice can send and receive over the same socket. The client reconnects automatically with backoff and jitter, so a gateway restart does not cause a stampede."
         }
@@ -469,6 +479,7 @@
           "from": "alice",
           "to": "lb",
           "kind": "req",
+          "phase": "Send",
           "label": "WS frame: send",
           "detail": "The client generates its own message id so a resend after a dropped connection can be deduplicated.",
           "payload": "{ \"type\": \"send\", \"conv_id\": \"c_alice_bob\", \"client_msg_id\": \"a1-0042\", \"body\": \"<ciphertext>\" }"
@@ -477,6 +488,7 @@
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Send",
           "label": "same TCP connection",
           "detail": "A layer-4 balancer just pins connections; the gateway terminates the WebSocket."
         },
@@ -484,12 +496,14 @@
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Send",
           "label": "send"
         },
         {
           "from": "chat_svc",
           "to": "msg_db",
           "kind": "req",
+          "phase": "Persist",
           "label": "INSERT (QUORUM)",
           "detail": "Write before delivering: if anything crashes after this, the message still exists. A quorum write survives one replica being down.",
           "payload": "INSERT INTO messages (conv_id, msg_id, sender, body)\nVALUES ('c_alice_bob', 0x18f3…, 'alice', <ciphertext>)\nIF NOT EXISTS;  -- dedupe on client_msg_id"
@@ -498,6 +512,7 @@
           "from": "msg_db",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Persist",
           "label": "OK, msg_id",
           "detail": "The time-sortable msg_id fixes the order within the conversation for every reader."
         },
@@ -505,18 +520,21 @@
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
+          "phase": "Acknowledge sender",
           "label": "ack ✓"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "res",
+          "phase": "Acknowledge sender",
           "label": "ack ✓"
         },
         {
           "from": "lb",
           "to": "alice",
           "kind": "res",
+          "phase": "Acknowledge sender",
           "label": "✓ sent",
           "detail": "Alice's single tick means: stored on the server, will not be lost."
         },
@@ -524,12 +542,14 @@
           "from": "chat_svc",
           "to": "sessions",
           "kind": "req",
+          "phase": "Find recipient",
           "label": "GET session:bob"
         },
         {
           "from": "sessions",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Find recipient",
           "label": "gateway-17",
           "detail": "Bob is online; his connection lives on gateway node 17."
         },
@@ -537,6 +557,7 @@
           "from": "chat_svc",
           "to": "ws",
           "kind": "req",
+          "phase": "Deliver",
           "label": "deliver via gateway-17",
           "detail": "Internal RPC straight to the node that holds Bob's socket. No broadcast to all gateways."
         },
@@ -544,30 +565,35 @@
           "from": "ws",
           "to": "lb",
           "kind": "req",
+          "phase": "Deliver",
           "label": "WS push"
         },
         {
           "from": "lb",
           "to": "bob",
           "kind": "req",
+          "phase": "Deliver",
           "label": "new message"
         },
         {
           "from": "bob",
           "to": "lb",
           "kind": "req",
+          "phase": "Receipt",
           "label": "delivered receipt"
         },
         {
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Receipt",
           "label": "receipt"
         },
         {
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Receipt",
           "label": "delivered(msg_id)",
           "detail": "Relayed to Alice the same way, turning ✓ into ✓✓."
         }
@@ -582,24 +608,28 @@
           "from": "alice",
           "to": "lb",
           "kind": "req",
+          "phase": "Send",
           "label": "WS frame: send"
         },
         {
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Send",
           "label": "same TCP connection"
         },
         {
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Send",
           "label": "send"
         },
         {
           "from": "chat_svc",
           "to": "msg_db",
           "kind": "req",
+          "phase": "Persist",
           "label": "INSERT (QUORUM)",
           "detail": "The message store is also the offline inbox: nothing extra to keep in sync."
         },
@@ -607,18 +637,21 @@
           "from": "msg_db",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Persist",
           "label": "OK, msg_id"
         },
         {
           "from": "chat_svc",
           "to": "sessions",
           "kind": "req",
+          "phase": "Recipient is offline",
           "label": "GET session:bob"
         },
         {
           "from": "sessions",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Recipient is offline",
           "label": "(none)",
           "detail": "No heartbeat for 60 s, so the session entry expired: Bob is offline."
         },
@@ -626,6 +659,7 @@
           "from": "chat_svc",
           "to": "push_q",
           "kind": "async",
+          "phase": "Notify & acknowledge",
           "label": "enqueue push",
           "detail": "Push providers are slow and rate-limited; a queue keeps them off the send path."
         },
@@ -633,30 +667,35 @@
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
+          "phase": "Notify & acknowledge",
           "label": "ack ✓"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "res",
+          "phase": "Notify & acknowledge",
           "label": "ack ✓"
         },
         {
           "from": "lb",
           "to": "alice",
           "kind": "res",
+          "phase": "Notify & acknowledge",
           "label": "✓ sent"
         },
         {
           "from": "push_q",
           "to": "push_worker",
           "kind": "async",
+          "phase": "Push notification",
           "label": "deliver job"
         },
         {
           "from": "push_worker",
           "to": "apns",
           "kind": "async",
+          "phase": "Push notification",
           "label": "send notification",
           "detail": "With end-to-end encryption the push carries no message text, just \"New message\" and a conversation id."
         },
@@ -664,12 +703,14 @@
           "from": "apns",
           "to": "bob",
           "kind": "async",
+          "phase": "Push notification",
           "label": "push shown"
         },
         {
           "from": "bob",
           "to": "lb",
           "kind": "req",
+          "phase": "Reconnect",
           "label": "reconnect + sync",
           "payload": "{ \"type\": \"sync\", \"since\": { \"c_alice_bob\": \"0x18f2…\" } }"
         },
@@ -677,12 +718,14 @@
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Reconnect",
           "label": "new connection"
         },
         {
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Reconnect",
           "label": "sync since cursor",
           "detail": "The gateway also registers Bob in the session registry again."
         },
@@ -690,6 +733,7 @@
           "from": "chat_svc",
           "to": "msg_db",
           "kind": "req",
+          "phase": "Sync missed messages",
           "label": "SELECT msg_id > cursor",
           "detail": "One partition read per conversation, already sorted by msg_id."
         },
@@ -697,24 +741,28 @@
           "from": "msg_db",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Sync missed messages",
           "label": "missed messages"
         },
         {
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
+          "phase": "Sync missed messages",
           "label": "batch"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "res",
+          "phase": "Sync missed messages",
           "label": "batch"
         },
         {
           "from": "lb",
           "to": "bob",
           "kind": "res",
+          "phase": "Sync missed messages",
           "label": "3 new messages"
         }
       ]
@@ -728,6 +776,7 @@
           "from": "alice",
           "to": "alice",
           "kind": "local",
+          "phase": "Encrypt",
           "label": "encrypt on device",
           "detail": "The file is encrypted with a fresh random key before it leaves the phone. The key travels inside the end-to-end encrypted message, so storage and the CDN only ever see ciphertext."
         },
@@ -735,6 +784,7 @@
           "from": "alice",
           "to": "lb",
           "kind": "req",
+          "phase": "Upload slot",
           "label": "WS frame: request upload",
           "detail": "Alice asks for an upload slot over her open connection.",
           "payload": "{ \"type\": \"upload\", \"size\": 842113, \"content_type\": \"image/jpeg\", \"sha256\": \"9f2c…\" }"
@@ -743,18 +793,21 @@
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Upload slot",
           "label": "same TCP connection"
         },
         {
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Upload slot",
           "label": "request upload"
         },
         {
           "from": "chat_svc",
           "to": "chat_svc",
           "kind": "local",
+          "phase": "Upload slot",
           "label": "sign upload URL",
           "detail": "The service signs a PUT URL locally with its storage credentials: it expires in 5 minutes and is bound to this size and content type. Nothing is sent to storage yet."
         },
@@ -762,18 +815,21 @@
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
+          "phase": "Upload slot",
           "label": "signed URL"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "res",
+          "phase": "Upload slot",
           "label": "signed URL"
         },
         {
           "from": "lb",
           "to": "alice",
           "kind": "res",
+          "phase": "Upload slot",
           "label": "upload slot",
           "detail": "A 5 MB photo never touches the chat servers, which stay free for messages."
         },
@@ -781,6 +837,7 @@
           "from": "alice",
           "to": "media",
           "kind": "req",
+          "phase": "Upload",
           "label": "PUT ciphertext (direct)",
           "detail": "Gigabytes per second of uploads go straight to object storage. A failed upload is retried on its own, without resending a message.",
           "payload": "PUT https://media…/m/8c1f?X-Amz-Signature=…\nContent-Length: 842113"
@@ -789,12 +846,14 @@
           "from": "media",
           "to": "alice",
           "kind": "res",
+          "phase": "Upload",
           "label": "200 OK"
         },
         {
           "from": "alice",
           "to": "lb",
           "kind": "req",
+          "phase": "Send message",
           "label": "WS frame: send (media ref)",
           "detail": "Now the ordinary message: text plus a reference to the file and its decryption key (inside the encrypted body).",
           "payload": "{ \"type\": \"send\", \"conv_id\": \"c_alice_bob\", \"client_msg_id\": \"a1-0043\", \"body\": \"<ciphertext: ref m/8c1f + key>\" }"
@@ -803,18 +862,21 @@
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Send message",
           "label": "same TCP connection"
         },
         {
           "from": "ws",
           "to": "chat_svc",
           "kind": "req",
+          "phase": "Send message",
           "label": "send"
         },
         {
           "from": "chat_svc",
           "to": "media",
           "kind": "req",
+          "phase": "Verify & store",
           "label": "HEAD m/8c1f",
           "detail": "Before accepting the message, check the file really arrived and its size matches. Otherwise Bob would get a message pointing at nothing."
         },
@@ -822,12 +884,14 @@
           "from": "media",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Verify & store",
           "label": "200, 842113 bytes"
         },
         {
           "from": "chat_svc",
           "to": "msg_db",
           "kind": "req",
+          "phase": "Verify & store",
           "label": "INSERT (QUORUM)",
           "detail": "The message is stored like any other; only its body differs."
         },
@@ -835,24 +899,28 @@
           "from": "msg_db",
           "to": "chat_svc",
           "kind": "res",
+          "phase": "Verify & store",
           "label": "OK, msg_id"
         },
         {
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
+          "phase": "Acknowledge",
           "label": "ack ✓"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "res",
+          "phase": "Acknowledge",
           "label": "ack ✓"
         },
         {
           "from": "lb",
           "to": "alice",
           "kind": "res",
+          "phase": "Acknowledge",
           "label": "✓ sent",
           "detail": "Delivery to Bob works exactly as in \"Send (recipient online)\" and is not repeated here."
         },
@@ -860,6 +928,7 @@
           "from": "bob",
           "to": "bob",
           "kind": "local",
+          "phase": "Download",
           "label": "message arrives with a media reference",
           "detail": "Bob sees a blurred thumbnail (sent inline in the message) while the full file downloads."
         },
@@ -867,6 +936,7 @@
           "from": "bob",
           "to": "cdn",
           "kind": "req",
+          "phase": "Download",
           "label": "GET /m/8c1f",
           "detail": "Downloads use a plain HTTPS URL on the CDN, not the chat connection.",
           "payload": "GET /m/8c1f HTTP/2\nHost: media.example.com"
@@ -875,6 +945,7 @@
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Download",
           "label": "MISS",
           "detail": "First recipient in this region. In a group chat, everyone after Bob gets a HIT, so the file leaves origin storage once."
         },
@@ -882,12 +953,14 @@
           "from": "cdn",
           "to": "media",
           "kind": "req",
+          "phase": "Download",
           "label": "fetch from origin"
         },
         {
           "from": "media",
           "to": "cdn",
           "kind": "res",
+          "phase": "Download",
           "label": "ciphertext",
           "detail": "The CDN caches the ciphertext. It cannot read it, and storage lifecycle rules delete it after about 30 days."
         },
@@ -895,12 +968,14 @@
           "from": "cdn",
           "to": "bob",
           "kind": "res",
+          "phase": "Download",
           "label": "ciphertext"
         },
         {
           "from": "bob",
           "to": "bob",
           "kind": "local",
+          "phase": "Download",
           "label": "decrypt with the key from the message",
           "detail": "Only Bob and Alice hold the key."
         }

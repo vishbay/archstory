@@ -383,6 +383,7 @@
           "from": "driver",
           "to": "lb",
           "kind": "req",
+          "phase": "Send position",
           "label": "WS frame: location",
           "detail": "Sent over an already-open WebSocket: no new connection or TLS handshake per update.",
           "payload": "{ \"type\": \"loc\", \"driver_id\": \"d_7781\", \"lat\": 37.7793, \"lng\": -122.4192, \"heading\": 270, \"ts\": 1762601000 }"
@@ -391,6 +392,7 @@
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Send position",
           "label": "same connection",
           "detail": "The load balancer keeps each WebSocket pinned to the gateway instance that accepted it."
         },
@@ -398,12 +400,14 @@
           "from": "ws",
           "to": "location_svc",
           "kind": "req",
+          "phase": "Send position",
           "label": "update(d_7781, lat, lng)"
         },
         {
           "from": "location_svc",
           "to": "geo_index",
           "kind": "req",
+          "phase": "Update index",
           "label": "GEOADD available:sf",
           "detail": "Only the latest position matters, so this is an in-memory overwrite. ~250k writes/s fits a Redis cluster sharded by city; a disk-based database would struggle.",
           "payload": "GEOADD drivers:available:sf -122.4192 37.7793 d_7781"
@@ -412,12 +416,14 @@
           "from": "geo_index",
           "to": "location_svc",
           "kind": "res",
+          "phase": "Update index",
           "label": "OK"
         },
         {
           "from": "location_svc",
           "to": "events",
           "kind": "async",
+          "phase": "Record history",
           "label": "append location event",
           "detail": "The full history goes to a stream for live trip tracking, ETA models and analytics. The geo index stays small and hot."
         }
@@ -432,6 +438,7 @@
           "from": "rider",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve api.rides.example.com",
           "detail": "Geo routing sends each app to its city's region, so the rider, the driver and the matching service for that city share a region. A short TTL lets traffic move if a region fails."
         },
@@ -439,6 +446,7 @@
           "from": "dns",
           "to": "rider",
           "kind": "res",
+          "phase": "DNS",
           "label": "ALB address (nearest region)",
           "payload": "api.rides.example.com.  60  IN A  203.0.113.10"
         },
@@ -446,6 +454,7 @@
           "from": "rider",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /trips",
           "payload": "POST /trips HTTP/2\nIdempotency-Key: 6f1c…\n\n{ \"pickup\": [37.7793, -122.4192], \"dropoff\": [37.8080, -122.4177], \"product\": \"standard\" }"
         },
@@ -453,12 +462,14 @@
           "from": "lb",
           "to": "trip_svc",
           "kind": "req",
+          "phase": "Request in",
           "label": "route"
         },
         {
           "from": "trip_svc",
           "to": "trips_db",
           "kind": "req",
+          "phase": "Create trip",
           "label": "INSERT trip REQUESTED",
           "detail": "The idempotency key makes a retried tap return the same trip instead of creating two."
         },
@@ -466,18 +477,21 @@
           "from": "trips_db",
           "to": "trip_svc",
           "kind": "res",
+          "phase": "Create trip",
           "label": "trip t_552"
         },
         {
           "from": "trip_svc",
           "to": "matching",
           "kind": "req",
+          "phase": "Find drivers",
           "label": "match(t_552)"
         },
         {
           "from": "matching",
           "to": "geo_index",
           "kind": "req",
+          "phase": "Find drivers",
           "label": "GEOSEARCH 2 km",
           "payload": "GEOSEARCH drivers:available:sf FROMLONLAT -122.4192 37.7793 BYRADIUS 2 km ASC COUNT 10"
         },
@@ -485,6 +499,7 @@
           "from": "geo_index",
           "to": "matching",
           "kind": "res",
+          "phase": "Find drivers",
           "label": "10 nearest drivers",
           "detail": "Straight-line nearest, which is only a first cut."
         },
@@ -492,6 +507,7 @@
           "from": "matching",
           "to": "maps",
           "kind": "req",
+          "phase": "Rank by road ETA",
           "label": "ETA matrix 10×1",
           "detail": "Rivers, bridges and one-way streets make straight-line distance misleading, so candidates are ranked by road ETA."
         },
@@ -499,12 +515,14 @@
           "from": "maps",
           "to": "matching",
           "kind": "res",
+          "phase": "Rank by road ETA",
           "label": "ETAs"
         },
         {
           "from": "matching",
           "to": "geo_index",
           "kind": "req",
+          "phase": "Lock a driver",
           "label": "SET lock:d_7781 NX EX 15",
           "detail": "Atomic claim. Two matchers serving two riders can never offer the same driver at once. The 15 s expiry frees the driver if they ignore the offer."
         },
@@ -512,12 +530,14 @@
           "from": "geo_index",
           "to": "matching",
           "kind": "res",
+          "phase": "Lock a driver",
           "label": "OK (locked)"
         },
         {
           "from": "matching",
           "to": "ws",
           "kind": "req",
+          "phase": "Offer to driver",
           "label": "push offer to d_7781",
           "detail": "Routed to the gateway instance holding that driver's connection."
         },
@@ -525,12 +545,14 @@
           "from": "ws",
           "to": "lb",
           "kind": "req",
+          "phase": "Offer to driver",
           "label": "WS push: offer"
         },
         {
           "from": "lb",
           "to": "driver",
           "kind": "req",
+          "phase": "Offer to driver",
           "label": "offer (15 s to accept)",
           "payload": "{ \"type\": \"offer\", \"trip_id\": \"t_552\", \"pickup_eta_s\": 180, \"expires_in\": 15 }"
         },
@@ -538,30 +560,35 @@
           "from": "driver",
           "to": "lb",
           "kind": "req",
+          "phase": "Driver accepts",
           "label": "accept"
         },
         {
           "from": "lb",
           "to": "ws",
           "kind": "req",
+          "phase": "Driver accepts",
           "label": "accept"
         },
         {
           "from": "ws",
           "to": "matching",
           "kind": "req",
+          "phase": "Driver accepts",
           "label": "accepted(t_552)"
         },
         {
           "from": "matching",
           "to": "trip_svc",
           "kind": "res",
+          "phase": "Confirm trip",
           "label": "driver d_7781"
         },
         {
           "from": "trip_svc",
           "to": "trips_db",
           "kind": "req",
+          "phase": "Confirm trip",
           "label": "UPDATE … WHERE status='REQUESTED'",
           "detail": "Conditional update: if the rider cancelled meanwhile, zero rows change and the driver is released.",
           "payload": "UPDATE trips SET status = 'ACCEPTED', driver_id = 'd_7781'\nWHERE id = 't_552' AND status = 'REQUESTED';"
@@ -570,18 +597,21 @@
           "from": "trips_db",
           "to": "trip_svc",
           "kind": "res",
+          "phase": "Confirm trip",
           "label": "1 row"
         },
         {
           "from": "trip_svc",
           "to": "lb",
           "kind": "res",
+          "phase": "Respond to rider",
           "label": "200 driver + ETA"
         },
         {
           "from": "lb",
           "to": "rider",
           "kind": "res",
+          "phase": "Respond to rider",
           "label": "driver arriving in 3 min",
           "detail": "From here, the rider app follows the driver's position over its own WebSocket."
         }
@@ -596,18 +626,21 @@
           "from": "driver",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /trips/t_552/complete"
         },
         {
           "from": "lb",
           "to": "trip_svc",
           "kind": "req",
+          "phase": "Request in",
           "label": "route"
         },
         {
           "from": "trip_svc",
           "to": "maps",
           "kind": "req",
+          "phase": "Compute fare",
           "label": "route distance + duration",
           "detail": "Uses the recorded GPS trace, snapped to roads."
         },
@@ -615,12 +648,14 @@
           "from": "maps",
           "to": "trip_svc",
           "kind": "res",
+          "phase": "Compute fare",
           "label": "4.1 km, 14 min"
         },
         {
           "from": "trip_svc",
           "to": "trip_svc",
           "kind": "local",
+          "phase": "Compute fare",
           "label": "fare = base + km + min × surge",
           "detail": "Surge comes from supply and demand per city cell at request time; it was shown to the rider up front."
         },
@@ -628,6 +663,7 @@
           "from": "trip_svc",
           "to": "psp",
           "kind": "req",
+          "phase": "Charge",
           "label": "charge, key = t_552",
           "detail": "The trip id is the idempotency key: if the call times out and is retried, the provider returns the first result instead of charging twice.",
           "payload": "POST /v1/payment_intents\nIdempotency-Key: t_552\n\n{ \"amount\": 1840, \"currency\": \"usd\", \"customer\": \"cus_19\" }"
@@ -636,30 +672,35 @@
           "from": "psp",
           "to": "trip_svc",
           "kind": "res",
+          "phase": "Charge",
           "label": "succeeded"
         },
         {
           "from": "trip_svc",
           "to": "trips_db",
           "kind": "req",
+          "phase": "Finish trip",
           "label": "UPDATE COMPLETED, fare"
         },
         {
           "from": "trips_db",
           "to": "trip_svc",
           "kind": "res",
+          "phase": "Finish trip",
           "label": "OK"
         },
         {
           "from": "trip_svc",
           "to": "lb",
           "kind": "res",
+          "phase": "Finish trip",
           "label": "200 receipt"
         },
         {
           "from": "lb",
           "to": "driver",
           "kind": "res",
+          "phase": "Finish trip",
           "label": "trip complete",
           "detail": "The driver goes back into the available pool on their next location update."
         }

@@ -359,6 +359,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve sho.rt",
           "detail": "DNS points the short domain at the CDN, which answers from the nearest edge location. Browsers and resolvers cache the answer, so most clicks skip this lookup entirely."
         },
@@ -366,6 +367,7 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "sho.rt.  60  IN A  203.0.113.10"
         },
@@ -373,6 +375,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /api/links",
           "detail": "The browser sends the long URL. Every request enters through the nearest CDN edge, which terminates TLS.",
           "payload": "POST /api/links HTTP/2\nHost: sho.rt\nContent-Type: application/json\n\n{ \"url\": \"https://example.com/some/very/long/path?utm_source=…\" }"
@@ -381,6 +384,7 @@
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Request in",
           "label": "POST: never cached",
           "detail": "Writes bypass the cache entirely. The CDN still adds value: TLS close to the user and DDoS absorption."
         },
@@ -388,6 +392,7 @@
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward to origin",
           "detail": "The load balancer is the single public origin. It health-checks API instances and routes only to healthy ones."
         },
@@ -395,6 +400,7 @@
           "from": "lb",
           "to": "api",
           "kind": "req",
+          "phase": "Request in",
           "label": "route → api-1",
           "detail": "Any instance can take the request. Stateless servers are what let us scale out horizontally."
         },
@@ -402,6 +408,7 @@
           "from": "api",
           "to": "kgs",
           "kind": "req",
+          "phase": "Generate key",
           "label": "next key",
           "detail": "Rather than hash the URL and check for collisions, take a pre-generated unique key. KGS hands each API instance a batch of keys, so this is usually an in-memory pop."
         },
@@ -409,6 +416,7 @@
           "from": "kgs",
           "to": "api",
           "kind": "res",
+          "phase": "Generate key",
           "label": "\"aZ3k9Q\"",
           "detail": "6 base62 chars → 62⁶ ≈ 56.8B codes. A key batch is marked used atomically when issued, so two servers never get the same key.",
           "payload": "{ \"key\": \"aZ3k9Q\" }"
@@ -417,6 +425,7 @@
           "from": "api",
           "to": "db",
           "kind": "req",
+          "phase": "Persist & replicate",
           "label": "INSERT link",
           "detail": "The primary is the source of truth. The short code is the primary key, so every later lookup is a single index seek.",
           "payload": "INSERT INTO links (code, long_url, created_at)\nVALUES ('aZ3k9Q', 'https://example.com/…', now());"
@@ -425,6 +434,7 @@
           "from": "db",
           "to": "api",
           "kind": "res",
+          "phase": "Persist & replicate",
           "label": "COMMIT ok",
           "detail": "Durable once committed to the primary."
         },
@@ -432,6 +442,7 @@
           "from": "db",
           "to": "replica",
           "kind": "async",
+          "phase": "Persist & replicate",
           "label": "replicate (WAL)",
           "detail": "Replication is asynchronous: the write was acknowledged before replicas have it. A read hitting a replica in the next few ms could miss, which is why we warm the cache next."
         },
@@ -439,6 +450,7 @@
           "from": "api",
           "to": "cache",
           "kind": "req",
+          "phase": "Cache",
           "label": "SET aZ3k9Q ttl=24h",
           "detail": "Write-through warm-up: freshly created links are clicked almost immediately (the creator tests it), and this hides replica lag."
         },
@@ -446,6 +458,7 @@
           "from": "api",
           "to": "lb",
           "kind": "res",
+          "phase": "Response",
           "label": "201 Created",
           "detail": "Return the short URL.",
           "payload": "HTTP/2 201\nContent-Type: application/json\n\n{ \"short\": \"https://sho.rt/aZ3k9Q\" }"
@@ -454,6 +467,7 @@
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "201 Created",
           "detail": "Back out through the load balancer."
         },
@@ -461,6 +475,7 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "201 Created",
           "detail": "Done. Server-side cost is dominated by the DB commit (~5–10 ms); the user sees roughly one network round trip on top."
         }
@@ -475,6 +490,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve sho.rt",
           "detail": "DNS points the short domain at the CDN, which answers from the nearest edge location. Browsers and resolvers cache the answer, so most clicks skip this lookup entirely."
         },
@@ -482,6 +498,7 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "sho.rt.  60  IN A  203.0.113.10"
         },
@@ -489,6 +506,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /aZ3k9Q",
           "detail": "Someone clicks the short link. DNS points sho.rt at the nearest CDN edge, which terminates TLS.",
           "payload": "GET /aZ3k9Q HTTP/2\nHost: sho.rt\nUser-Agent: Mozilla/5.0 …\nReferer: https://twitter.com/"
@@ -497,6 +515,7 @@
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Request in",
           "label": "MISS: 302s not cached",
           "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
         },
@@ -504,6 +523,7 @@
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward to origin",
           "detail": "The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
         },
@@ -511,6 +531,7 @@
           "from": "lb",
           "to": "api",
           "kind": "req",
+          "phase": "Request in",
           "label": "route → api-2",
           "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
           "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\nX-Request-Id: 7f3c…"
@@ -519,6 +540,7 @@
           "from": "api",
           "to": "cache",
           "kind": "req",
+          "phase": "Cache lookup",
           "label": "GET aZ3k9Q",
           "detail": "Check the cache first (cache-aside)."
         },
@@ -526,6 +548,7 @@
           "from": "cache",
           "to": "api",
           "kind": "res",
+          "phase": "Cache lookup",
           "label": "HIT → long URL",
           "detail": "Link popularity is heavily skewed, so a cache holding the hot set answers most redirects in under a millisecond without touching the database."
         },
@@ -533,6 +556,7 @@
           "from": "api",
           "to": "queue",
           "kind": "async",
+          "phase": "Respond & record click",
           "label": "publish click",
           "detail": "Fire-and-forget: the API publishes and does not wait. A slow analytics pipeline can never slow down a redirect.",
           "payload": "{ \"code\": \"aZ3k9Q\", \"ts\": 1762600000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
@@ -541,6 +565,7 @@
           "from": "api",
           "to": "lb",
           "kind": "res",
+          "phase": "Respond & record click",
           "label": "302 Found",
           "detail": "The API answers with a redirect. Total time inside the origin is a couple of milliseconds.",
           "payload": "HTTP/2 302\nLocation: https://example.com/some/very/long/path?utm_source=…\nCache-Control: private, no-store"
@@ -549,6 +574,7 @@
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Respond & record click",
           "label": "302 Found",
           "detail": "Response travels back through the load balancer."
         },
@@ -556,6 +582,7 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Respond & record click",
           "label": "302 → long URL",
           "detail": "Browser follows Location. The user is gone; everything after this is background work."
         },
@@ -563,6 +590,7 @@
           "from": "queue",
           "to": "worker",
           "kind": "async",
+          "phase": "Analytics (background)",
           "label": "deliver batch (500)",
           "detail": "Workers pull events in batches. If they fall behind, the queue absorbs the backlog instead of the API."
         },
@@ -570,6 +598,7 @@
           "from": "worker",
           "to": "analytics",
           "kind": "async",
+          "phase": "Analytics (background)",
           "label": "INSERT batch",
           "detail": "Aggregated into a columnar store for dashboards: clicks per link per hour, referrers, countries."
         }
@@ -584,6 +613,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /aZ3k9Q",
           "detail": "Someone clicks the short link. DNS points sho.rt at the nearest CDN edge, which terminates TLS.",
           "payload": "GET /aZ3k9Q HTTP/2\nHost: sho.rt\nUser-Agent: Mozilla/5.0 …\nReferer: https://twitter.com/"
@@ -592,6 +622,7 @@
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Request in",
           "label": "MISS: 302s not cached",
           "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
         },
@@ -599,6 +630,7 @@
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward to origin",
           "detail": "The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
         },
@@ -606,6 +638,7 @@
           "from": "lb",
           "to": "api",
           "kind": "req",
+          "phase": "Request in",
           "label": "route → api-2",
           "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
           "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\nX-Request-Id: 7f3c…"
@@ -614,6 +647,7 @@
           "from": "api",
           "to": "cache",
           "kind": "req",
+          "phase": "Cache miss",
           "label": "GET aZ3k9Q",
           "detail": "Check the cache first."
         },
@@ -621,6 +655,7 @@
           "from": "cache",
           "to": "api",
           "kind": "res",
+          "phase": "Cache miss",
           "label": "MISS",
           "detail": "Cold or evicted link."
         },
@@ -628,6 +663,7 @@
           "from": "api",
           "to": "replica",
           "kind": "req",
+          "phase": "Read from replica",
           "label": "SELECT long_url",
           "detail": "Reads go to replicas so the primary only handles writes. At 100:1 read:write this is where read capacity scales.",
           "payload": "SELECT long_url FROM links WHERE code = 'aZ3k9Q';"
@@ -636,6 +672,7 @@
           "from": "replica",
           "to": "api",
           "kind": "res",
+          "phase": "Read from replica",
           "label": "row",
           "detail": "Single primary-key lookup, ~1–2 ms."
         },
@@ -643,6 +680,7 @@
           "from": "api",
           "to": "cache",
           "kind": "req",
+          "phase": "Refill cache",
           "label": "SET ttl=24h",
           "detail": "Populate on miss so the next click is a hit. The TTL bounds staleness if a link is edited or deleted."
         },
@@ -650,6 +688,7 @@
           "from": "api",
           "to": "lb",
           "kind": "res",
+          "phase": "Response",
           "label": "302 Found",
           "detail": "The API answers with a redirect. Total time inside the origin is a couple of milliseconds.",
           "payload": "HTTP/2 302\nLocation: https://example.com/some/very/long/path?utm_source=…\nCache-Control: private, no-store"
@@ -658,6 +697,7 @@
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "302 Found",
           "detail": "Response travels back through the load balancer."
         },
@@ -665,6 +705,7 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "302 → long URL",
           "detail": "Slightly slower than a hit (extra DB round trip), still well within the 100 ms budget."
         }

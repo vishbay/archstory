@@ -266,6 +266,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve api.example.com",
           "detail": "A network load balancer has fixed IP addresses, which customers can allowlist in their firewalls. DNS answers with them and clients cache the result."
         },
@@ -273,6 +274,7 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "NLB static IPs",
           "payload": "api.example.com.  60  IN A  203.0.113.10"
         },
@@ -280,6 +282,7 @@
           "from": "client",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /v1/orders",
           "payload": "GET /v1/orders HTTP/2\nX-API-Key: key_abc"
         },
@@ -287,6 +290,7 @@
           "from": "lb",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "any gateway",
           "detail": "Requests from one key land on many gateways, which is why the count must be shared and not kept in local memory."
         },
@@ -294,6 +298,7 @@
           "from": "gw",
           "to": "gw",
           "kind": "local",
+          "phase": "Check the limit",
           "label": "limit for key_abc (cached)",
           "detail": "Plan limits are cached in the gateway and refreshed in the background, so config is not on the hot path."
         },
@@ -301,6 +306,7 @@
           "from": "gw",
           "to": "counters",
           "kind": "req",
+          "phase": "Check the limit",
           "label": "EVALSHA token_bucket",
           "detail": "A Lua script runs atomically inside Redis: refill tokens for the time elapsed, then take one. No race between gateways, one network round trip.",
           "payload": "-- KEYS[1]=tb:key_abc  ARGV: rate=100/s, burst=200, now\nlocal t = redis.call('HMGET', KEYS[1], 'tokens', 'ts')\nlocal tokens = math.min(burst, (t[1] or burst) + (now - (t[2] or now)) * rate)\nif tokens < 1 then return {0, tokens} end\nredis.call('HSET', KEYS[1], 'tokens', tokens - 1, 'ts', now)\nreturn {1, tokens - 1}"
@@ -309,24 +315,28 @@
           "from": "counters",
           "to": "gw",
           "kind": "res",
+          "phase": "Check the limit",
           "label": "allowed, 143 left"
         },
         {
           "from": "gw",
           "to": "api",
           "kind": "req",
+          "phase": "Forward to the API",
           "label": "forward"
         },
         {
           "from": "api",
           "to": "gw",
           "kind": "res",
+          "phase": "Forward to the API",
           "label": "200 OK"
         },
         {
           "from": "gw",
           "to": "lb",
           "kind": "res",
+          "phase": "Response",
           "label": "200 + rate headers",
           "payload": "HTTP/2 200\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 143"
         },
@@ -334,6 +344,7 @@
           "from": "lb",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         }
       ]
@@ -347,30 +358,35 @@
           "from": "client",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /v1/orders"
         },
         {
           "from": "lb",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "any gateway"
         },
         {
           "from": "gw",
           "to": "counters",
           "kind": "req",
+          "phase": "Check the limit",
           "label": "EVALSHA token_bucket"
         },
         {
           "from": "counters",
           "to": "gw",
           "kind": "res",
+          "phase": "Check the limit",
           "label": "denied, refill in 0.4 s"
         },
         {
           "from": "gw",
           "to": "lb",
           "kind": "res",
+          "phase": "Reject",
           "label": "429 Too Many Requests",
           "detail": "The backend never sees the request; rejected traffic costs almost nothing.",
           "payload": "HTTP/2 429\nRetry-After: 1\nX-RateLimit-Remaining: 0"
@@ -379,6 +395,7 @@
           "from": "lb",
           "to": "client",
           "kind": "res",
+          "phase": "Reject",
           "label": "429, retry after 1 s",
           "detail": "Well-behaved clients back off with jitter."
         }
@@ -393,24 +410,28 @@
           "from": "client",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /v1/orders"
         },
         {
           "from": "lb",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "any gateway"
         },
         {
           "from": "gw",
           "to": "counters",
           "kind": "req",
+          "phase": "Limiter unreachable",
           "label": "EVALSHA token_bucket"
         },
         {
           "from": "gw",
           "to": "gw",
           "kind": "local",
+          "phase": "Limiter unreachable",
           "label": "timeout 5 ms → local fallback",
           "detail": "Fail open with a coarse local limit (key limit ÷ number of gateways). Briefly over-admitting is better than rejecting all traffic."
         },
@@ -418,24 +439,28 @@
           "from": "gw",
           "to": "api",
           "kind": "req",
+          "phase": "Forward to the API",
           "label": "forward"
         },
         {
           "from": "api",
           "to": "gw",
           "kind": "res",
+          "phase": "Forward to the API",
           "label": "200 OK"
         },
         {
           "from": "gw",
           "to": "lb",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         },
         {
           "from": "lb",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         }
       ]
@@ -449,6 +474,7 @@
           "from": "gw",
           "to": "config",
           "kind": "req",
+          "phase": "Refresh",
           "label": "GET limits changed since t",
           "detail": "Every ~30 s each gateway pulls changes. A customer upgrade takes effect within a minute."
         },
@@ -456,6 +482,7 @@
           "from": "config",
           "to": "gw",
           "kind": "res",
+          "phase": "Refresh",
           "label": "3 changed keys",
           "payload": "[{ \"key\": \"key_abc\", \"rate\": 500, \"burst\": 1000 }, …]"
         },
@@ -463,6 +490,7 @@
           "from": "gw",
           "to": "gw",
           "kind": "local",
+          "phase": "Apply",
           "label": "swap in-memory table"
         }
       ]

@@ -342,6 +342,7 @@
           "from": "producer",
           "to": "notif_api",
           "kind": "req",
+          "phase": "Accept request",
           "label": "POST /notify",
           "payload": "POST /notify\nIdempotency-Key: otp-u_17-1762601000\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\" }"
         },
@@ -349,6 +350,7 @@
           "from": "notif_api",
           "to": "dedupe",
           "kind": "req",
+          "phase": "Deduplicate",
           "label": "SET NX idem:… EX 86400",
           "detail": "Producers retry on timeouts. The first call wins; a repeat with the same key is acknowledged but not sent again."
         },
@@ -356,18 +358,21 @@
           "from": "dedupe",
           "to": "notif_api",
           "kind": "res",
+          "phase": "Deduplicate",
           "label": "OK (first time)"
         },
         {
           "from": "notif_api",
           "to": "prefs",
           "kind": "req",
+          "phase": "Preferences & template",
           "label": "GET u_17"
         },
         {
           "from": "prefs",
           "to": "notif_api",
           "kind": "res",
+          "phase": "Preferences & template",
           "label": "push on, 2 devices",
           "detail": "Quiet hours apply to most messages, but security codes bypass them.",
           "payload": "{ \"push\": true, \"email\": true, \"quiet_hours\": \"22:00-07:00\", \"locale\": \"es-MX\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"] }"
@@ -376,12 +381,14 @@
           "from": "notif_api",
           "to": "notif_api",
           "kind": "local",
+          "phase": "Preferences & template",
           "label": "render template (es-MX)"
         },
         {
           "from": "notif_api",
           "to": "critical_q",
           "kind": "async",
+          "phase": "Queue & respond",
           "label": "enqueue",
           "detail": "Critical and bulk traffic use separate queues and workers, so a 5M-user campaign cannot delay a login code."
         },
@@ -389,24 +396,28 @@
           "from": "notif_api",
           "to": "producer",
           "kind": "res",
+          "phase": "Queue & respond",
           "label": "202 Accepted"
         },
         {
           "from": "critical_q",
           "to": "push_worker",
           "kind": "async",
+          "phase": "Deliver",
           "label": "message"
         },
         {
           "from": "push_worker",
           "to": "apns",
           "kind": "req",
+          "phase": "Deliver",
           "label": "send to 2 devices"
         },
         {
           "from": "apns",
           "to": "push_worker",
           "kind": "res",
+          "phase": "Deliver",
           "label": "200 / 410 Unregistered",
           "detail": "410 means the app was uninstalled; the stale device token is removed so it is not retried forever."
         },
@@ -414,6 +425,7 @@
           "from": "apns",
           "to": "phone",
           "kind": "async",
+          "phase": "Deliver",
           "label": "\"Your code is 482913\""
         }
       ]
@@ -427,6 +439,7 @@
           "from": "producer",
           "to": "notif_api",
           "kind": "req",
+          "phase": "Accept campaign",
           "label": "POST /campaigns",
           "payload": "{ \"segment\": \"inactive_30d\", \"template\": \"winback_nov\", \"channel\": \"email\", \"priority\": \"bulk\" }"
         },
@@ -434,12 +447,14 @@
           "from": "notif_api",
           "to": "prefs",
           "kind": "req",
+          "phase": "Filter recipients",
           "label": "filter opted-in (paged)"
         },
         {
           "from": "prefs",
           "to": "notif_api",
           "kind": "res",
+          "phase": "Filter recipients",
           "label": "1.4M eligible",
           "detail": "Users who opted out of marketing are dropped here, which is also a legal requirement in many regions."
         },
@@ -447,24 +462,28 @@
           "from": "notif_api",
           "to": "bulk_q",
           "kind": "async",
+          "phase": "Queue & respond",
           "label": "enqueue 1.4M (batches)"
         },
         {
           "from": "notif_api",
           "to": "producer",
           "kind": "res",
+          "phase": "Queue & respond",
           "label": "202 campaign c_77"
         },
         {
           "from": "bulk_q",
           "to": "email_worker",
           "kind": "async",
+          "phase": "Send in batches",
           "label": "batch of 500"
         },
         {
           "from": "email_worker",
           "to": "email_worker",
           "kind": "local",
+          "phase": "Send in batches",
           "label": "token bucket 2k/s",
           "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled."
         },
@@ -472,12 +491,14 @@
           "from": "email_worker",
           "to": "email",
           "kind": "req",
+          "phase": "Send in batches",
           "label": "send batch"
         },
         {
           "from": "email",
           "to": "email_worker",
           "kind": "res",
+          "phase": "Send in batches",
           "label": "429 throttled (some)",
           "detail": "Temporary failures are retried; permanent ones (invalid address) are not."
         },
@@ -485,6 +506,7 @@
           "from": "email_worker",
           "to": "bulk_q",
           "kind": "async",
+          "phase": "Retry & park",
           "label": "retry with backoff + jitter",
           "detail": "Delays grow 1 s, 4 s, 16 s … with randomness so retries do not arrive in a synchronized wave."
         },
@@ -492,6 +514,7 @@
           "from": "email_worker",
           "to": "dlq",
           "kind": "async",
+          "phase": "Retry & park",
           "label": "after 5 attempts → DLQ",
           "detail": "Nothing is silently dropped. An alert fires, and messages are replayed from the DLQ once the cause is fixed."
         }

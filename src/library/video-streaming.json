@@ -401,6 +401,7 @@
           "from": "creator",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve video.example.com",
           "detail": "The hostname points at the CDN, so viewers fetch the page and every video segment from the nearest edge. Resolvers cache the answer."
         },
@@ -408,6 +409,7 @@
           "from": "dns",
           "to": "creator",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "video.example.com.  60  IN A  203.0.113.10"
         },
@@ -415,6 +417,7 @@
           "from": "creator",
           "to": "lb",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /uploads",
           "payload": "POST /uploads HTTP/2\n\n{ \"title\": \"My trip\", \"size_bytes\": 3221225472, \"content_type\": \"video/mp4\" }"
         },
@@ -422,24 +425,28 @@
           "from": "lb",
           "to": "upload_svc",
           "kind": "req",
+          "phase": "Request in",
           "label": "route"
         },
         {
           "from": "upload_svc",
           "to": "meta_db",
           "kind": "req",
+          "phase": "Create upload",
           "label": "INSERT status=UPLOADING"
         },
         {
           "from": "meta_db",
           "to": "upload_svc",
           "kind": "res",
+          "phase": "Create upload",
           "label": "video v_123"
         },
         {
           "from": "upload_svc",
           "to": "raw",
           "kind": "req",
+          "phase": "Create upload",
           "label": "create multipart upload",
           "detail": "The service asks storage for an upload id and signs one URL per 64 MB part. It never proxies the video itself."
         },
@@ -447,24 +454,28 @@
           "from": "raw",
           "to": "upload_svc",
           "kind": "res",
+          "phase": "Create upload",
           "label": "upload id"
         },
         {
           "from": "upload_svc",
           "to": "lb",
           "kind": "res",
+          "phase": "Create upload",
           "label": "200 signed part URLs"
         },
         {
           "from": "lb",
           "to": "creator",
           "kind": "res",
+          "phase": "Create upload",
           "label": "200 signed part URLs"
         },
         {
           "from": "creator",
           "to": "raw",
           "kind": "req",
+          "phase": "Upload parts",
           "label": "PUT parts directly",
           "detail": "Gigabytes go straight to object storage. A failed part is retried on its own, which makes uploads resumable.",
           "payload": "PUT https://raw-uploads…/v_123?partNumber=7&uploadId=…&X-Amz-Signature=…\nContent-Length: 67108864"
@@ -473,12 +484,14 @@
           "from": "raw",
           "to": "creator",
           "kind": "res",
+          "phase": "Upload parts",
           "label": "200 per part, then complete"
         },
         {
           "from": "raw",
           "to": "transcode_q",
           "kind": "async",
+          "phase": "Transcode",
           "label": "ObjectCreated event",
           "detail": "Storage emits an event when the upload completes; no polling needed."
         },
@@ -486,24 +499,28 @@
           "from": "transcode_q",
           "to": "transcoder",
           "kind": "async",
+          "phase": "Transcode",
           "label": "job v_123"
         },
         {
           "from": "transcoder",
           "to": "raw",
           "kind": "async",
+          "phase": "Transcode",
           "label": "GET original"
         },
         {
           "from": "raw",
           "to": "transcoder",
           "kind": "async",
+          "phase": "Transcode",
           "label": "bytes"
         },
         {
           "from": "transcoder",
           "to": "transcoder",
           "kind": "local",
+          "phase": "Transcode",
           "label": "split + encode in parallel",
           "detail": "Split into ~4 s chunks and encode every chunk × every resolution in parallel. A 1-hour video finishes in minutes instead of hours."
         },
@@ -511,6 +528,7 @@
           "from": "transcoder",
           "to": "segments",
           "kind": "async",
+          "phase": "Publish",
           "label": "PUT segments + manifests",
           "payload": "v_123/master.m3u8\nv_123/240p/seg_0001.ts …\nv_123/1080p/seg_0001.ts …"
         },
@@ -518,6 +536,7 @@
           "from": "transcoder",
           "to": "meta_db",
           "kind": "async",
+          "phase": "Publish",
           "label": "UPDATE status=READY",
           "detail": "The video becomes watchable. The creator is notified."
         }
@@ -532,6 +551,7 @@
           "from": "viewer",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve video.example.com",
           "detail": "The hostname points at the CDN, so viewers fetch the page and every video segment from the nearest edge. Resolvers cache the answer."
         },
@@ -539,6 +559,7 @@
           "from": "dns",
           "to": "viewer",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN edge address",
           "payload": "video.example.com.  60  IN A  203.0.113.10"
         },
@@ -546,12 +567,14 @@
           "from": "viewer",
           "to": "cdn",
           "kind": "req",
+          "phase": "Load video page",
           "label": "GET /api/videos/v_123"
         },
         {
           "from": "cdn",
           "to": "lb",
           "kind": "req",
+          "phase": "Load video page",
           "label": "MISS → origin",
           "detail": "Metadata can be cached for a few seconds; this request misses."
         },
@@ -559,24 +582,28 @@
           "from": "lb",
           "to": "meta_svc",
           "kind": "req",
+          "phase": "Load video page",
           "label": "route"
         },
         {
           "from": "meta_svc",
           "to": "meta_db",
           "kind": "req",
+          "phase": "Load video page",
           "label": "SELECT title, manifest_url"
         },
         {
           "from": "meta_db",
           "to": "meta_svc",
           "kind": "res",
+          "phase": "Load video page",
           "label": "row"
         },
         {
           "from": "meta_svc",
           "to": "views",
           "kind": "async",
+          "phase": "Load video page",
           "label": "view started",
           "detail": "One event per view, never a database write per view."
         },
@@ -584,18 +611,21 @@
           "from": "meta_svc",
           "to": "lb",
           "kind": "res",
+          "phase": "Load video page",
           "label": "200 manifest URL"
         },
         {
           "from": "lb",
           "to": "cdn",
           "kind": "res",
+          "phase": "Load video page",
           "label": "200"
         },
         {
           "from": "cdn",
           "to": "viewer",
           "kind": "res",
+          "phase": "Load video page",
           "label": "200",
           "payload": "{ \"title\": \"My trip\", \"manifest\": \"https://cdn.example.com/v_123/master.m3u8\" }"
         },
@@ -603,12 +633,14 @@
           "from": "viewer",
           "to": "cdn",
           "kind": "req",
+          "phase": "Fetch manifest",
           "label": "GET master.m3u8"
         },
         {
           "from": "cdn",
           "to": "segments",
           "kind": "req",
+          "phase": "Fetch manifest",
           "label": "MISS → origin fetch",
           "detail": "First viewer in this region; the edge fetches once and caches."
         },
@@ -616,12 +648,14 @@
           "from": "segments",
           "to": "cdn",
           "kind": "res",
+          "phase": "Fetch manifest",
           "label": "manifest"
         },
         {
           "from": "cdn",
           "to": "viewer",
           "kind": "res",
+          "phase": "Fetch manifest",
           "label": "manifest",
           "detail": "Lists every rendition and its bandwidth."
         },
@@ -629,12 +663,14 @@
           "from": "viewer",
           "to": "cdn",
           "kind": "req",
+          "phase": "Stream segments",
           "label": "GET 720p/seg_0001.ts"
         },
         {
           "from": "cdn",
           "to": "cdn",
           "kind": "local",
+          "phase": "Stream segments",
           "label": "HIT",
           "detail": "Popular videos are fully cached at the edge; hit rates above 95% are normal."
         },
@@ -642,6 +678,7 @@
           "from": "cdn",
           "to": "viewer",
           "kind": "res",
+          "phase": "Stream segments",
           "label": "segment (4 s)",
           "detail": "Adaptive bitrate: the player measures throughput and picks the resolution for each next segment, so playback adapts instead of stalling."
         },
@@ -649,12 +686,14 @@
           "from": "views",
           "to": "counter",
           "kind": "async",
+          "phase": "Count the view",
           "label": "batch of events"
         },
         {
           "from": "counter",
           "to": "meta_db",
           "kind": "async",
+          "phase": "Count the view",
           "label": "UPDATE views += N",
           "detail": "Counts are aggregated per minute, so the number shown is slightly behind and the database sees a handful of writes instead of millions."
         }

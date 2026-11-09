@@ -365,6 +365,7 @@
           "from": "client",
           "to": "dns",
           "kind": "req",
+          "phase": "DNS",
           "label": "resolve globex.app.com",
           "detail": "A wildcard record sends every tenant subdomain to the same entry point."
         },
@@ -372,12 +373,14 @@
           "from": "dns",
           "to": "client",
           "kind": "res",
+          "phase": "DNS",
           "label": "CDN address"
         },
         {
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "GET /api/projects",
           "payload": "GET /api/projects HTTP/2\nHost: globex.app.com\nAuthorization: Bearer eyJ…  (claims: sub=u_17, tenant_id=globex)"
         },
@@ -385,12 +388,14 @@
           "from": "cdn",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward"
         },
         {
           "from": "gw",
           "to": "auth",
           "kind": "req",
+          "phase": "Authenticate",
           "label": "verify JWT",
           "detail": "Usually a local signature check with cached public keys. The tenant comes from the signed token, never from a header or body field the client controls."
         },
@@ -398,6 +403,7 @@
           "from": "auth",
           "to": "gw",
           "kind": "res",
+          "phase": "Authenticate",
           "label": "valid, tenant=globex",
           "detail": "The gateway also checks the token's tenant matches the subdomain."
         },
@@ -405,6 +411,7 @@
           "from": "gw",
           "to": "catalog",
           "kind": "req",
+          "phase": "Look up tenant",
           "label": "GET tenant globex",
           "detail": "Cached at the gateway for a minute."
         },
@@ -412,6 +419,7 @@
           "from": "catalog",
           "to": "gw",
           "kind": "res",
+          "phase": "Look up tenant",
           "label": "pooled, 100 rps",
           "payload": "{ \"tenant\": \"globex\", \"plan\": \"team\", \"tier\": \"pool\", \"db\": \"pool-1\", \"rate_limit_rps\": 100 }"
         },
@@ -419,6 +427,7 @@
           "from": "gw",
           "to": "gw",
           "kind": "local",
+          "phase": "Look up tenant",
           "label": "per-tenant rate limit",
           "detail": "Noisy-neighbor protection: a tenant over its limit gets 429s; everyone else is unaffected."
         },
@@ -426,6 +435,7 @@
           "from": "gw",
           "to": "app",
           "kind": "req",
+          "phase": "Handle request",
           "label": "+ tenant context",
           "detail": "Forwarded as a signed internal header so services cannot be tricked by a client-supplied value."
         },
@@ -433,6 +443,7 @@
           "from": "app",
           "to": "pool_cache",
           "kind": "req",
+          "phase": "Handle request",
           "label": "GET globex:projects",
           "detail": "Every cache key is prefixed with the tenant id."
         },
@@ -440,12 +451,14 @@
           "from": "pool_cache",
           "to": "app",
           "kind": "res",
+          "phase": "Handle request",
           "label": "MISS"
         },
         {
           "from": "app",
           "to": "pool_db",
           "kind": "req",
+          "phase": "Handle request",
           "label": "SELECT with RLS",
           "detail": "Row-level security: even if a query forgets WHERE tenant_id = …, the database only returns this tenant's rows.",
           "payload": "SET app.tenant_id = 'globex';\nSELECT id, name FROM projects;   -- policy: tenant_id = current_setting('app.tenant_id')"
@@ -454,24 +467,28 @@
           "from": "pool_db",
           "to": "app",
           "kind": "res",
+          "phase": "Handle request",
           "label": "rows (globex only)"
         },
         {
           "from": "app",
           "to": "gw",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         },
         {
           "from": "gw",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         },
         {
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "200 OK"
         }
       ]
@@ -485,6 +502,7 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Request in",
           "label": "POST /api/exports",
           "payload": "POST /api/exports HTTP/2\nHost: acme.app.com\nAuthorization: Bearer eyJ…  (claims: tenant_id=acme)"
         },
@@ -492,30 +510,35 @@
           "from": "cdn",
           "to": "gw",
           "kind": "req",
+          "phase": "Request in",
           "label": "forward"
         },
         {
           "from": "gw",
           "to": "auth",
           "kind": "req",
+          "phase": "Authenticate",
           "label": "verify JWT"
         },
         {
           "from": "auth",
           "to": "gw",
           "kind": "res",
+          "phase": "Authenticate",
           "label": "valid, tenant=acme"
         },
         {
           "from": "gw",
           "to": "catalog",
           "kind": "req",
+          "phase": "Look up tenant",
           "label": "GET tenant acme"
         },
         {
           "from": "catalog",
           "to": "gw",
           "kind": "res",
+          "phase": "Look up tenant",
           "label": "silo, db=acme",
           "payload": "{ \"tenant\": \"acme\", \"plan\": \"enterprise\", \"tier\": \"silo\", \"db\": \"acme-db\", \"rate_limit_rps\": 2000 }"
         },
@@ -523,12 +546,14 @@
           "from": "gw",
           "to": "app",
           "kind": "req",
+          "phase": "Handle request",
           "label": "+ tenant context"
         },
         {
           "from": "app",
           "to": "silo_db",
           "kind": "req",
+          "phase": "Handle request",
           "label": "INSERT export job",
           "detail": "Connection chosen from the catalog entry. The app code is identical for pooled and siloed tenants."
         },
@@ -536,36 +561,42 @@
           "from": "silo_db",
           "to": "app",
           "kind": "res",
+          "phase": "Handle request",
           "label": "job_9"
         },
         {
           "from": "app",
           "to": "jobs_q",
           "kind": "async",
+          "phase": "Handle request",
           "label": "enqueue (tenant=acme)"
         },
         {
           "from": "app",
           "to": "gw",
           "kind": "res",
+          "phase": "Response",
           "label": "202 Accepted"
         },
         {
           "from": "gw",
           "to": "cdn",
           "kind": "res",
+          "phase": "Response",
           "label": "202 Accepted"
         },
         {
           "from": "cdn",
           "to": "client",
           "kind": "res",
+          "phase": "Response",
           "label": "export started"
         },
         {
           "from": "jobs_q",
           "to": "silo_worker",
           "kind": "async",
+          "phase": "Background job",
           "label": "job_9",
           "detail": "Acme's heavy exports run on Acme's own workers, so they never compete with pooled tenants."
         },
@@ -573,6 +604,7 @@
           "from": "silo_worker",
           "to": "silo_db",
           "kind": "async",
+          "phase": "Background job",
           "label": "read + write results"
         }
       ]

@@ -54,6 +54,7 @@ export const EdgeSchema = z.object({
 export const StepSchema = z.object({
   from: Id, to: Id,
   kind: z.enum(STEP_KINDS).describe('req/res/async travel an edge (either direction); local happens inside one node (from === to)'),
+  phase: z.string().optional().describe('Stage of the flow this step belongs to, e.g. "Request in" or "Persist & replicate". Consecutive steps with the same phase are grouped in the step list; a step with no phase continues the previous one'),
   label: z.string().describe('Short wire label, e.g. "GET /aZ3k9Q" or "SET key ttl=24h"'),
   detail: z.string().optional().describe('Why this hop happens; the teaching text'),
   payload: z.string().optional().describe('Example message: HTTP, SQL, JSON event…'),
