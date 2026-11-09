@@ -235,9 +235,9 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
           </>}
           <ToolbarSpacer />
           {!showRef && <>
-            {saved !== 'idle' && <span className={`save-state ${saved}`}>{saved === 'saved' ? 'Saved' : 'Not saved: browser storage is blocked'}</span>}
-            <button className="tb-btn" title="Undo (⌘Z / Ctrl+Z)" disabled={!hist.past.length} onClick={() => setHist(undo)}>Undo</button>
-            <button className="tb-btn" title="Redo (⇧⌘Z / Ctrl+Y)" disabled={!hist.future.length} onClick={() => setHist(redo)}>Redo</button>
+            {saved !== 'idle' && <span className={`save-state ${saved}`} role="status" aria-label={saved === 'saved' ? 'Saved' : undefined} title={saved === 'saved' ? 'Your answer is saved in this browser' : undefined}>{saved === 'saved' ? <span className="tb-txt">Saved</span> : 'Not saved: browser storage is blocked'}</span>}
+            <button className="tb-btn" title="Undo (⌘Z / Ctrl+Z)" aria-label="Undo" disabled={!hist.past.length} onClick={() => setHist(undo)}><span aria-hidden>↶</span><span className="tb-txt"> Undo</span></button>
+            <button className="tb-btn" title="Redo (⇧⌘Z / Ctrl+Y)" aria-label="Redo" disabled={!hist.future.length} onClick={() => setHist(redo)}><span aria-hidden>↷</span><span className="tb-txt"> Redo</span></button>
             <Toggle on={connecting} title="Connect mode (C): click a caller, then what it calls"
               onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</Toggle>
           </>}
@@ -264,7 +264,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
             : <ReactFlowProvider>
                 <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={insets} captionDetail={!rightOpen} selected={selected} onSelect={onNode} colorMode={colorMode}
+                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={insets} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={showRef ? undefined : {
                     onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
                     onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },

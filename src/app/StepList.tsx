@@ -20,7 +20,9 @@ export function StepList({ flow, step, jump, name }: { flow: Flow; step: number;
     if (curStart !== undefined && collapsed.has(curStart)) { const n = new Set(collapsed); n.delete(curStart); setCollapsed(n) }
   }
   // Keep the current step in view while the flow plays.
+  // On a narrow screen the panel sits below the canvas in the page, so scrolling it would drag the page away from the canvas.
   useEffect(() => {
+    if (matchMedia('(max-width: 900px)').matches) return
     root.current?.querySelector('li.cur')?.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' })
   }, [step, flow.id])
 

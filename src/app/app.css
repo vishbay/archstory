@@ -493,7 +493,7 @@ summary { color: var(--accent-text); }
 .line { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--edge-visited); } .line.dashed { border-top-style: dashed; }
 .badge-chip { font: normal 700 9px/14px var(--font); min-width: 14px; text-align: center; border-radius: 4px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-strong); }
 
-.card.current-card { position: sticky; top: 0; z-index: 3; max-height: 38vh; overflow-y: auto; background: var(--surface); box-shadow: var(--shadow); }
+.card.current-card { position: sticky; top: 0; z-index: 3; max-height: 38vh; overflow-y: auto; background: color-mix(in srgb, var(--accent) 9%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); box-shadow: var(--shadow); }
 .panel-foot { padding: 7px 14px 8px; } .legend-more { margin-top: 5px; padding-top: 5px; gap: 4px; }
 .legend-row { gap: 3px 10px; } .legend-row b { min-width: 38px; }
 .legend-chip .step-glyph { width: 14px; height: 14px; }
@@ -583,3 +583,33 @@ select.scenario-pick:hover { border-bottom-style: solid; }
 .attempt-scores .delta.down { color: var(--hard); }
 .attempt-actions { display: flex; gap: 12px; }
 .attempt-msg { color: var(--muted); margin: 8px 0 0; }
+
+/* ---------- toolbar that stays on one row ---------- */
+.toolbar { container-type: inline-size; }
+@container (max-width: 880px) {
+  .tb-txt, .tb-group-label { display: none; }
+  .tb-btn { padding: 0 10px; }
+}
+@media (max-width: 1500px) { .toolbar { gap: 4px; } }   /* a container query cannot change the container's own gap */
+@container (max-width: 720px) {
+  .tb-sep { display: none; }
+  .toolbar .seg button { padding-left: 9px; padding-right: 9px; }
+  .tb-switch { padding: 0 8px 0 5px; gap: 5px; }
+  .tb-btn { padding: 0 8px; }
+  .save-state { font-size: 11px; }
+}
+@container (max-width: 600px) {
+  .toolbar .seg button, .toolbar .tb-switch { font-size: 12px; }
+  .toolbar .seg button { padding-left: 7px; padding-right: 7px; }
+  .tb-switch { padding: 0 6px 0 4px; gap: 4px; }
+}
+
+/* ---------- step card: a tinted, opaque surface so the text reads cleanly over the glass panel ---------- */
+.card.current-card .card-meta, .card.current-card .muted { color: color-mix(in srgb, var(--text) 72%, var(--surface)); }
+.card.current-card p { color: var(--text); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .card.current-card { background: color-mix(in srgb, var(--accent) 17%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+}
+:root[data-theme="dark"] .card.current-card { background: color-mix(in srgb, var(--accent) 17%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+@media (max-width: 900px) { .kbd-hints { display: none; } }

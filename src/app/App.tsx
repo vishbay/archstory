@@ -237,7 +237,7 @@ export function App() {
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <ReactFlowProvider>
                 <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
-                  zonesView={zonesView} zone={zone} insets={insets} captionDetail={!rightOpen}
+                  zonesView={zonesView} zone={zone} insets={insets} captionDetail={!rightOpen || viewport <= 900}
                   onSelect={select} colorMode={theme.resolved} />
               </ReactFlowProvider>}
         </div>
