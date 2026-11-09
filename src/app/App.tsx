@@ -109,7 +109,7 @@ export function App() {
   }, [design.id, flow, view, network, zonesView, monitoring, shared, mode, problemId])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && mode !== 'practice') { e.preventDefault(); setPicking(true) }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && mode !== 'home') { e.preventDefault(); setPicking(true) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -157,15 +157,16 @@ export function App() {
     <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
       <header className="topbar">
         {mode !== 'home' && (
-          <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the problem and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
-            title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'problem and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
+          <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the requirements and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
+            title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'requirements and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
         )}
         <button className="brand" onClick={() => setMode('home')} title="Home">Arch<span>Story</span></button>
         {mode !== 'home' && <>
           <span className="sep" />
-          {mode === 'practice'
-            ? <span className="title">{`Practice: ${(LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title}`}</span>
-            : <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog" title="Switch design (⌘K / Ctrl+K)">{design.meta.title}<span className="chev-down" aria-hidden>▾</span></button>}
+          <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog"
+            title={mode === 'practice' ? 'Switch problem (⌘K / Ctrl+K)' : 'Switch design (⌘K / Ctrl+K)'}>
+            {mode === 'practice' ? (LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title : design.meta.title}<span className="chev-down" aria-hidden>▾</span>
+          </button>
         </>}
         {mode === 'explore' && isShared && (
           <span className="shared-pill">Shared link · not saved
@@ -204,7 +205,7 @@ export function App() {
             onTour={() => { store.set('archstory.tour.explore', false); open(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setLeftOpen(true); setRightOpen(true); setMode('explore'); setTour('explore') }} />
         </main>
       ) : mode === 'practice' ? (
-        <Practice problemId={problemId} onProblem={setProblemId} cloud={cloud} colorMode={theme.resolved}
+        <Practice key={problemId} problemId={problemId} cloud={cloud} colorMode={theme.resolved}
           leftOpen={leftOpen} rightOpen={rightOpen} onExport={exportDesign} onViewJson={setJsonOf} />
       ) : (<>
       {leftOpen && (
@@ -254,8 +255,8 @@ export function App() {
 
       {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onImport={importDesign} />}
-      {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={design.id} onClose={() => setPicking(false)}
-        onOpen={id => { open(id); setMode('explore') }}
+      {picking && <DesignPicker library={LIBRARY} mine={mode === 'practice' ? [] : mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
+        onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}
         onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }} />}
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={() => { setGenerating(false); setImporting(true) }} />}

@@ -622,3 +622,4 @@ select.scenario-pick:hover { border-bottom-style: solid; }
 .lib-head h2:has(+ .lib-progress) { margin-right: 0; }
 .lib-head .lib-progress { margin-right: auto; }
 .lib-note { margin: -4px 0 16px; font-size: 13px; max-width: 70ch; }
+.attempt-list { max-height: 240px; overflow-y: auto; }

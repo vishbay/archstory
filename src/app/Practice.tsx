@@ -24,8 +24,8 @@ import type { StoredReview } from './ReviewPanel'
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
 const kv = storeKv
 
-export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
-  problemId: string; onProblem: (id: string) => void; cloud: Cloud; colorMode: 'light' | 'dark'
+export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
+  problemId: string; cloud: Cloud; colorMode: 'light' | 'dark'
   leftOpen: boolean; rightOpen: boolean; onExport: (d: Design) => void; onViewJson: (d: Design) => void
 }) {
   const ref = LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]
@@ -176,17 +176,16 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
       {leftOpen && (
         <aside className="left">
           <div className="panel-body">
-            <label className="field">Problem
-              <select value={ref.id} onChange={e => { onProblem(e.target.value); setShowRef(false); stopRecording(); setSelected(null); setPicked(null); setFlowId('') }}>
-                {LIBRARY.map(d => <option key={d.id} value={d.id}>{d.meta.title}</option>)}
-              </select>
-            </label>
             <Section id="p-requirements" title="Requirements">
               {ref.meta.summary && <p className="small">{ref.meta.summary}</p>}
               {r.functional.length > 0 && <details open><summary>Functional</summary><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></details>}
               {r.nonFunctional.length > 0 && <details open><summary>Non-functional</summary><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></details>}
               {r.scale.length > 0 && <details open><summary>Scale</summary>
                 <table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table></details>}
+            </Section>
+            <Section id="p-attempts" title="Attempts" count={snaps.length}>
+              <Attempts snaps={snaps} canSave={attempt.nodes.length > 0} suggested={nextName(snaps)} message={attemptMsg}
+                onSave={saveAttempt} onOpen={openAttempt} onDelete={deleteAttempt} onBackup={backUp} onRestore={restore} />
             </Section>
             <Section id="p-palette" title="Components" count={attempt.nodes.length}>
               <p className="muted small">Click or drag onto the canvas. Each lands in its tier band.</p>
@@ -201,10 +200,6 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
                   </div>
                 </div>
               ))}
-            </Section>
-            <Section id="p-attempts" title="Attempts" count={snaps.length}>
-              <Attempts snaps={snaps} canSave={attempt.nodes.length > 0} suggested={nextName(snaps)} message={attemptMsg}
-                onSave={saveAttempt} onOpen={openAttempt} onDelete={deleteAttempt} onBackup={backUp} onRestore={restore} />
             </Section>
             <Section id="p-actions" title="Answer">
               <label className="check-row"><input type="checkbox" checked={reasoningOn} onChange={e => setReasoningOn(e.target.checked)} /> Written reasoning</label>
