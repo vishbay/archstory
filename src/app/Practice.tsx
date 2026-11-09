@@ -16,10 +16,13 @@ import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { Section } from './Sidebar'
 import { panelInsets, store, usePlayer, useViewportWidth } from './hooks'
 import { commit, initHistory, redo, undo } from '../practice/history'
+import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Kv, type Snapshot } from '../practice/snapshots'
+import { Attempts } from './Attempts'
+import { downloadJson } from './files'
 import type { StoredReview } from './ReviewPanel'
 
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
-const attemptKey = (id: string) => `archstory.attempt.${id}`
+const kv: Kv = { get: k => store.get<unknown>(k, null), set: (k, v) => store.set(k, v) }
 
 export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
   problemId: string; onProblem: (id: string) => void; cloud: Cloud; colorMode: 'light' | 'dark'
@@ -29,12 +32,15 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
   const [hist, setHist] = useState(() => initHistory<Design>(store.get(attemptKey(ref.id), blankAttempt(ref))))
   const attempt = hist.present
   const [loadedFor, setLoadedFor] = useState(ref.id)
-  const [review, setReviewState] = useState<StoredReview | null>(() => store.get(`archstory.review.${ref.id}`, null))
-  if (loadedFor !== ref.id) {
-    setLoadedFor(ref.id)
-    setHist(initHistory<Design>(store.get(attemptKey(ref.id), blankAttempt(ref))))
-    setReviewState(store.get(`archstory.review.${ref.id}`, null))
+  const [review, setReviewState] = useState<StoredReview | null>(() => store.get(reviewKey(ref.id), null))
+  const [snaps, setSnaps] = useState<Snapshot[]>(() => loadSnapshots(kv, ref.id))
+  const [attemptMsg, setAttemptMsg] = useState('')
+  const reload = (id: string) => {
+    setHist(initHistory<Design>(store.get(attemptKey(id), blankAttempt(LIBRARY.find(d => d.id === id) ?? ref))))
+    setReviewState(store.get(reviewKey(id), null))
+    setSnaps(loadSnapshots(kv, id)); setAttemptMsg('')
   }
+  if (loadedFor !== ref.id) { setLoadedFor(ref.id); reload(ref.id) }
   /** Every edit goes through history; `key` groups rapid edits to one field into a single undo step. */
   const setAttempt = (d: Design, key?: string) => setHist(h => commit(h, d, key))
   const [saved, setSaved] = useState<'idle' | 'saved' | 'failed'>('idle')
@@ -46,7 +52,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
   const [connecting, setConnecting] = useState(false)
   const [connFrom, setConnFrom] = useState<string | null>(null)
   const [dropping, setDropping] = useState(false)
-  const setReview = (r: StoredReview | null) => { setReviewState(r); store.set(`archstory.review.${ref.id}`, r) }
+  const setReview = (r: StoredReview | null) => { setReviewState(r); store.set(reviewKey(ref.id), r) }
 
   const [showRef, setShowRef] = useState(false)
   const [view, setView] = useState<'canvas' | 'timeline'>('canvas')
@@ -93,6 +99,39 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
   const reset = () => {
     if (!confirm(`Clear your answer for "${ref.meta.title}"? This cannot be undone.`)) return
     setAttempt(blankAttempt(ref)); setReview(null); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
+  }
+  const saveAttempt = (name: string) => {
+    const next = addSnapshot(snaps, newSnapshot(snaps, attempt, result, review, name, new Date()))
+    setSnaps(next)
+    setAttemptMsg(store.set(snapshotsKey(ref.id), next) ? 'Attempt saved.' : 'Could not save: browser storage is blocked or full. Use Back up to keep a copy.')
+  }
+  const openAttempt = (s: Snapshot) => {
+    setAttempt(s.design); setReview(s.review); setSelected(null); setPicked(null); stopRecording(); setFlowId(''); setShowRef(false)
+    setAttemptMsg(`Opened "${s.name}". Undo brings your previous answer back.`)
+  }
+  const deleteAttempt = (s: Snapshot) => {
+    if (!confirm(`Delete "${s.name}"? This cannot be undone.`)) return
+    const next = snaps.filter(x => x.id !== s.id)
+    setSnaps(next); store.set(snapshotsKey(ref.id), next); setAttemptMsg('Attempt deleted.')
+  }
+  const backUp = () => {
+    const b = collectBackup(LIBRARY.map(d => d.id), kv, new Date())
+    const n = Object.keys(b.attempts).length
+    if (!n && !Object.keys(b.snapshots).length) return setAttemptMsg('Nothing to back up yet.')
+    downloadJson(`archstory-practice-${new Date().toISOString().slice(0, 10)}.json`, b)
+    setAttemptMsg(`Backed up ${n} answer${n === 1 ? '' : 's'} and ${Object.values(b.snapshots).reduce((a, l) => a + l.length, 0)} saved attempts.`)
+  }
+  const restore = async (file: File) => {
+    let json: unknown
+    try { json = JSON.parse(await file.text()) } catch { return setAttemptMsg('That file is not valid JSON.') }
+    const r = parseBackup(json, LIBRARY.map(d => d.id))
+    if (!r.ok) return setAttemptMsg(r.errors.join(' '))
+    const n = Object.keys(r.backup.attempts).length
+    if (!confirm(`Restore ${n} answer${n === 1 ? '' : 's'}? Any different answer you have now is kept as a "Before restore" attempt.`)) return
+    const byId = Object.fromEntries(LIBRARY.map(d => [d.id, d]))
+    const done = applyBackup(r.backup, kv, new Date(), (id, d) => { const c = runChecks(d, byId[id]); return { passed: c.passed, total: c.total } })
+    reload(ref.id); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
+    setAttemptMsg(`Restored ${done.attempts} answer${done.attempts === 1 ? '' : 's'} and ${done.snapshots} new saved attempts${done.kept ? `; ${done.kept} current answer${done.kept === 1 ? ' was' : 's were'} kept as "Before restore"` : ''}.${r.skipped.length ? ` Skipped ${r.skipped.length}: ${r.skipped.join('; ')}.` : ''}`)
   }
   const add = (kind: string) => {
     const r = addNode(attempt, kind)
@@ -162,6 +201,10 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
                   </div>
                 </div>
               ))}
+            </Section>
+            <Section id="p-attempts" title="Attempts" count={snaps.length}>
+              <Attempts snaps={snaps} canSave={attempt.nodes.length > 0} suggested={nextName(snaps)} message={attemptMsg}
+                onSave={saveAttempt} onOpen={openAttempt} onDelete={deleteAttempt} onBackup={backUp} onRestore={restore} />
             </Section>
             <Section id="p-actions" title="Answer">
               <label className="check-row"><input type="checkbox" checked={reasoningOn} onChange={e => setReasoningOn(e.target.checked)} /> Written reasoning</label>
