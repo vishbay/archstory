@@ -20,13 +20,14 @@ export const ReviewSchema = z.object({
   overall: Score,
   summary: z.string(),
   scores: z.array(z.object({ dimension: z.enum(DIMENSIONS.map(d => d.id) as [string, ...string[]]), score: Score, comment: z.string().default('') })).default([]),
+  // A finding with no headline is still useful: derive one from its text instead of rejecting the whole review.
   findings: z.array(z.object({
     target: z.string().nullable().default(null),
     severity: z.enum(SEVERITIES),
-    title: z.string(),
+    title: z.string().optional(),
     detail: z.string().default(''),
     suggestion: z.string().optional(),
-  })).default([]),
+  }).transform(f => ({ ...f, title: f.title?.trim() || f.detail.split(/(?<=[.!?])\s/)[0].slice(0, 90) || 'Finding' }))).default([]),
   followUps: z.array(z.string()).default([]),
 })
 export type Review = z.infer<typeof ReviewSchema>

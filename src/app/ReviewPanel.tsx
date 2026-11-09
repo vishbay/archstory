@@ -17,6 +17,8 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
   const [copied, setCopied] = useState(false)
   const [text, setText] = useState('')
   const [errors, setErrors] = useState<string[]>([])
+  const [fixCopied, setFixCopied] = useState(false)
+  const fixPrompt = () => `The review JSON you returned was rejected by the validator with these problems:\n${errors.map(e => `- ${e}`).join('\n')}\n\nFix them and return the complete corrected JSON in a single \`\`\`json code block, with no other text.`
   const [pasting, setPasting] = useState(!stored)
   const label = (id: string) => { const n = attempt.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
 
@@ -54,12 +56,15 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
           </div>
           <label className="field">2. Paste the AI's reply
             <textarea rows={6} value={text} spellCheck={false} placeholder="```json&#10;{ &quot;overall&quot;: 4, … }&#10;```"
-              onChange={e => { setText(e.target.value); setErrors([]) }} />
+              onChange={e => { setText(e.target.value); setErrors([]); setFixCopied(false) }} />
           </label>
           <button onClick={load} disabled={!text.trim()}>Load review</button>
           {errors.length > 0 && (
             <div className="errors" role="alert"><b>The reply does not match the review format:</b>
-              <ul>{errors.slice(0, 10).map(e => <li key={e}>{e}</li>)}</ul></div>
+              <ul>{errors.slice(0, 10).map(e => <li key={e}>{e}</li>)}</ul>
+              <button className="small-btn" onClick={async () => setFixCopied(await copyText(fixPrompt()))}>
+                {fixCopied ? 'Copied ✓' : 'Copy a fix request for your AI'}
+              </button></div>
           )}
         </div>
       )}

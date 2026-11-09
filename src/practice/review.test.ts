@@ -58,3 +58,11 @@ describe('parseReview', () => {
     expect(signature(attempt)).not.toBe(signature(addNode(attempt, 'cache').design))
   })
 })
+
+describe('forgiving review parsing', () => {
+  it('derives a headline for a finding that has none instead of rejecting the review', () => {
+    const r = parseReview({ ...answer, findings: [{ target: null, severity: 'major', detail: 'All reads hit one primary. That will not scale.' }, { severity: 'minor' }] }, attempt)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.review.findings.map(f => f.title)).toEqual(['All reads hit one primary.', 'Finding'])
+  })
+})

@@ -29,7 +29,7 @@ describe('parseDesign', () => {
     d.flows[0].steps.push({ from: 'api', to: 'db', kind: 'req', label: 'SELECT' })
     const r = parseDesign(d)
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors).toContain('flow "f" step 3: no edge between "api" and "db"')
+    if (!r.ok) expect(r.errors[0]).toMatch(/^flow "f" step 3: no edge between "api" and "db" \(a step must follow a connection/)
   })
   it('reports unknown references and local-step misuse', () => {
     const d = { ...minimal(), edges: [{ from: 'c', to: 'ghost' }],

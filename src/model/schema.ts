@@ -139,7 +139,7 @@ export function parseDesign(input: unknown): ParseResult {
       if (s.kind === 'local' && s.from !== s.to) errors.push(`${at}: a "local" step must have from === to`)
       if (s.kind !== 'local' && s.from === s.to) errors.push(`${at}: from === to needs kind "local"`)
       if (s.kind !== 'local' && s.from !== s.to && nodeIds.has(s.from) && nodeIds.has(s.to) && !findEdge(d, s.from, s.to))
-        errors.push(`${at}: no edge between "${s.from}" and "${s.to}"`)
+        errors.push(`${at}: no edge between "${s.from}" and "${s.to}" (a step must follow a connection, and a response retraces the request path one connection at a time)`)
     })
   }
   if (d.network) {
