@@ -79,5 +79,21 @@ const wideQuery = typeof matchMedia === 'function' ? matchMedia('(min-width: 901
 const subscribeWide = (cb: () => void) => { wideQuery?.addEventListener('change', cb); return () => wideQuery?.removeEventListener('change', cb) }
 export const useWide = () => useSyncExternalStore(subscribeWide, () => wideQuery?.matches ?? true)
 
+/** Below this width the panels get narrower and the left one starts closed. */
+export const COMPACT_BELOW = 1180
+export function useViewportWidth() {
+  const [w, setW] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
+  useEffect(() => {
+    const on = () => setW(window.innerWidth)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return w
+}
+
 /** How far the floating panels cover the canvas, so the camera frames designs in the visible middle. */
-export const PANEL_LEFT = 300, PANEL_RIGHT = 380
+export function panelInsets(width: number, leftOpen: boolean, rightOpen: boolean) {
+  if (width <= 900) return { left: 12, right: 12 }          // stacked layout: nothing floats over the canvas
+  const compact = width <= COMPACT_BELOW
+  return { left: leftOpen ? (compact ? 280 : 300) : 12, right: rightOpen ? (compact ? 340 : 380) : 12 }
+}

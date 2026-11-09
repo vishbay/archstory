@@ -175,11 +175,13 @@ export interface EditProps {
   mode?: 'record' | 'connect' | null
 }
 
-export function BandCanvas({ design, flow, player, cloud, network, monitoring = false, zonesView, zone, selected, onSelect, colorMode, edit, insets = { left: 12, right: 12 } }: {
+export function BandCanvas({ design, flow, player, cloud, network, monitoring = false, zonesView, zone, selected, onSelect, colorMode, edit, insets = { left: 12, right: 12 }, captionDetail = true }: {
   design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zonesView: boolean; zone: ZoneState
   selected: string | null; onSelect: (id: string | null) => void; colorMode: 'light' | 'dark'; edit?: EditProps
   /** Pixels at the left and right edge covered by floating panels. */
   insets?: { left: number; right: number }
+  /** Show the step's explanation in the caption (only needed when the Flow panel is closed). */
+  captionDetail?: boolean
 }) {
   const rf = useReactFlow()
   // Each side has overlapping source and target handles, and React Flow reverses a connection dragged from a
@@ -350,14 +352,14 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
           className={follow ? 'follow-on' : ''} aria-pressed={follow}>◎</ControlButton>
       </Controls>
       {flow?.steps[step] && <Caption design={design} step={flow.steps[step]} index={step} total={flow.steps.length} cloud={cloud}
-        cross={zoned && !!zone.hops?.[step]?.cross} monitoring={mon} flowId={flow.id} />}
+        cross={zoned && !!zone.hops?.[step]?.cross} monitoring={mon} flowId={flow.id} detail={captionDetail} />}
     </ReactFlow>
   )
 }
 
 /** Short on-canvas caption for the current hop, so the explanation sits next to the action. */
-function Caption({ design, step, index, total, cloud, cross, monitoring, flowId }: {
-  design: Design; step: Flow['steps'][number]; index: number; total: number; cloud: Cloud; cross: boolean; monitoring: boolean; flowId: string
+function Caption({ design, step, index, total, cloud, cross, monitoring, flowId, detail }: {
+  design: Design; step: Flow['steps'][number]; index: number; total: number; cloud: Cloud; cross: boolean; monitoring: boolean; flowId: string; detail: boolean
 }) {
   const name = (id: string) => { const n = design.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
   // Whoever answers records the request's latency and errors: the callee for a request, the sender for a response.
@@ -372,7 +374,7 @@ function Caption({ design, step, index, total, cloud, cross, monitoring, flowId 
         <span className="mono" style={{ color: KIND_VAR[step.kind] }}>{step.label}</span>
         {cross && <span className="muted">· cross-zone</span>}
       </div>
-      {step.detail && <p>{step.detail}</p>}
+      {detail && step.detail && <p>{step.detail}</p>}
       {monitoring && (
         <div className="caption-obs">
           <span className="mono">trace {traceId(flowId)}</span><span>same id on every hop</span>

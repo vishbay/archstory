@@ -5,7 +5,7 @@ import './app.css'
 import { LIBRARY } from '../library'
 import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
-import { PANEL_LEFT, PANEL_RIGHT, store, usePlayer, useTheme, useWide } from './hooks'
+import { COMPACT_BELOW, panelInsets, store, usePlayer, useTheme, useViewportWidth } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
 import { AvailabilityMenu, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
@@ -73,12 +73,13 @@ export function App() {
   const [cloud, setCloud] = useState<Cloud>(() => store.get('archstory.cloud', 'neutral'))
   const [selected, setSelected] = useState<string | null>(null)
   const [tab, setTab] = useState<InspectorTab>('step')
-  const [leftOpen, setLeftOpen] = useState(() => store.get('archstory.left', true))
+  // On a compact window the left panel starts closed so the diagram keeps its room; a saved choice always wins.
+  const [leftOpen, setLeftOpen] = useState(() => store.get('archstory.left', window.innerWidth > COMPACT_BELOW))
   const [rightOpen, setRightOpen] = useState(() => store.get('archstory.right', true))
   const [importing, setImporting] = useState(false)
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
-  const wide = useWide()
-  const insets = { left: wide && leftOpen ? PANEL_LEFT : 12, right: wide && rightOpen ? PANEL_RIGHT : 12 }
+  const viewport = useViewportWidth()
+  const insets = panelInsets(viewport, leftOpen, rightOpen)
   const net = network && !!design.network
   const zoneCount = design.network?.zones ?? 1
   const failedZone = net && failed !== null && failed < zoneCount ? failed : null
@@ -155,7 +156,10 @@ export function App() {
   return (
     <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
       <header className="topbar">
-        {mode !== 'home' && <button className="icon ghost" title="Toggle side panel" onClick={() => setLeftOpen(o => !o)}>☰</button>}
+        {mode !== 'home' && (
+          <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the problem and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
+            title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'problem and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
+        )}
         <button className="brand" onClick={() => setMode('home')} title="Home">Arch<span>Story</span></button>
         {mode !== 'home' && <>
           <span className="sep" />
@@ -184,8 +188,11 @@ export function App() {
           </div>
         )}
         {mode === 'explore' && <button onClick={share} title="Copy a link to this design, flow and view">Share</button>}
-        <button className="icon ghost" title={`Theme: ${theme.pref}`} onClick={theme.cycle}>{themeIcon}</button>
-        {mode !== 'home' && <button className="icon ghost" title="Toggle inspector" onClick={() => setRightOpen(o => !o)}>◫</button>}
+        <button className="icon ghost" aria-label={`Theme: ${theme.pref}. Click to change`} title={`Theme: ${theme.pref} (click to change)`} onClick={theme.cycle}>{themeIcon}</button>
+        {mode !== 'home' && (
+          <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the inspector' : 'Show or hide the flow inspector'} aria-expanded={rightOpen}
+            title={`${rightOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'inspector' : 'flow, component and notes panel'}`} onClick={() => setRightOpen(o => !o)}>◫</button>
+        )}
       </header>
 
       {mode === 'home' ? (
@@ -230,7 +237,7 @@ export function App() {
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <ReactFlowProvider>
                 <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
-                  zonesView={zonesView} zone={zone} insets={insets}
+                  zonesView={zonesView} zone={zone} insets={insets} captionDetail={!rightOpen}
                   onSelect={select} colorMode={theme.resolved} />
               </ReactFlowProvider>}
         </div>
