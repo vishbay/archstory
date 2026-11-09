@@ -47,12 +47,12 @@ export function Sidebar({ library, mine, current, onOpen, onDelete, onImport, on
       </Section>
       <Section id="mine" title="My designs" count={mine.length} forceOpen={searching}>
         {mine.length ? <ul className="designs">{mine.filter(match).map(d => item(d, true))}</ul>
-          : <p className="muted small">Import a JSON design, or generate one with an AI, and it will appear here.</p>}
+          : <p className="muted small">Import a JSON design, or build one with your own AI assistant, and it will appear here.</p>}
         <div className="row wrap">
           <button onClick={onImport}>Import</button>
           <button onClick={onViewJson} title="See the JSON behind the design you are viewing">View JSON</button>
           <button onClick={onExport}>Export</button>
-          <button onClick={onGenerate}>Generate with AI</button>
+          <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant">Prompt for your AI</button>
         </div>
       </Section>
 

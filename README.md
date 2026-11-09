@@ -14,8 +14,8 @@ Explore real architectures and watch each request travel through them hop by hop
 - **Any cloud**: switch between cloud-neutral names, AWS and GCP, with official icons.
 - **Network and zones**: VPCs, subnets and availability-zone failure drills.
 - **Practice**: draw your own design, record its flows and get automatic checks against a reference.
-- **AI review**: paste a generated prompt into any assistant and see its findings on your design.
-- **Bring your own**: import JSON, generate designs with AI, share by link. No backend, no account.
+- **Review with your own AI**: ArchStory writes the prompt, you paste it into any assistant, and its findings appear on your design.
+- **Bring your own**: import JSON, build designs with your own AI, share by link. No built-in AI, no backend, no account.
 
 ## Quick start
 

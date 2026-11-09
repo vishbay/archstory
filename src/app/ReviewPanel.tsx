@@ -30,7 +30,7 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
     setText(''); setErrors([]); setPasting(false)
   }
 
-  if (!attempt.nodes.length) return <p className="muted">Build an answer first, then ask an AI to review it here.</p>
+  if (!attempt.nodes.length) return <p className="muted">Build an answer first, then ask your own AI assistant to review it here.</p>
 
   const r = stored?.review
   const stale = stored && stored.sig !== signature(attempt)
@@ -39,7 +39,8 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
     <>
       {(pasting || !r) && (
         <div className="review-start">
-          <h3>Get an AI review</h3>
+          <h3>Review with your own AI</h3>
+          <p className="muted small">ArchStory has no built-in AI. It writes the prompt; the assistant you already use does the reviewing.</p>
           <ol className="howto">
             <li>Copy the review prompt. It contains the problem, your design, your written reasoning, the automatic checks and a grading rubric.</li>
             <li>Paste it into ChatGPT, Claude, Gemini or any assistant.</li>

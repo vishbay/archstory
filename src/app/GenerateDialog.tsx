@@ -18,10 +18,10 @@ export function GenerateDialog({ example, onClose, onPasteAnswer }: { example: D
 
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose}>
-      <h3>Generate a design with AI</h3>
+      <h3>Make a design with your own AI</h3>
       <p className="muted small">
-        Describe the system, copy the prompt into ChatGPT, Claude, Gemini or any assistant, then paste its answer back here.
-        The prompt includes the JSON Schema, the rules the tool checks, and an example.
+        ArchStory has no built-in AI. Describe the system and it writes a prompt; paste that into ChatGPT, Claude, Gemini or any
+        assistant, then paste its answer back here. The prompt includes the JSON Schema, the rules the tool checks, and an example.
       </p>
       <label className="field">What should it design?
         <input type="text" value={task} onChange={e => { setTask(e.target.value); setCopied(null) }} />

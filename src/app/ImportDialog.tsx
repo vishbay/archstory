@@ -51,7 +51,7 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
           <b>{errors.length} problem{errors.length > 1 ? 's' : ''}:</b>
           <ul>{errors.slice(0, 20).map(e => <li key={e}>{e}</li>)}</ul>
           <button className="small-btn" onClick={async () => setFixCopied(await copyText(fixPrompt()))}>
-            {fixCopied ? 'Copied ✓' : 'Copy a fix request for the AI'}
+            {fixCopied ? 'Copied ✓' : 'Copy a fix request for your AI'}
           </button>
         </div>
       )}

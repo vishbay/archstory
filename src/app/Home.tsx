@@ -73,7 +73,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
         {[
           { icon: '▶', title: 'Watch', body: 'Pick a design and press play. Each request moves hop by hop, with the real message and why it happens.' },
           { icon: '✎', title: 'Build', body: 'In Practice, add components, connect them and record how your requests flow.' },
-          { icon: '✓', title: 'Check', body: 'Automatic checks against a reference design, then an optional AI review with a score and follow-up questions.' },
+          { icon: '✓', title: 'Check', body: 'Automatic checks against a reference design, then an optional review by your own AI assistant, with a score and follow-up questions.' },
         ].map(s => (
           <div key={s.title} className="how-step"><span className="how-icon">{s.icon}</span><b>{s.title}</b><p>{s.body}</p></div>
         ))}
@@ -103,7 +103,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
       )}
 
       <section className="home-foot">
-        <p>Bring your own design: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>generate one with any AI assistant</button>.</p>
+        <p>Bring your own design: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>.</p>
         <p className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</p>
       </section>
     </div>
