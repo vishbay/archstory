@@ -8,6 +8,7 @@ export function Toolbar({ children }: { children: ReactNode }) {
   return <div className="toolbar" role="toolbar" aria-label="Canvas">{children}</div>
 }
 export const ToolbarSep = () => <span className="tb-sep" aria-hidden />
+export const ToolbarLabel = ({ children }: { children: ReactNode }) => <span className="tb-group-label">{children}</span>
 export const ToolbarSpacer = () => <span className="spacer" />
 
 export function Seg<K extends string>({ label, value, onChange, options }: {
@@ -25,7 +26,11 @@ export function Seg<K extends string>({ label, value, onChange, options }: {
 }
 
 export function Toggle({ on, onClick, disabled, title, children }: { on: boolean; onClick: () => void; disabled?: boolean; title?: string; children: ReactNode }) {
-  return <button className={`tb-toggle${on ? ' on' : ''}`} aria-pressed={on} disabled={disabled} title={title} onClick={onClick}>{children}</button>
+  return (
+    <button className={`tb-switch${on ? ' on' : ''}`} role="switch" aria-checked={on} disabled={disabled} title={title} onClick={onClick}>
+      <span className="sw" aria-hidden><i /></span>{children}
+    </button>
+  )
 }
 
 /** Zone layout, zone failure and entry zone, folded into one small menu so the toolbar stays one row. */

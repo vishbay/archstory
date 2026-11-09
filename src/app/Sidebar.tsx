@@ -17,57 +17,32 @@ export function Section({ id, title, count, forceOpen, children }: { id: string;
   )
 }
 
-export function Sidebar({ library, mine, current, onOpen, onDelete, onImport, onExport, onGenerate, onViewJson }: {
-  library: Design[]; mine: Design[]; current: Design
-  onOpen: (id: string) => void; onDelete: (id: string) => void; onImport: () => void; onExport: () => void; onGenerate: () => void; onViewJson: () => void
+/** The Explore sidebar: the requirements stay in view; designs are chosen from the picker (⌘K). */
+export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onViewJson }: {
+  current: Design
+  onBrowse: () => void; onImport: () => void; onExport: () => void; onGenerate: () => void; onViewJson: () => void
 }) {
-  const [q, setQ] = useState('')
-  const searching = q.trim().length > 0
-  const match = (d: Design) => {
-    const s = q.trim().toLowerCase()
-    return !s || d.meta.title.toLowerCase().includes(s) || d.meta.tags.some(t => t.includes(s))
-  }
-  const item = (d: Design, deletable: boolean) => (
-    <li key={d.id} className={d.id === current.id ? 'cur' : ''}>
-      <button className="design-item" onClick={() => onOpen(d.id)}>
-        <span className="design-title">{d.meta.title}</span>
-        {d.meta.difficulty && <span className="design-tags"><span className={`diff diff-${d.meta.difficulty}`}>{d.meta.difficulty}</span></span>}
-        {d.meta.tags.length > 0 && <span className="design-tags">{d.meta.tags.slice(0, 3).map(t => <span key={t} className="tag">{t}</span>)}</span>}
-      </button>
-      {deletable && <button className="icon ghost" title="Remove from my designs" onClick={() => onDelete(d.id)}>×</button>}
-    </li>
-  )
   const r = current.requirements
-
+  const has = !!current.meta.summary || r.functional.length + r.nonFunctional.length + r.scale.length > 0
   return (
-    <div className="panel-body">
-      <input className="search" placeholder="Search designs or tags…" value={q} onChange={e => setQ(e.target.value)} />
-      <Section id="library" title="Library" count={library.length} forceOpen={searching}>
-        <ul className="designs">{library.filter(match).map(d => item(d, false))}</ul>
-      </Section>
-      <Section id="mine" title="My designs" count={mine.length} forceOpen={searching}>
-        {mine.length ? <ul className="designs">{mine.filter(match).map(d => item(d, true))}</ul>
-          : <p className="muted small">Import a JSON design, or build one with your own AI assistant, and it will appear here.</p>}
+    <>
+      <div className="panel-body req-body">
+        <h4 className="req-title">Requirements</h4>
+        {current.meta.summary && <p className="small req-summary">{current.meta.summary}</p>}
+        {r.functional.length > 0 && <><h5>Functional</h5><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></>}
+        {r.nonFunctional.length > 0 && <><h5>Non-functional</h5><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></>}
+        {r.scale.length > 0 && <><h5>Scale</h5><table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table></>}
+        {!has && <p className="muted small">This design has no requirements listed.</p>}
+      </div>
+      <div className="panel-foot side-actions">
+        <button className="browse" onClick={onBrowse} title="Search all designs (⌘K / Ctrl+K)">Browse designs<kbd>⌘K</kbd></button>
         <div className="row wrap">
           <button onClick={onImport}>Import</button>
           <button onClick={onViewJson} title="See the JSON behind the design you are viewing">View JSON</button>
           <button onClick={onExport}>Export</button>
           <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant">Prompt for your AI</button>
         </div>
-      </Section>
-
-      {(current.meta.summary || r.functional.length + r.nonFunctional.length + r.scale.length > 0) && (
-        <Section id="requirements" title="Requirements">
-          {current.meta.summary && <p className="small">{current.meta.summary}</p>}
-          {r.functional.length > 0 && <details open><summary>Functional</summary><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></details>}
-          {r.nonFunctional.length > 0 && <details open><summary>Non-functional</summary><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></details>}
-          {r.scale.length > 0 && (
-            <details open><summary>Scale</summary>
-              <table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table>
-            </details>
-          )}
-        </Section>
-      )}
-    </div>
+      </div>
+    </>
   )
 }

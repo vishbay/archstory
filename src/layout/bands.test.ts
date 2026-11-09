@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseDesign, type Design } from '../model/schema'
-import { layoutBands, NODE_W, OBS_NODE_W } from './bands'
+import { layoutBands, LABEL_W, NODE_W, OBS_COLLAPSED_H, OBS_NODE_W } from './bands'
 
 const design = (): Design => {
   const r = parseDesign({
@@ -94,7 +94,7 @@ describe('layoutBands monitoring layer', () => {
   const d = design()
   it('adds nothing unless asked', () => { expect(layoutBands(d).obs).toBeNull() })
   it('puts the six telemetry parts in a band below the tiers, inside the width, without overlap', () => {
-    const base = layoutBands(d), L = layoutBands(d, { observability: true })
+    const base = layoutBands(d), L = layoutBands(d, { observability: true, obsOpen: true })
     expect(Object.keys(L.obs!.pos).sort()).toEqual(['obs:alerts', 'obs:collector', 'obs:logs', 'obs:metrics', 'obs:oncall', 'obs:traces'])
     expect(L.obs!.band.y).toBe(base.height)
     expect(L.height).toBeGreaterThan(base.height)
@@ -102,11 +102,17 @@ describe('layoutBands monitoring layer', () => {
     for (const p of ps) { expect(p.y).toBeGreaterThanOrEqual(L.obs!.band.y); expect(p.x + OBS_NODE_W).toBeLessThanOrEqual(L.width) }
     for (const p of ps) for (const q of ps) if (p !== q) expect(Math.abs(p.x - q.x) >= OBS_NODE_W || Math.abs(p.y - q.y) >= 58).toBe(true)
   })
+  it('collapses to a one-line strip by default and only widens the canvas when open', () => {
+    const base = layoutBands(d), shut = layoutBands(d, { observability: true })
+    expect(shut.obs!.open).toBe(false); expect(shut.obs!.band.h).toBe(OBS_COLLAPSED_H); expect(Object.keys(shut.obs!.pos)).toEqual([])
+    expect(shut.width).toBe(base.width); expect(shut.pos).toEqual(base.pos)
+    expect(shut.height).toBe(base.height + OBS_COLLAPSED_H + 14)
+  })
   it('keeps the design centred and its nodes apart when the canvas widens', () => {
-    const L = layoutBands(d, { observability: true })
+    const L = layoutBands(d, { observability: true, obsOpen: true })
     const ps = Object.values(L.pos)
     for (const p of ps) for (const q of ps) if (p !== q && p.y === q.y) expect(Math.abs(p.x - q.x)).toBeGreaterThanOrEqual(NODE_W)
     const xs = ps.map(p => p.x), left = Math.min(...xs), right = L.width - (Math.max(...xs) + NODE_W)
-    expect(Math.abs(left - right - 170 + 12)).toBeLessThan(2)   // label column on the left, a thin margin on the right
+    expect(Math.abs(left - right - LABEL_W + 12)).toBeLessThan(2)   // label column on the left, a thin margin on the right
   })
 })

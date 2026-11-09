@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '.'
 import { layoutZones, resolveFlow } from '../layout/zones'
 import { resilience } from '../model/availability'
-import { layoutBands, NODE_W } from '../layout/bands'
+import { layoutBands, NODE_H, NODE_W } from '../layout/bands'
+import { crossesNode, routeEdges, routePoints, type Rect } from '../layout/route'
+import { ZNODE_W } from '../layout/zones'
 import { tierOf } from '../model/kinds'
 import { phaseGroups } from '../model/phases'
 
@@ -60,6 +62,37 @@ describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
 
   it.runIf(zones > 1)('has no single point of failure on the request path', () => {
     expect(resilience(d, 0, 'aws')!.spofs.map(n => n.id)).toEqual([])
+  })
+})
+
+/** Every edge is either a clear default curve or a routed path that never passes through a component. */
+function checkRoutes(rects: Record<string, Rect>, edges: { key: string; from: string; to: string }[], label: string) {
+  const routes = routeEdges(rects, edges)
+  for (const e of edges) {
+    const A = rects[e.from], B = rects[e.to], r = routes[e.key]
+    const others = Object.entries(rects).filter(([id]) => id !== e.from && id !== e.to).map(([, x]) => x)
+    if (r) { expect(crossesNode(routePoints(A, B, r), others), `${label}: ${e.key} crosses a component`).toBe(false); continue }
+    // no route means the default curve is used, which is only safe when nothing sits in the way
+    const down = B.y > A.y, ys = down ? A.y + A.h : A.y, yt = down ? B.y : B.y + B.h
+    if (Math.abs(A.y - B.y) >= Math.min(A.h, B.h) / 2)
+      expect(others.some(o => o.y < Math.max(ys, yt) && o.y + o.h > Math.min(ys, yt)), `${label}: ${e.key} has no clear route`).toBe(false)
+  }
+}
+
+describe.each(LIBRARY.map(d => [d.id, d] as const))('%s edge routing', (_, d) => {
+  it('never crosses a component in the tier view, with or without the network layer', () => {
+    for (const network of [false, true]) {
+      const L = layoutBands(d, { network })
+      const rects = Object.fromEntries(d.nodes.map(n => [n.id, { ...L.pos[n.id], w: NODE_W, h: NODE_H }]))
+      checkRoutes(rects, d.edges.map(e => ({ key: `${e.from}->${e.to}`, from: e.from, to: e.to })), `${d.id} tiers network=${network}`)
+    }
+  })
+  it.runIf((d.network?.zones ?? 1) > 1)('never crosses a component in the zones view, for every failed zone', () => {
+    for (const failed of [null, ...Array(d.network!.zones).keys()]) {
+      const zl = layoutZones(d, failed)
+      const rects = Object.fromEntries(zl.insts.map(i => [i.id, { ...zl.pos[i.id], w: i.zone !== null ? ZNODE_W : NODE_W, h: NODE_H }]))
+      checkRoutes(rects, zl.edges.map(e => ({ key: e.id, from: e.from, to: e.to })), `${d.id} zones failed=${failed}`)
+    }
   })
 })
 

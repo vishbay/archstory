@@ -6,9 +6,9 @@ import { subnetOf, TIERS, type Design, type DNode, type Tier } from '../model/sc
 import { tierOf } from '../model/kinds'
 
 export const NODE_W = 188, NODE_H = 58
-export const CELL = 228, ROW_H = 118, BAND_GAP = 14, LABEL_W = 170
+export const CELL = 228, ROW_H = 118, BAND_GAP = 14, LABEL_W = 46   // lane names run vertically in a narrow column
 // Monitoring layer: a collector fanning out to three stores, then alerts, then on-call.
-export const OBS_NODE_W = 166, OBS_COL = 198, OBS_ROW = 68, OBS_H = 222
+export const OBS_NODE_W = 166, OBS_COL = 198, OBS_ROW = 68, OBS_H = 222, OBS_COLLAPSED_H = 46
 
 export type Side = 'top' | 'right' | 'bottom' | 'left'
 export interface Box { x: number; y: number; w: number; h: number }
@@ -19,14 +19,14 @@ export interface Layout {
   vpc: Box | null
   subnets: (Box & { id: string; label: string; public: boolean; cidr?: string })[]
   /** The monitoring layer's band and node positions, when asked for. */
-  obs: { band: Box; pos: Record<string, { x: number; y: number }> } | null
+  obs: { band: Box; pos: Record<string, { x: number; y: number }>; open: boolean } | null
   width: number; height: number
   handles: (from: string, to: string) => [Side, Side]
 }
 
 const OUT = '\u0000out', VPC = '\u0000vpc'
 
-export function layoutBands(d: Design, opts: { network?: boolean; observability?: boolean } = {}): Layout {
+export function layoutBands(d: Design, opts: { network?: boolean; observability?: boolean; obsOpen?: boolean } = {}): Layout {
   const net = opts.network && d.network ? d.network : null
   const subnet = (n: DNode) => (net ? subnetOf(d, n, tierOf(n)) : null)
   const segOf = (n: DNode) => n.group ?? (subnet(n) ? VPC : OUT)
@@ -108,7 +108,10 @@ export function layoutBands(d: Design, opts: { network?: boolean; observability?
     return pos[to].x > pos[from].x ? ['right', 'left'] : ['left', 'right']
   }
   let obs: Layout['obs'] = null, outWidth = width
-  if (opts.observability) {
+  if (opts.observability && !opts.obsOpen) {
+    // collapsed: a one-line summary strip under the last tier
+    obs = { band: { x: 0, y: tiers.length * ROW_H, w: width, h: OBS_COLLAPSED_H }, pos: {}, open: false }
+  } else if (opts.observability) {
     const span = 3 * OBS_COL + OBS_NODE_W
     outWidth = Math.max(width, LABEL_W + span + 12)
     const dx = (outWidth - width) / 2          // keep the design centred when the canvas has to widen
@@ -122,9 +125,10 @@ export function layoutBands(d: Design, opts: { network?: boolean; observability?
     const top = tiers.length * ROW_H, x0 = LABEL_W + (outWidth - LABEL_W - 12 - span) / 2, r0 = top + 14
     const at = (col: number, row: number) => ({ x: x0 + col * OBS_COL, y: r0 + row * OBS_ROW })
     obs = {
+      open: true,
       band: { x: 0, y: top, w: outWidth, h: OBS_H },
       pos: { 'obs:collector': at(0, 1), 'obs:metrics': at(1, 0), 'obs:logs': at(1, 1), 'obs:traces': at(1, 2), 'obs:alerts': at(2, 0), 'obs:oncall': at(3, 0) },
     }
   }
-  return { pos, bands, groups, vpc, subnets, obs, width: outWidth, height: tiers.length * ROW_H + (obs ? OBS_H + BAND_GAP : 0), handles }
+  return { pos, bands, groups, vpc, subnets, obs, width: outWidth, height: tiers.length * ROW_H + (obs ? obs.band.h + BAND_GAP : 0), handles }
 }

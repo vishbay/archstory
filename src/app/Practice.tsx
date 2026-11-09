@@ -8,7 +8,7 @@ import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
 import { addNode, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
-import { Seg, Toggle, Toolbar, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
+import { Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
@@ -184,6 +184,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
             options={[{ key: 'mine', label: 'Mine' }, { key: 'ref', label: 'Reference' }]} />
           {view === 'canvas' && <>
             <ToolbarSep />
+            <ToolbarLabel>Layers</ToolbarLabel>
             <Toggle on={network && !!shown.network} disabled={!shown.network} onClick={() => setNetwork(v => !v)} title="Show VPC and subnets">Network</Toggle>
             {showRef && ref.observability && (
               <Toggle on={monitoring} onClick={() => { setMonitoring(v => !v); if (!monitoring) setRefTab('monitoring') }} title="Show the reference's SLOs, alerts and telemetry">Monitoring</Toggle>

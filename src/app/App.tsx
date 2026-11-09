@@ -7,7 +7,7 @@ import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
 import { PANEL_LEFT, PANEL_RIGHT, store, usePlayer, useTheme, useWide } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
-import { AvailabilityMenu, Seg, Toggle, Toolbar, ToolbarSep } from './CanvasToolbar'
+import { AvailabilityMenu, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
@@ -16,6 +16,7 @@ import { Sidebar } from './Sidebar'
 import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
 import { JsonDialog } from './JsonDialog'
+import { DesignPicker } from './DesignPicker'
 import { copyText, readSharedDesign, shareUrl } from './share'
 import { Practice } from './Practice'
 import { Home } from './Home'
@@ -58,6 +59,7 @@ export function App() {
   const endTour = () => { if (tour) store.set(`archstory.tour.${tour}`, true); setTour(null) }
   const [problemId, setProblemId] = useState(() => params.get('p') ?? 'url-shortener')
   const [generating, setGenerating] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [jsonOf, setJsonOf] = useState<Design | null>(null)
   const design = all.find(d => d.id === designId) ?? LIBRARY[0]
   const [flowId, setFlowId] = useState(() => params.get('f') ?? '')
@@ -105,6 +107,13 @@ export function App() {
     history.replaceState(null, '', u)
   }, [design.id, flow, view, network, zonesView, monitoring, shared, mode, problemId])
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && mode !== 'practice') { e.preventDefault(); setPicking(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mode])
+  useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 3500)
     return () => clearTimeout(t)
@@ -150,7 +159,9 @@ export function App() {
         <button className="brand" onClick={() => setMode('home')} title="Home">Arch<span>Story</span></button>
         {mode !== 'home' && <>
           <span className="sep" />
-          <span className="title">{mode === 'practice' ? `Practice: ${(LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title}` : design.meta.title}</span>
+          {mode === 'practice'
+            ? <span className="title">{`Practice: ${(LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title}`}</span>
+            : <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog" title="Switch design (⌘K / Ctrl+K)">{design.meta.title}<span className="chev-down" aria-hidden>▾</span></button>}
         </>}
         {mode === 'explore' && isShared && (
           <span className="shared-pill">Shared link · not saved
@@ -191,8 +202,7 @@ export function App() {
       ) : (<>
       {leftOpen && (
         <aside className="left">
-          <Sidebar library={LIBRARY} mine={mine} current={design} onOpen={open}
-            onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }}
+          <Sidebar current={design} onBrowse={() => setPicking(true)}
             onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} />
         </aside>
       )}
@@ -203,6 +213,7 @@ export function App() {
             options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow }]} />
           {view === 'canvas' && <>
             <ToolbarSep />
+            <ToolbarLabel>Layers</ToolbarLabel>
             <Toggle on={net} disabled={!design.network} onClick={() => setNetwork(v => !v)}
               title={design.network ? 'Show VPC, subnets and availability zones' : 'This design has no network section'}>Network</Toggle>
             <Toggle on={monitoring && !!design.observability} disabled={!design.observability}
@@ -236,6 +247,9 @@ export function App() {
 
       {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onImport={importDesign} />}
+      {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={design.id} onClose={() => setPicking(false)}
+        onOpen={id => { open(id); setMode('explore') }}
+        onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }} />}
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={() => { setGenerating(false); setImporting(true) }} />}
       {toast && <div className="toast" role="status">{toast}</div>}

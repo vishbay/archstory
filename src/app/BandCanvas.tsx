@@ -7,9 +7,10 @@ import { edgeId, findEdge, type Design, type DNode, type Flow, type StepKind, ty
 import { kindInfo, nameOf, TIER_INFO, type Cloud } from '../model/kinds'
 import { subnetLabel, vpcLabel } from '../model/network'
 import { impactOf, zoneBadge, zoneName, type Level } from '../model/availability'
-import { layoutBands, NODE_W, OBS_NODE_W, type Layout, type Side } from '../layout/bands'
+import { layoutBands, NODE_H, NODE_W, OBS_NODE_W, type Layout, type Side } from '../layout/bands'
+import { midpoint, roundedPolyline, routeEdges, type Pt, type Rect } from '../layout/route'
 import { ZNODE_W, type Hop, type ZoneLayout } from '../layout/zones'
-import { emits, signalsFor, telemetryNodes, TELEMETRY_EDGES, traceId } from '../model/observability'
+import { emits, signalsFor, stackName, TELEMETRY, telemetryNodes, TELEMETRY_EDGES, traceId } from '../model/observability'
 import { NodeIcon } from './NodeIcon'
 import { Packet } from './Packet'
 import { KIND_GLYPH, KIND_VAR } from './stepKinds'
@@ -23,10 +24,25 @@ export interface ZoneState { failed: number | null; home: number; zl: ZoneLayout
 
 // ---------- background nodes ----------
 function BandNode({ data }: NodeProps) {
-  const { tier, title, blurb, color, w, h } = data as { tier?: Tier; title?: string; blurb?: string; color?: string; w: number; h: number }
+  const { tier, title, blurb, color, w, h, strip, summary, open, onToggle } = data as {
+    tier?: Tier; title?: string; blurb?: string; color?: string; w: number; h: number
+    strip?: boolean; summary?: string; open?: boolean; onToggle?: () => void
+  }
+  const style = { width: w, height: h, ['--tier' as string]: color ?? TIER_INFO[tier!].color }
+  if (strip) {
+    // the collapsed monitoring lane: one line that expands on click
+    return (
+      <div className="band obs-strip" style={style}>
+        <button className="obs-toggle nopan" aria-expanded={false} onClick={onToggle} title="Show the telemetry stack">
+          <span className="chev">›</span><b>{title}</b><span className="obs-summary">{summary}</span><span className="obs-hint">Show</span>
+        </button>
+      </div>
+    )
+  }
   return (
-    <div className="band" style={{ width: w, height: h, ['--tier' as string]: color ?? TIER_INFO[tier!].color }}>
-      <div className="band-head"><b>{title ?? TIER_INFO[tier!].title}</b><span>{blurb ?? TIER_INFO[tier!].blurb}</span></div>
+    <div className="band" style={style}>
+      <div className="band-head" title={blurb ?? TIER_INFO[tier!].blurb}><b>{title ?? TIER_INFO[tier!].title}</b></div>
+      {onToggle && open && <button className="obs-collapse nopan" aria-expanded onClick={onToggle}>Collapse ▴</button>}
     </div>
   )
 }
@@ -89,6 +105,8 @@ function ComponentNode({ data }: NodeProps) {
 // ---------- edges ----------
 type EdgeData = {
   state: State; async?: boolean; picked?: boolean; kind?: StepKind; label?: string; note?: string
+  /** Corners of a routed path (an edge that would otherwise cross a component); absent means the default curve. */
+  via?: Pt[]
   packet?: { key: string; ms: number; reverse: boolean }
 }
 const edgeColor = (d: EdgeData) =>
@@ -96,7 +114,10 @@ const edgeColor = (d: EdgeData) =>
 
 function FlowEdge(p: EdgeProps) {
   const d = p.data as EdgeData
-  const [path, lx, ly] = getBezierPath(p)
+  const routed: Pt[] | undefined = d.via && [[p.sourceX, p.sourceY], ...d.via, [p.targetX, p.targetY]]
+  const [bezier, bx, by] = getBezierPath(p)
+  const path = routed ? roundedPolyline(routed) : bezier
+  const [lx, ly] = routed ? midpoint(routed) : [bx, by]
   const sideways = p.sourcePosition === Position.Left || p.sourcePosition === Position.Right   // same lane: keep the tag above the nodes
   const color = d.picked ? 'var(--accent)' : edgeColor(d)
   const dashed = d.state === 'active' ? d.kind === 'async' : d.async
@@ -105,7 +126,7 @@ function FlowEdge(p: EdgeProps) {
     <>
       <BaseEdge id={p.id} path={path} markerEnd={p.markerEnd}
         interactionWidth={18}
-        style={{ stroke: color, strokeWidth: d.state === 'active' || d.picked ? 3 : 1.6, strokeDasharray: dashed ? '6 5' : undefined }} />
+        style={{ stroke: color, strokeWidth: d.state === 'active' || d.picked ? 3 : d.state === 'off' ? 1 : 1.6, strokeDasharray: dashed ? '6 5' : undefined, opacity: d.state === 'off' ? 0.55 : 1 }} />
       {d.packet && <Packet key={d.packet.key} path={path} ms={d.packet.ms} reverse={d.packet.reverse} color={color} />}
       {d.packet && d.label && (
         <EdgeLabelRenderer>
@@ -139,7 +160,8 @@ function backdrop(design: Design, cloud: Cloud, L: Pick<Layout, 'bands' | 'subne
   ]
 }
 
-const marker = (d: EdgeData) => ({ type: MarkerType.ArrowClosed, color: edgeColor(d), width: 16, height: 16 })
+// Edges a scenario does not use stay as faint lines without arrowheads.
+const marker = (d: EdgeData) => (d.state === 'off' ? undefined : { type: MarkerType.ArrowClosed, color: edgeColor(d), width: 16, height: 16 })
 
 /** Practice mode: the canvas becomes an editor. */
 export interface EditProps {
@@ -174,7 +196,20 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
   const net = network && !!design.network
   const zoned = net && zonesView && !!zone.zl
   const mon = monitoring && !!design.observability && !zoned   // the zones view has no telemetry band
-  const L = useMemo(() => layoutBands(design, { network: net, observability: mon }), [design, net, mon])
+  const [obsOpen, setObsOpen] = useState(false)               // the monitoring lane starts as a one-line strip
+  const L = useMemo(() => layoutBands(design, { network: net, observability: mon, obsOpen }), [design, net, mon, obsOpen])
+  // Route edges around components: clear edges keep the default curve, the rest follow the gaps between nodes.
+  const tierRoutes = useMemo(() => {
+    const rects: Record<string, Rect> = Object.fromEntries(design.nodes.map(n => [n.id, { ...L.pos[n.id], w: NODE_W, h: NODE_H }]))
+    return routeEdges(rects, design.edges.map(e => ({ key: edgeId(e), from: e.from, to: e.to })))
+  }, [design, L])
+  const zoneRoutes = useMemo(() => {
+    if (!zoned || !zone.zl) return {}
+    const zl = zone.zl
+    const rects: Record<string, Rect> = Object.fromEntries(zl.insts.map(i => [i.id, { ...zl.pos[i.id], w: i.zone !== null ? ZNODE_W : NODE_W, h: NODE_H }]))
+    return routeEdges(rects, zl.edges.map(e => ({ key: e.id, from: e.from, to: e.to })))
+  }, [zoned, zone.zl])
+  const stack = (c: Cloud) => { const n = (i: number) => stackName(TELEMETRY[i], c); return `${n(0)} → ${n(1)} · ${n(2)} · ${n(3)} → ${n(4)} → ${n(5)}` }
   const { step, nonce, packetMs } = player
 
   // Camera follows the request: frame the two components of the current hop; zoom back out on reset.
@@ -234,7 +269,9 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
           note: e.replication ? (e.async ? 'async replica' : 'sync standby') : undefined,
           packet: active ? { key: packetKey, ms: packetMs, reverse: hop!.reverse } : undefined,
         }
-        const [sh, th] = zl.handles(e.from, e.to)
+        const rt = zoneRoutes[e.id]
+        const [sh, th] = rt ? [rt.from, rt.to] : zl.handles(e.from, e.to)
+        if (rt) data.via = rt.via
         return { id: e.id, source: e.from, target: e.to, sourceHandle: `s-${sh}`, targetHandle: `t-${th}`, type: 'flow', data, markerEnd: marker(data) }
       })
       return { nodes, edges }
@@ -261,9 +298,10 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
       ...L.groups.map(g => ({ id: `group:${g.id}`, type: 'boundary', position: { x: g.x, y: g.y }, ...fixed, zIndex: -1,
         data: { label: g.label, kind: g.kind, w: g.w, h: g.h } })),
       ...(L.obs ? [
-        { id: 'band:obs', type: 'band', position: { x: L.obs.band.x, y: L.obs.band.y }, ...fixed, zIndex: -5,
-          data: { title: 'Monitoring', color: '#14b8a6', blurb: 'Every component emits metrics, logs and traces; alerts page a person', w: L.obs.band.w, h: L.obs.band.h } },
-        ...telemetryNodes().map(t => ({ id: t.id, type: 'component', position: L.obs!.pos[t.id], draggable: false,
+        { id: 'band:obs', type: 'band', position: { x: L.obs.band.x, y: L.obs.band.y }, ...fixed, zIndex: L.obs.open ? -5 : 1,
+          data: { title: 'Monitoring', color: '#14b8a6', blurb: 'Every component emits metrics, logs and traces; alerts page a person', w: L.obs.band.w, h: L.obs.band.h,
+            strip: !L.obs.open, open: L.obs.open, summary: stack(cloud), onToggle: () => setObsOpen(o => !o) } },
+        ...(L.obs.open ? telemetryNodes() : []).map(t => ({ id: t.id, type: 'component', position: L.obs!.pos[t.id], draggable: false,
           data: { node: t, cloud, state: 'visited' as State, selected: false, compact: true, telemetry: true } satisfies NodeData })),
       ] : []),
       ...design.nodes.map(n => ({
@@ -274,12 +312,14 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
       })),
     ]
     const edges: Edge[] = design.edges.map((e, i) => {
-      const [sh, th] = L.handles(e.from, e.to)
+      const rt = tierRoutes[edgeId(e)]
+      const [sh, th] = rt ? [rt.from, rt.to] : L.handles(e.from, e.to)
       const active = hop?.index === i
       const data: EdgeData = {
         state: !flow ? 'visited' : active ? 'active' : seenEdges.has(i) ? 'visited' : flowEdges.has(i) ? 'flow' : 'off',
         async: e.async, kind: cur?.kind, label: cur?.label, picked: edit?.pickedEdge === edgeId(e),
         packet: active ? { key: packetKey, ms: packetMs, reverse: hop!.reverse } : undefined,
+        via: rt?.via,
       }
       return { id: edgeId(e), source: e.from, target: e.to, sourceHandle: `s-${sh}`, targetHandle: `t-${th}`, type: 'flow', data, markerEnd: marker(data) }
     })
@@ -288,10 +328,10 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
       edges.push({ id: `${a}->${b}`, source: a, target: b, sourceHandle: 's-right', targetHandle: 't-left', type: 'flow', data, markerEnd: marker(data) })
     }
     return { nodes, edges }
-  }, [L, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit])
+  }, [L, tierRoutes, zoneRoutes, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit])
 
   return (
-    <ReactFlow key={`${design.id}:${net}:${zoned}:${mon}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+    <ReactFlow key={`${design.id}:${net}:${zoned}:${mon}:${obsOpen}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={!!edit} elementsSelectable={false} colorMode={colorMode}
       connectionMode={ConnectionMode.Loose}
       onConnectStart={(_, h) => { dragFrom.current = h.nodeId }}
