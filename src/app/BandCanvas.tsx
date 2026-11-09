@@ -107,6 +107,8 @@ type EdgeData = {
   state: State; async?: boolean; picked?: boolean; kind?: StepKind; label?: string; note?: string
   /** Corners of a routed path (an edge that would otherwise cross a component); absent means the default curve. */
   via?: Pt[]
+  /** Right-angled path between the two handles, for edges that have no precomputed route (the monitoring lane). */
+  elbow?: boolean
   packet?: { key: string; ms: number; reverse: boolean }
 }
 const edgeColor = (d: EdgeData) =>
@@ -114,11 +116,15 @@ const edgeColor = (d: EdgeData) =>
 
 function FlowEdge(p: EdgeProps) {
   const d = p.data as EdgeData
-  const routed: Pt[] | undefined = d.via && [[p.sourceX, p.sourceY], ...d.via, [p.targetX, p.targetY]]
+  const mx = (p.sourceX + p.targetX) / 2, my = (p.sourceY + p.targetY) / 2
+  const sideways = p.sourcePosition === Position.Left || p.sourcePosition === Position.Right   // same lane: keep the tag above the nodes
+  // A straight route assumes both nodes line up. Rendered heights can differ a little, so add a small jog rather than draw a slanted line.
+  const straight = (): Pt[] => (sideways ? (Math.abs(p.sourceY - p.targetY) < 1 ? [] : [[mx, p.sourceY], [mx, p.targetY]]) : (Math.abs(p.sourceX - p.targetX) < 1 ? [] : [[p.sourceX, my], [p.targetX, my]]))
+  const via = d.via ? (d.via.length ? d.via : straight()) : d.elbow ? straight() : undefined
+  const routed: Pt[] | undefined = via && [[p.sourceX, p.sourceY], ...via, [p.targetX, p.targetY]]
   const [bezier, bx, by] = getBezierPath(p)
   const path = routed ? roundedPolyline(routed) : bezier
   const [lx, ly] = routed ? midpoint(routed) : [bx, by]
-  const sideways = p.sourcePosition === Position.Left || p.sourcePosition === Position.Right   // same lane: keep the tag above the nodes
   const color = d.picked ? 'var(--accent)' : edgeColor(d)
   const dashed = d.state === 'active' ? d.kind === 'async' : d.async
   const label = d.state === 'active' ? undefined : d.note   // the active step's label travels with the packet
@@ -326,7 +332,7 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
       return { id: edgeId(e), source: e.from, target: e.to, sourceHandle: `s-${sh}`, targetHandle: `t-${th}`, type: 'flow', data, markerEnd: marker(data) }
     })
     if (L.obs) for (const [a, b] of TELEMETRY_EDGES) {
-      const data: EdgeData = { state: 'visited', async: true }
+      const data: EdgeData = { state: 'visited', async: true, elbow: true }
       edges.push({ id: `${a}->${b}`, source: a, target: b, sourceHandle: 's-right', targetHandle: 't-left', type: 'flow', data, markerEnd: marker(data) })
     }
     return { nodes, edges }

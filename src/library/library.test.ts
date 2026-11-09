@@ -65,17 +65,33 @@ describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
   })
 })
 
-/** Every edge is either a clear default curve or a routed path that never passes through a component. */
+/** Every edge is a right-angled path that never passes through a component and enters its target side head-on. */
 function checkRoutes(rects: Record<string, Rect>, edges: { key: string; from: string; to: string }[], label: string) {
   const routes = routeEdges(rects, edges)
+  const into = { top: [0, 1], bottom: [0, -1], left: [1, 0], right: [-1, 0] } as const   // direction of travel when entering a node through that side
   for (const e of edges) {
     const A = rects[e.from], B = rects[e.to], r = routes[e.key]
+    expect(r, `${label}: ${e.key} has no route`).toBeTruthy()
     const others = Object.entries(rects).filter(([id]) => id !== e.from && id !== e.to).map(([, x]) => x)
-    if (r) { expect(crossesNode(routePoints(A, B, r), others), `${label}: ${e.key} crosses a component`).toBe(false); continue }
-    // no route means the default curve is used, which is only safe when nothing sits in the way
-    const down = B.y > A.y, ys = down ? A.y + A.h : A.y, yt = down ? B.y : B.y + B.h
-    if (Math.abs(A.y - B.y) >= Math.min(A.h, B.h) / 2)
-      expect(others.some(o => o.y < Math.max(ys, yt) && o.y + o.h > Math.min(ys, yt)), `${label}: ${e.key} has no clear route`).toBe(false)
+    const pts = routePoints(A, B, r!)
+    expect(crossesNode(pts, others), `${label}: ${e.key} crosses a component`).toBe(false)
+    expect(pts.every((p, i) => i === 0 || p[0] === pts[i - 1][0] || p[1] === pts[i - 1][1]), `${label}: ${e.key} is not right-angled`).toBe(true)
+    const [p, q] = [pts.at(-2)!, pts.at(-1)!], [dx, dy] = into[r!.to]
+    expect(Math.sign(q[0] - p[0]) === dx && Math.sign(q[1] - p[1]) === dy, `${label}: ${e.key} does not enter ${r!.to} head-on`).toBe(true)
+    expect(Math.hypot(q[0] - p[0], q[1] - p[1]), `${label}: ${e.key} has no straight run into the arrowhead`).toBeGreaterThanOrEqual(14)
+  }
+  // edges that do not share a component never run along the same line, so no line can be mistaken for another
+  const segs = edges.map(e => ({ e, pts: routePoints(rects[e.from], rects[e.to], routes[e.key]!) }))
+  const overlap = (a: [number, number], b: [number, number]) => Math.min(Math.max(...a), Math.max(...b)) - Math.max(Math.min(...a), Math.min(...b))
+  for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) {
+    const [u, v] = [segs[i], segs[j]]
+    if ([u.e.from, u.e.to].some(id => id === v.e.from || id === v.e.to)) continue
+    for (let a = 1; a < u.pts.length; a++) for (let b = 1; b < v.pts.length; b++) {
+      const [p, q, r, s] = [u.pts[a - 1], u.pts[a], v.pts[b - 1], v.pts[b]]
+      const sameX = p[0] === q[0] && r[0] === s[0] && p[0] === r[0], sameY = p[1] === q[1] && r[1] === s[1] && p[1] === r[1]
+      if (sameX) expect(overlap([p[1], q[1]], [r[1], s[1]]), `${label}: ${u.e.key} and ${v.e.key} run along the same vertical line`).toBeLessThanOrEqual(2)
+      if (sameY) expect(overlap([p[0], q[0]], [r[0], s[0]]), `${label}: ${u.e.key} and ${v.e.key} run along the same horizontal line`).toBeLessThanOrEqual(2)
+    }
   }
 }
 
