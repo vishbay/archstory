@@ -14,15 +14,15 @@ import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { Section } from './Sidebar'
-import { panelInsets, store, usePlayer, useViewportWidth } from './hooks'
+import { panelInsets, store, storeKv, usePlayer, useViewportWidth } from './hooks'
 import { commit, initHistory, redo, undo } from '../practice/history'
-import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Kv, type Snapshot } from '../practice/snapshots'
+import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
 import { Attempts } from './Attempts'
 import { downloadJson } from './files'
 import type { StoredReview } from './ReviewPanel'
 
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
-const kv: Kv = { get: k => store.get<unknown>(k, null), set: (k, v) => store.set(k, v) }
+const kv = storeKv
 
 export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
   problemId: string; onProblem: (id: string) => void; cloud: Cloud; colorMode: 'light' | 'dark'

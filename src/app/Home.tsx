@@ -3,6 +3,9 @@ import { useMemo, useState } from 'react'
 import type { Design } from '../model/schema'
 import { colorOf } from '../model/kinds'
 import { layoutBands, NODE_H, NODE_W } from '../layout/bands'
+import { runChecks } from '../practice/checks'
+import { percent, practised, progressOf, type Progress } from '../practice/progress'
+import { storeKv } from './hooks'
 
 /** A miniature of the tier-band canvas: bands, connections and coloured component blocks. */
 function MiniMap({ design }: { design: Design }) {
@@ -21,7 +24,22 @@ function MiniMap({ design }: { design: Design }) {
   )
 }
 
-function Card({ d, onExplore, onPractice }: { d: Design; onExplore: () => void; onPractice?: () => void }) {
+/** Where the learner is with a problem: best pass rate, best review, and how many attempts are saved. */
+function ProgressChip({ p }: { p: Progress }) {
+  const parts = [
+    p.best ? `Best ${p.best.passed}/${p.best.total} checks (${percent(p.best)}%)` : 'Started',
+    p.review !== null ? `review ${p.review}/5` : '',
+    p.attempts ? `${p.attempts} saved` : '',
+  ].filter(Boolean)
+  return (
+    <p className="card-progress" title="Your best result on this problem, from this browser">
+      {p.best && <span className="progress-bar" aria-hidden><i style={{ width: `${percent(p.best)}%` }} /></span>}
+      <span>{parts.join(' · ')}</span>
+    </p>
+  )
+}
+
+function Card({ d, onExplore, onPractice, progress }: { d: Design; onExplore: () => void; onPractice?: () => void; progress?: Progress }) {
   return (
     <article className="design-card">
       <button className="card-map" onClick={onExplore} aria-label={`Explore ${d.meta.title}`}><MiniMap design={d} /></button>
@@ -33,9 +51,10 @@ function Card({ d, onExplore, onPractice }: { d: Design; onExplore: () => void; 
           {d.meta.tags.slice(0, 3).map(t => <span key={t} className="tag">{t}</span>)}
         </div>
         <p className="card-meta">{d.nodes.length} components · {d.flows.length} flow{d.flows.length === 1 ? '' : 's'}{d.network ? ` · ${d.network.zones} zones` : ''}</p>
+        {progress && practised(progress) && <ProgressChip p={progress} />}
         <div className="row">
           <button className="primary" onClick={onExplore}>Explore</button>
-          {onPractice && <button onClick={onPractice}>Practice</button>}
+          {onPractice && <button onClick={onPractice}>{progress?.inProgress ? 'Continue' : 'Practice'}</button>}
         </div>
       </div>
     </article>
@@ -55,6 +74,9 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
     .filter(d => { const s = q.trim().toLowerCase(); return !s || d.meta.title.toLowerCase().includes(s) || d.meta.tags.some(t => t.includes(s)) })
     .sort((a, b) => order[a.meta.difficulty ?? 'medium'] - order[b.meta.difficulty ?? 'medium'] || a.meta.title.localeCompare(b.meta.title))
   const first = library.find(d => d.id === 'url-shortener') ?? library[0]
+  // Read once when the page opens; Home remounts each time the learner comes back to it.
+  const progress = useMemo(() => Object.fromEntries(library.map(d => [d.id, progressOf(storeKv, d, runChecks)])), [library])
+  const done = library.filter(d => practised(progress[d.id])).length
 
   return (
     <div className="home">
@@ -82,6 +104,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
       <section>
         <div className="lib-head">
           <h2>Library</h2>
+          {done > 0 && <span className="lib-progress">Practised {done} of {library.length}</span>}
           <div className="seg" role="group" aria-label="Difficulty">
             {(['all', 'easy', 'medium', 'hard'] as const).map(l => (
               <button key={l} className={level === l ? 'on' : ''} onClick={() => setLevel(l)}>{l === 'all' ? 'All' : l[0].toUpperCase() + l.slice(1)}</button>
@@ -90,7 +113,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
           <input className="search" placeholder="Search designs or tags…" value={q} onChange={e => setQ(e.target.value)} />
         </div>
         <div className="card-grid">
-          {shown.map(d => <Card key={d.id} d={d} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}
+          {shown.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}
           {!shown.length && <p className="muted">No designs match.</p>}
         </div>
       </section>

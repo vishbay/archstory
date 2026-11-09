@@ -1,3 +1,4 @@
+import type { Kv } from '../practice/snapshots'
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
 // ---------- storage (best-effort: private windows may throw) ----------
@@ -20,6 +21,9 @@ export const store = {
   },
   set(key: string, value: unknown): boolean { try { localStorage.setItem(key, JSON.stringify(value)); return true } catch { return false } },
 }
+
+/** The same storage, shaped for the practice modules. */
+export const storeKv: Kv = { get: k => store.get<unknown>(k, null), set: (k, v) => store.set(k, v) }
 
 // ---------- theme ----------
 export type ThemePref = 'system' | 'light' | 'dark'

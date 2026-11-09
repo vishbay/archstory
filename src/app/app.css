@@ -613,3 +613,11 @@ select.scenario-pick:hover { border-bottom-style: solid; }
 :root[data-theme="dark"] .card.current-card { background: color-mix(in srgb, var(--accent) 17%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 
 @media (max-width: 900px) { .kbd-hints { display: none; } }
+
+/* ---------- home: practice progress ---------- */
+.lib-progress { color: var(--muted); font-size: 13px; padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); }
+.card-progress { display: grid; gap: 5px; margin: 0 0 4px; font-size: 12px; color: var(--text); }
+.progress-bar { display: block; height: 5px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.progress-bar i { display: block; height: 100%; border-radius: 999px; background: var(--easy); }
+.lib-head h2:has(+ .lib-progress) { margin-right: 0; }
+.lib-head .lib-progress { margin-right: auto; }
