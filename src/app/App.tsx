@@ -15,6 +15,7 @@ import { Inspector, type InspectorTab } from './Inspector'
 import { Sidebar } from './Sidebar'
 import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
+import { JsonDialog } from './JsonDialog'
 import { copyText, readSharedDesign, shareUrl } from './share'
 import { Practice } from './Practice'
 import { Home } from './Home'
@@ -57,6 +58,7 @@ export function App() {
   const endTour = () => { if (tour) store.set(`archstory.tour.${tour}`, true); setTour(null) }
   const [problemId, setProblemId] = useState(() => params.get('p') ?? 'url-shortener')
   const [generating, setGenerating] = useState(false)
+  const [jsonOf, setJsonOf] = useState<Design | null>(null)
   const design = all.find(d => d.id === designId) ?? LIBRARY[0]
   const [flowId, setFlowId] = useState(() => params.get('f') ?? '')
   const flow = design.flows.find(f => f.id === flowId) ?? design.flows[0]
@@ -177,13 +179,13 @@ export function App() {
         </main>
       ) : mode === 'practice' ? (
         <Practice problemId={problemId} onProblem={setProblemId} cloud={cloud} colorMode={theme.resolved}
-          leftOpen={leftOpen} rightOpen={rightOpen} onExport={exportDesign} />
+          leftOpen={leftOpen} rightOpen={rightOpen} onExport={exportDesign} onViewJson={setJsonOf} />
       ) : (<>
       {leftOpen && (
         <aside className="left">
           <Sidebar library={LIBRARY} mine={mine} current={design} onOpen={open}
             onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }}
-            onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} />
+            onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} />
         </aside>
       )}
 
@@ -221,6 +223,7 @@ export function App() {
       )}
       </>)}
 
+      {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} onImport={importDesign} />}
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={() => { setGenerating(false); setImporting(true) }} />}

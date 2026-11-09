@@ -21,9 +21,9 @@ import type { StoredReview } from './ReviewPanel'
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
 const attemptKey = (id: string) => `archstory.attempt.${id}`
 
-export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rightOpen, onExport }: {
+export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
   problemId: string; onProblem: (id: string) => void; cloud: Cloud; colorMode: 'light' | 'dark'
-  leftOpen: boolean; rightOpen: boolean; onExport: (d: Design) => void
+  leftOpen: boolean; rightOpen: boolean; onExport: (d: Design) => void; onViewJson: (d: Design) => void
 }) {
   const ref = LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]
   const [hist, setHist] = useState(() => initHistory<Design>(store.get(attemptKey(ref.id), blankAttempt(ref))))
@@ -163,7 +163,8 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
             <Section id="p-actions" title="Answer">
               <label className="check-row"><input type="checkbox" checked={reasoningOn} onChange={e => setReasoningOn(e.target.checked)} /> Written reasoning</label>
               <div className="row wrap">
-                <button onClick={() => onExport(attempt)}>Export JSON</button>
+                <button onClick={() => onViewJson(attempt)}>View JSON</button>
+                <button onClick={() => onExport(attempt)}>Export</button>
                 <button onClick={reset}>Reset</button>
               </div>
             </Section>

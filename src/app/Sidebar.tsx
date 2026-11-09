@@ -17,9 +17,9 @@ export function Section({ id, title, count, forceOpen, children }: { id: string;
   )
 }
 
-export function Sidebar({ library, mine, current, onOpen, onDelete, onImport, onExport, onGenerate }: {
+export function Sidebar({ library, mine, current, onOpen, onDelete, onImport, onExport, onGenerate, onViewJson }: {
   library: Design[]; mine: Design[]; current: Design
-  onOpen: (id: string) => void; onDelete: (id: string) => void; onImport: () => void; onExport: () => void; onGenerate: () => void
+  onOpen: (id: string) => void; onDelete: (id: string) => void; onImport: () => void; onExport: () => void; onGenerate: () => void; onViewJson: () => void
 }) {
   const [q, setQ] = useState('')
   const searching = q.trim().length > 0
@@ -50,6 +50,7 @@ export function Sidebar({ library, mine, current, onOpen, onDelete, onImport, on
           : <p className="muted small">Import a JSON design, or generate one with an AI, and it will appear here.</p>}
         <div className="row wrap">
           <button onClick={onImport}>Import</button>
+          <button onClick={onViewJson} title="See the JSON behind the design you are viewing">View JSON</button>
           <button onClick={onExport}>Export</button>
           <button onClick={onGenerate}>Generate with AI</button>
         </div>

@@ -1,31 +1,32 @@
-import { useEffect, useRef, useState } from 'react'
-import { parseDesign, type Design } from '../model/schema'
-import { copyText, extractJson } from './share'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import type { Design } from '../model/schema'
+import { copyText } from './share'
+import { checkImport } from './importCheck'
 import { STARTER_DESIGN } from './starterDesign'
 
 export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d: Design) => void }) {
   const [text, setText] = useState('')
-  const [errors, setErrors] = useState<string[]>([])
   const [fixCopied, setFixCopied] = useState(false)
-  const fixPrompt = () => `The design JSON you returned was rejected by the validator with these problems:\n${errors.map(e => `- ${e}`).join('\n')}\n\nFix them and return the complete corrected JSON in a single \`\`\`json code block, with no other text.`
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
 
-  const submit = (raw = text) => {
-    let json: unknown
-    try { json = JSON.parse(extractJson(raw)) } catch (e) { return setErrors([`Not valid JSON: ${(e as Error).message}`]) }
-    const r = parseDesign(json)
-    if (r.ok) onImport(r.design)
-    else setErrors(r.errors)
-  }
+  // Validate as you type; the deferred value keeps typing smooth on large pastes.
+  const deferred = useDeferredValue(text)
+  const check = useMemo(() => checkImport(deferred), [deferred])
+  const ready = check.status === 'valid' && deferred === text
+  const errors = check.status === 'invalid' ? check.errors : []
+  const fixPrompt = () => `The design JSON you returned was rejected by the validator with these problems:\n${errors.map(e => `- ${e}`).join('\n')}\n\nFix them and return the complete corrected JSON in a single \`\`\`json code block, with no other text.`
+
   const useExample = () => {
     if (text.trim() && !confirm('Replace what you pasted with the example?')) return
-    setText(JSON.stringify(STARTER_DESIGN, null, 2)); setErrors([]); setFixCopied(false)
+    setText(JSON.stringify(STARTER_DESIGN, null, 2)); setFixCopied(false)
   }
   const readFile = async (f: File | undefined) => {
     if (!f) return
     const raw = await f.text()
-    setText(raw); submit(raw)
+    const c = checkImport(raw)
+    if (c.status === 'valid') onImport(c.design)    // a valid file opens straight away
+    else setText(raw)                                // otherwise show what is wrong with it
   }
 
   return (
@@ -35,10 +36,16 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
       <p className="muted small">
         Paste or drop an <code>archstory/v1</code> JSON file, or paste an AI's whole answer: code fences and
         surrounding text are ignored. Never written one? <button className="link" onClick={useExample}>Start from an example</button>,
-        edit it, then validate. Schema: <a href={`${import.meta.env.BASE_URL}schema/archstory-v1.json`} target="_blank">archstory-v1.json</a>.
+        edit it, and it is checked as you type. Schema: <a href={`${import.meta.env.BASE_URL}schema/archstory-v1.json`} target="_blank">archstory-v1.json</a>.
       </p>
-      <textarea value={text} onChange={e => { setText(e.target.value); setErrors([]); setFixCopied(false) }} spellCheck={false}
+      <textarea value={text} onChange={e => { setText(e.target.value); setFixCopied(false) }} spellCheck={false}
         placeholder={'{\n  "schema": "archstory/v1",\n  "id": "my-design",\n  "meta": { "title": "…" },\n  "nodes": [ … ]\n}'} />
+      {check.status === 'valid' && (
+        <div className="valid-note" role="status">
+          <b>✓ Valid</b> {check.summary}
+          {check.warnings.map(w => <p key={w} className="warn-line">{w}</p>)}
+        </div>
+      )}
       {errors.length > 0 && (
         <div className="errors" role="alert">
           <b>{errors.length} problem{errors.length > 1 ? 's' : ''}:</b>
@@ -52,7 +59,7 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
         <label className="button">Choose file…<input type="file" accept=".json,application/json" hidden onChange={e => readFile(e.target.files?.[0])} /></label>
         <span className="spacer" />
         <button onClick={() => dialog.current?.close()}>Cancel</button>
-        <button className="primary" onClick={() => submit()} disabled={!text.trim()}>Validate &amp; open</button>
+        <button className="primary" disabled={!ready} onClick={() => check.status === 'valid' && onImport(check.design)}>Open design</button>
       </div>
     </dialog>
   )
