@@ -621,3 +621,4 @@ select.scenario-pick:hover { border-bottom-style: solid; }
 .progress-bar i { display: block; height: 100%; border-radius: 999px; background: var(--easy); }
 .lib-head h2:has(+ .lib-progress) { margin-right: 0; }
 .lib-head .lib-progress { margin-right: auto; }
+.lib-note { margin: -4px 0 16px; font-size: 13px; max-width: 70ch; }

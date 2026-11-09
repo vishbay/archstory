@@ -112,6 +112,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
           </div>
           <input className="search" placeholder="Search designs or tags…" value={q} onChange={e => setQ(e.target.value)} />
         </div>
+        <p className="lib-note muted">These are reference designs, not the only right answers. Interviewers accept other approaches when you can explain the trade-offs, so use them to compare with your own.</p>
         <div className="card-grid">
           {shown.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}
           {!shown.length && <p className="muted">No designs match.</p>}
