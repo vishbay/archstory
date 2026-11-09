@@ -3,7 +3,7 @@ import { LIBRARY } from '../library'
 import { extractJson } from '../app/share'
 import { addNode, blankAttempt } from './attempt'
 import { runChecks } from './checks'
-import { parseReview, reviewPrompt, signature } from './review'
+import { DIMENSIONS, parseReview, reviewPrompt, signature } from './review'
 
 const url = LIBRARY.find(d => d.id === 'url-shortener')!
 const attempt = (() => {
@@ -64,5 +64,21 @@ describe('forgiving review parsing', () => {
     const r = parseReview({ ...answer, findings: [{ target: null, severity: 'major', detail: 'All reads hit one primary. That will not scale.' }, { severity: 'minor' }] }, attempt)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.review.findings.map(f => f.title)).toEqual(['All reads hit one primary.', 'Finding'])
+  })
+})
+
+describe('monitoring in reviews', () => {
+  it('grades a monitoring dimension and accepts it in a reply', () => {
+    expect(DIMENSIONS.map(x => x.id)).toContain('operations')
+    const r = parseReview({ ...answer, scores: [{ dimension: 'operations', score: 2, comment: 'No alerts defined.' }] }, attempt)
+    expect(r.ok).toBe(true)
+  })
+  it('includes the reference monitoring summary and the written monitoring answer in the prompt', () => {
+    const withReasoning = { ...attempt, reasoning: { ...attempt.reasoning, monitoring: 'Page on SLO burn rate.' } }
+    const p = reviewPrompt(withReasoning, url, [], true)
+    expect(p).toContain('## Monitoring and alerting')
+    expect(p).toContain('Page on SLO burn rate.')
+    expect(p).toContain('"monitoring":{"slos":["Redirect availability: 99.99%"')
+    expect(p).toContain('- operations:')
   })
 })

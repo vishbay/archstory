@@ -14,6 +14,7 @@ const REASONING = [
   { key: 'estimates', title: 'Capacity estimates', hint: 'Requests per second, storage per year, bandwidth, cache size. Show the arithmetic.' },
   { key: 'api', title: 'API design', hint: 'The main endpoints or messages, with request and response shapes.' },
   { key: 'data_model', title: 'Data model', hint: 'Tables or keys, primary keys, indexes, and how data is partitioned.' },
+  { key: 'monitoring', title: 'Monitoring and alerting', hint: 'Your SLIs and SLOs, what pages someone versus what only files a ticket, and how you would trace a slow request.' },
   { key: 'tradeoffs', title: 'Trade-offs and bottlenecks', hint: 'What did you choose and what did you give up? What breaks first at 10× load?' },
 ]
 const LEVEL_ICON = { pass: '✓', fail: '✕', warn: '!', info: 'i' } as const

@@ -74,6 +74,113 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "timeline-latency",
+        "name": "Timeline speed",
+        "kind": "latency",
+        "sli": "Timeline requests served within the threshold, divided by all timeline requests, measured at the load balancer",
+        "target": 99,
+        "threshold": "< 200 ms"
+      },
+      {
+        "id": "timeline-availability",
+        "name": "Timeline availability",
+        "kind": "availability",
+        "sli": "Timeline requests that succeed, divided by all timeline requests",
+        "target": 99.95
+      },
+      {
+        "id": "post-freshness",
+        "name": "Post freshness",
+        "kind": "freshness",
+        "sli": "Posts visible in followers' timelines within the threshold, divided by all posts",
+        "target": 99,
+        "threshold": "< 5 s"
+      }
+    ],
+    "alerts": [
+      {
+        "id": "timeline-burn",
+        "severity": "page",
+        "when": "Timeline errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "People cannot read their feed. This is the main product.",
+        "target": "lb",
+        "slo": "timeline-availability"
+      },
+      {
+        "id": "timeline-slow",
+        "severity": "page",
+        "when": "p99 timeline latency above 200 ms for 10 minutes",
+        "why": "Slow feeds drive people away even when nothing is failing.",
+        "target": "timeline_svc",
+        "slo": "timeline-latency"
+      },
+      {
+        "id": "fanout-age",
+        "severity": "ticket",
+        "when": "Age of the oldest fan-out message above 30 seconds for 10 minutes",
+        "why": "Timelines go stale long before anyone sees an error, so this is the earliest warning.",
+        "target": "fanout_q",
+        "slo": "post-freshness"
+      },
+      {
+        "id": "cache-memory",
+        "severity": "ticket",
+        "when": "Timeline cache memory above 85%, or evictions rising",
+        "why": "Evicted timelines have to be rebuilt from the database, which is slow and expensive.",
+        "target": "timeline_cache"
+      },
+      {
+        "id": "worker-errors",
+        "severity": "ticket",
+        "when": "Fan-out worker failure rate above 1% for 15 minutes",
+        "why": "Failed deliveries leave some followers without the post until the retry succeeds.",
+        "target": "fanout_worker"
+      }
+    ],
+    "signals": [
+      {
+        "target": "fanout_q",
+        "name": "Age of the oldest message",
+        "metric": "queue_oldest_message_age_seconds",
+        "why": "How far behind fan-out is, and so how stale timelines are."
+      },
+      {
+        "target": "timeline_cache",
+        "name": "Evictions per second",
+        "metric": "cache_evictions_total",
+        "why": "Shows memory pressure before timelines start missing."
+      },
+      {
+        "target": "posts_db",
+        "name": "Throttled requests",
+        "metric": "store_throttled_total",
+        "why": "A viral post creates read spikes on a few keys."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Timelines load slowly",
+        "steps": [
+          "Open a slow trace: is the time in the cache read, the post lookup or the celebrity merge?",
+          "Check the timeline cache hit ratio and evictions.",
+          "Check posts store throttling: a viral post makes hot keys.",
+          "Count how many celebrity accounts the user follows: their posts are merged at read time."
+        ]
+      },
+      {
+        "symptom": "New posts do not appear",
+        "steps": [
+          "Check the fan-out queue age first: it is the best single indicator.",
+          "Look at worker failures and retries.",
+          "Check follower graph latency: fan-out pages through followers.",
+          "For celebrities, posts are not fanned out, so check the read-time merge path instead."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "client",

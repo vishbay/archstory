@@ -60,7 +60,8 @@ Rules the schema cannot express (the tool rejects designs that break them):
 8. Include a "network" section with 3 zones and public, app and data subnets unless the task says otherwise. Set "ha" on a node only when its default is wrong (defaults: services active-active, sql_db and cache primary-standby, managed services regional).
 9. Write 2 to 4 flows: the main read path, the main write path, and one failure or edge case. Give every request and async step a one-sentence "detail" explaining why the hop happens (plain responses may omit it), and add an example "payload" (HTTP, SQL, JSON) on the important ones.
 10. Fill in requirements (functional, nonFunctional, and scale with real numbers) and 4 to 6 notes of kinds tradeoff, scaling, failure or security.
-11. Do not use em dashes anywhere in the text.
+11. Include an "observability" section: 2 to 4 SLOs taken from the requirements (target is a percent, e.g. 99.9), 4 to 6 alerts (use severity "page" for symptoms users feel such as SLO burn, "ticket" for causes), signals specific to this design on the component ids, and 1 or 2 "debug" paths. Alerts and signals must reference real node ids and SLO ids. Do NOT add telemetry components (metrics store, log store, collector) as nodes: standard signals per component type are built in.
+12. Do not use em dashes anywhere in the text.
 
 JSON Schema:
 ${schema}

@@ -62,6 +62,104 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "suggest-latency",
+        "name": "Suggestion speed",
+        "kind": "latency",
+        "sli": "Suggest requests answered within the threshold, divided by all, measured at the CDN",
+        "target": 99,
+        "threshold": "< 100 ms"
+      },
+      {
+        "id": "suggest-availability",
+        "name": "Suggest availability",
+        "kind": "availability",
+        "sli": "Suggest requests that succeed divided by all suggest requests",
+        "target": 99.99
+      },
+      {
+        "id": "trend-freshness",
+        "name": "Trend freshness",
+        "kind": "freshness",
+        "sli": "Trending queries appearing in suggestions within the threshold, divided by all trending queries",
+        "target": 95,
+        "threshold": "< 90 min"
+      }
+    ],
+    "alerts": [
+      {
+        "id": "suggest-burn",
+        "severity": "page",
+        "when": "Suggest errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Search feels broken without suggestions, even though search itself still works.",
+        "target": "lb",
+        "slo": "suggest-availability"
+      },
+      {
+        "id": "suggest-slow",
+        "severity": "page",
+        "when": "p99 latency above 100 ms for 10 minutes",
+        "why": "Suggestions must keep up with typing, or they are worse than none.",
+        "target": "suggest",
+        "slo": "suggest-latency"
+      },
+      {
+        "id": "stale-trie",
+        "severity": "ticket",
+        "when": "Loaded trie older than 2 hours",
+        "why": "The hourly rebuild or the rollout is failing, and suggestions grow stale.",
+        "target": "suggest",
+        "slo": "trend-freshness"
+      },
+      {
+        "id": "cdn-hit",
+        "severity": "ticket",
+        "when": "CDN hit ratio below 80% for 30 minutes",
+        "why": "More requests reach the origin than the sizing assumed.",
+        "target": "cdn"
+      },
+      {
+        "id": "build-failed",
+        "severity": "ticket",
+        "when": "Trie build failed, or took over twice its normal time",
+        "why": "Fix before the next rebuild, or the trie goes stale.",
+        "target": "builder"
+      }
+    ],
+    "signals": [
+      {
+        "target": "suggest",
+        "name": "Trie version age",
+        "metric": "trie_version_age_seconds",
+        "why": "The direct measure of how stale suggestions are."
+      },
+      {
+        "target": "builder",
+        "name": "Build duration and output size",
+        "metric": "job_duration_seconds",
+        "why": "A sudden size drop usually means broken input, not fewer queries."
+      },
+      {
+        "target": "aggregator",
+        "name": "Lag behind the search log",
+        "metric": "stream_consumer_lag_seconds",
+        "why": "Trending queries need fresh counts."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Suggestions look stale",
+        "steps": [
+          "Check the trie version age on each serving node.",
+          "Check the last builder run and its output size.",
+          "Check how far the aggregator lags behind the search log.",
+          "Roll back to the previous snapshot if the new one is bad."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "client",

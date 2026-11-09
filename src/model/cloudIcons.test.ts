@@ -24,6 +24,18 @@ describe('cloud icons', () => {
     expect(cloudIconUrl(n('NLB', 'External passthrough Network Load Balancer'), 'gcp')).toMatch(/gcp\/load-balancing\.svg$/)
     expect(cloudIconUrl(n('ALB', 'x'), 'neutral')).toBeNull()
   })
+  it('matches the monitoring products', () => {
+    const n = (aws: string, gcp: string) => ({ id: 'x', label: 'X', kind: 'metrics_store', cloud: { aws, gcp } })
+    expect(cloudIconUrl(n('CloudWatch Logs', 'Cloud Logging'), 'aws')).toMatch(/aws\/cloudwatch-logs\.svg$/)
+    expect(cloudIconUrl(n('CloudWatch Alarms', 'Cloud Monitoring alerts'), 'aws')).toMatch(/aws\/cloudwatch-alarm\.svg$/)
+    expect(cloudIconUrl(n('CloudWatch Metrics', 'Cloud Monitoring'), 'aws')).toMatch(/aws\/cloudwatch\.svg$/)
+    expect(cloudIconUrl(n('X-Ray', 'Cloud Trace'), 'aws')).toMatch(/aws\/xray\.svg$/)
+    expect(cloudIconUrl(n('AWS Distro for OpenTelemetry', 'x'), 'aws')).toMatch(/aws\/adot\.svg$/)
+    expect(cloudIconUrl(n('x', 'Cloud Logging'), 'gcp')).toMatch(/gcp\/logging\.svg$/)
+    expect(cloudIconUrl(n('x', 'Cloud Trace'), 'gcp')).toMatch(/gcp\/trace\.svg$/)
+    expect(cloudIconUrl(n('x', 'Cloud Monitoring alerts'), 'gcp')).toMatch(/gcp\/monitoring\.svg$/)
+    expect(cloudIconUrl(n('x', 'OpenTelemetry Collector'), 'gcp')).toBeNull()   // no official icon: emoji
+  })
   it('uses no icon unless the product is named exactly', () => {
     const n = (aws?: string) => ({ id: 'x', label: 'X', kind: 'cache', cloud: aws ? { aws } : undefined })
     expect(cloudIconUrl(n(), 'aws')).toBeNull()                       // no provider name: no kind fallback

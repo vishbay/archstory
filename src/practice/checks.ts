@@ -26,6 +26,7 @@ const FAMILY_NAME: Record<string, string> = {
 }
 const nameOfFamily = (f: string) => FAMILY_NAME[f] ?? `a ${f.replace(/_/g, ' ')}`
 const UNCHECKED = new Set(['client', 'service'])
+const TELEMETRY_KINDS = new Set(['telemetry_collector', 'metrics_store', 'log_store', 'trace_store', 'alerting', 'oncall'])
 // Pieces interviewers usually treat as implied: worth saying out loud, but not a failure when missing.
 const IMPLIED = new Set(['dns'])
 
@@ -100,8 +101,17 @@ export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: 
       : { id: 'spof', level: 'pass', title: 'Survives losing one zone' })
   }
 
+  // 7b. Monitoring: asked for when the reference has it. A telemetry component, written reasoning, or an
+  // observability section all count as having said something.
+  if (ref.observability) {
+    const said = !!att.observability || att.nodes.some(n => TELEMETRY_KINDS.has(n.kind)) || !!att.reasoning?.monitoring?.trim()
+    add(said
+      ? { id: 'monitoring', level: 'pass', title: 'Says how it would be monitored' }
+      : { id: 'monitoring', level: 'warn', title: 'No monitoring yet', detail: `Say how you would know it is healthy: SLIs and SLOs, what pages someone, how you would trace a slow request. The reference tracks: ${ref.observability.slos.map(s => s.name).join(', ')}. Add a monitoring component or write it under Reasoning.` })
+  }
+
   // 8. Extras are fine, but worth defending
-  for (const fam of [...mine].filter(f => !theirs.has(f) && !UNCHECKED.has(f)))
+  for (const fam of [...mine].filter(f => !theirs.has(f) && !UNCHECKED.has(f) && !TELEMETRY_KINDS.has(f)))
     add({ id: `extra:${fam}`, level: 'info', title: `You added ${nameOfFamily(fam)}; the reference does not use one`, detail: 'Not wrong, but be ready to explain what it buys you.' })
 
   return summarize(checks)

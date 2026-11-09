@@ -51,6 +51,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
   const [showRef, setShowRef] = useState(false)
   const [view, setView] = useState<'canvas' | 'timeline'>('canvas')
   const [network, setNetwork] = useState(false)
+  const [monitoring, setMonitoring] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [picked, setPicked] = useState<{ from: string; to: string } | null>(null)
   const [flowId, setFlowId] = useState('')
@@ -98,7 +99,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
     setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
   }
   const onNode = (id: string | null) => {
-    if (showRef) { setSelected(id); if (id) setRefTab('component'); return }
+    if (showRef) { setSelected(id); if (id) setRefTab(t => (t === 'monitoring' ? t : 'component')); return }
     if (connecting && id) {
       if (connFrom && connFrom !== id) setAttempt(connect(attempt, connFrom, id))
       setConnFrom(id)
@@ -184,6 +185,9 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
           {view === 'canvas' && <>
             <ToolbarSep />
             <Toggle on={network && !!shown.network} disabled={!shown.network} onClick={() => setNetwork(v => !v)} title="Show VPC and subnets">Network</Toggle>
+            {showRef && ref.observability && (
+              <Toggle on={monitoring} onClick={() => { setMonitoring(v => !v); if (!monitoring) setRefTab('monitoring') }} title="Show the reference's SLOs, alerts and telemetry">Monitoring</Toggle>
+            )}
           </>}
           <ToolbarSpacer />
           {!showRef && <>
@@ -216,7 +220,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
             : <ReactFlowProvider>
                 <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  zonesView={false} zone={NO_ZONES} insets={insets} selected={selected} onSelect={onNode} colorMode={colorMode}
+                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={insets} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={showRef ? undefined : {
                     onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
                     onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },
@@ -238,8 +242,8 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
       {rightOpen && (
         <aside className="right">
           {showRef
-            ? <Inspector design={ref} flow={flow} player={player} cloud={cloud} network={network && !!ref.network} zone={NO_ZONES}
-                selected={selected} tab={refTab} onTab={setRefTab} onFlow={setFlowId} />
+            ? <Inspector design={ref} flow={flow} player={player} cloud={cloud} network={network && !!ref.network} monitoring={monitoring} zone={NO_ZONES}
+                selected={selected} tab={refTab} onTab={setRefTab} onFlow={setFlowId} onSelect={id => setSelected(id)} />
             : <PracticeInspector attempt={attempt} setAttempt={setAttempt} cloud={cloud} tab={tab} onTab={setTab}
                 selected={selected} onSelect={setSelected} picked={picked} onPick={setPicked}
                 flow={flow} onFlow={id => { setFlowId(id); stopRecording() }} player={player}

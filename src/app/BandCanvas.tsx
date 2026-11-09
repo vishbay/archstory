@@ -7,8 +7,9 @@ import { edgeId, findEdge, type Design, type DNode, type Flow, type StepKind, ty
 import { kindInfo, nameOf, TIER_INFO, type Cloud } from '../model/kinds'
 import { subnetLabel, vpcLabel } from '../model/network'
 import { impactOf, zoneBadge, zoneName, type Level } from '../model/availability'
-import { layoutBands, NODE_W, type Layout, type Side } from '../layout/bands'
+import { layoutBands, NODE_W, OBS_NODE_W, type Layout, type Side } from '../layout/bands'
 import { ZNODE_W, type Hop, type ZoneLayout } from '../layout/zones'
+import { emits, signalsFor, telemetryNodes, TELEMETRY_EDGES, traceId } from '../model/observability'
 import { NodeIcon } from './NodeIcon'
 import { Packet } from './Packet'
 import { KIND_VAR } from './stepKinds'
@@ -22,10 +23,10 @@ export interface ZoneState { failed: number | null; home: number; zl: ZoneLayout
 
 // ---------- background nodes ----------
 function BandNode({ data }: NodeProps) {
-  const { tier, w, h } = data as { tier: Tier; w: number; h: number }
+  const { tier, title, blurb, w, h } = data as { tier?: Tier; title?: string; blurb?: string; w: number; h: number }
   return (
     <div className="band" style={{ width: w, height: h }}>
-      <div className="band-head"><b>{TIER_INFO[tier].title}</b><span>{TIER_INFO[tier].blurb}</span></div>
+      <div className="band-head"><b>{title ?? TIER_INFO[tier!].title}</b><span>{blurb ?? TIER_INFO[tier!].blurb}</span></div>
     </div>
   )
 }
@@ -51,16 +52,18 @@ type NodeData = {
   node: DNode; cloud: Cloud; state: State; selected: boolean; note?: string
   tag?: { text: string; level?: Level | 'role' }; failed?: boolean; compact?: boolean
   editable?: boolean; flagged?: boolean; recordingFrom?: boolean; mark?: { count: number; severity: string }
+  /** Monitoring layer: which telemetry this component emits, and whether it is a telemetry part itself. */
+  signals?: { metrics: boolean; logs: boolean; traces: boolean }; telemetry?: boolean
 }
 const SIDES: [Side, Position][] = [['top', Position.Top], ['right', Position.Right], ['bottom', Position.Bottom], ['left', Position.Left]]
 
 function ComponentNode({ data }: NodeProps) {
-  const { node: n, cloud, state, selected, note, tag, failed, compact, editable, flagged, recordingFrom, mark } = data as NodeData
+  const { node: n, cloud, state, selected, note, tag, failed, compact, editable, flagged, recordingFrom, mark, signals, telemetry } = data as NodeData
   const name = nameOf(n, cloud)
-  const cls = [`node st-${state}`, selected && 'selected', failed && 'failed', compact && 'compact', editable && 'editable', flagged && 'flagged', recordingFrom && 'rec-from']
+  const cls = [`node st-${state}`, selected && 'selected', failed && 'failed', compact && 'compact', editable && 'editable', flagged && 'flagged', recordingFrom && 'rec-from', telemetry && 'telemetry']
   return (
     <div className={cls.filter(Boolean).join(' ')}
-      style={{ width: compact ? ZNODE_W : NODE_W }} title={compact ? name : undefined}>
+      style={{ width: telemetry ? OBS_NODE_W : compact ? ZNODE_W : NODE_W }} title={compact ? name : undefined}>
       {note && <div className="node-note">{note}</div>}
       {tag && <span className={`node-tag tag-${tag.level ?? 'info'}`}>{tag.text}</span>}
       {mark && <span className={`node-mark sev-${mark.severity}`} title={`${mark.count} review finding${mark.count > 1 ? 's' : ''}`}>{mark.count}</span>}
@@ -70,6 +73,11 @@ function ComponentNode({ data }: NodeProps) {
         <div className="node-sub">{name !== n.label ? n.label : kindInfo(n.kind).label}</div>
       </div>
       {n.replicas && <span className="node-rep">×{n.replicas}</span>}
+      {signals && (signals.metrics || signals.logs || signals.traces) && (
+        <span className="node-signals" title="Telemetry this component emits: metrics, logs, traces">
+          {signals.metrics && <i>M</i>}{signals.logs && <i>L</i>}{signals.traces && <i>T</i>}
+        </span>
+      )}
       {SIDES.map(([s, p]) => <Handle key={`s-${s}`} id={`s-${s}`} type="source" position={p} isConnectable={!!editable} />)}
       {SIDES.map(([s, p]) => <Handle key={`t-${s}`} id={`t-${s}`} type="target" position={p} isConnectable={!!editable} />)}
     </div>
@@ -134,8 +142,8 @@ export interface EditProps {
   mode?: 'record' | 'connect' | null
 }
 
-export function BandCanvas({ design, flow, player, cloud, network, zonesView, zone, selected, onSelect, colorMode, edit, insets = { left: 12, right: 12 } }: {
-  design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; zonesView: boolean; zone: ZoneState
+export function BandCanvas({ design, flow, player, cloud, network, monitoring = false, zonesView, zone, selected, onSelect, colorMode, edit, insets = { left: 12, right: 12 } }: {
+  design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zonesView: boolean; zone: ZoneState
   selected: string | null; onSelect: (id: string | null) => void; colorMode: 'light' | 'dark'; edit?: EditProps
   /** Pixels at the left and right edge covered by floating panels. */
   insets?: { left: number; right: number }
@@ -154,7 +162,8 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
     [count]) // eslint-disable-line react-hooks/exhaustive-deps
   const net = network && !!design.network
   const zoned = net && zonesView && !!zone.zl
-  const L = useMemo(() => layoutBands(design, { network: net }), [design, net])
+  const mon = monitoring && !!design.observability && !zoned   // the zones view has no telemetry band
+  const L = useMemo(() => layoutBands(design, { network: net, observability: mon }), [design, net, mon])
   const { step, nonce, packetMs } = player
 
   // Camera follows the request: frame the two components of the current hop; zoom back out on reset.
@@ -240,9 +249,15 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
       ...backdrop(design, cloud, L),
       ...L.groups.map(g => ({ id: `group:${g.id}`, type: 'boundary', position: { x: g.x, y: g.y }, ...fixed, zIndex: -1,
         data: { label: g.label, kind: g.kind, w: g.w, h: g.h } })),
+      ...(L.obs ? [
+        { id: 'band:obs', type: 'band', position: { x: L.obs.band.x, y: L.obs.band.y }, ...fixed, zIndex: -5,
+          data: { title: 'Monitoring', blurb: 'Every component emits metrics, logs and traces; alerts page a person', w: L.obs.band.w, h: L.obs.band.h } },
+        ...telemetryNodes().map(t => ({ id: t.id, type: 'component', position: L.obs!.pos[t.id], draggable: false,
+          data: { node: t, cloud, state: 'visited' as State, selected: false, compact: true, telemetry: true } satisfies NodeData })),
+      ] : []),
       ...design.nodes.map(n => ({
         id: n.id, type: 'component', position: L.pos[n.id], draggable: false,
-        data: { node: n, cloud, state: nodeState(n.id), selected: selected === n.id, tag: tagFor(n),
+        data: { node: n, cloud, state: nodeState(n.id), selected: selected === n.id, tag: tagFor(n), signals: mon ? emits(n.kind) : undefined,
           editable: !!edit, flagged: edit?.flagged.has(n.id), recordingFrom: edit?.recordingFrom === n.id, mark: edit?.marks?.get(n.id),
           note: cur?.kind === 'local' && cur.from === n.id ? cur.label : undefined } satisfies NodeData,
       })),
@@ -257,11 +272,15 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
       }
       return { id: edgeId(e), source: e.from, target: e.to, sourceHandle: `s-${sh}`, targetHandle: `t-${th}`, type: 'flow', data, markerEnd: marker(data) }
     })
+    if (L.obs) for (const [a, b] of TELEMETRY_EDGES) {
+      const data: EdgeData = { state: 'visited', async: true }
+      edges.push({ id: `${a}->${b}`, source: a, target: b, sourceHandle: 's-right', targetHandle: 't-left', type: 'flow', data, markerEnd: marker(data) })
+    }
     return { nodes, edges }
-  }, [L, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, failed, edit])
+  }, [L, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit])
 
   return (
-    <ReactFlow key={`${design.id}:${net}:${zoned}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+    <ReactFlow key={`${design.id}:${net}:${zoned}:${mon}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={!!edit} elementsSelectable={false} colorMode={colorMode}
       connectionMode={ConnectionMode.Loose}
       onConnectStart={(_, h) => { dragFrom.current = h.nodeId }}
@@ -271,7 +290,7 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
         dragFrom.current = null
       }}
       onEdgeClick={(_, e) => edit?.onEdgeClick(e.source, e.target)}
-      onNodeClick={(_, n) => onSelect(n.type === 'component' ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
+      onNodeClick={(_, n) => onSelect(n.type === 'component' && !(n.data as NodeData).telemetry ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
       fitView fitViewOptions={{ padding: pad(24, 24, 24) }}
       minZoom={0.2} maxZoom={1.3} proOptions={{ hideAttribution: true }}>
       <Background gap={24} color="var(--grid)" />
@@ -280,16 +299,19 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
           className={follow ? 'follow-on' : ''} aria-pressed={follow}>◎</ControlButton>
       </Controls>
       {flow?.steps[step] && <Caption design={design} step={flow.steps[step]} index={step} total={flow.steps.length} cloud={cloud}
-        cross={zoned && !!zone.hops?.[step]?.cross} />}
+        cross={zoned && !!zone.hops?.[step]?.cross} monitoring={mon} flowId={flow.id} />}
     </ReactFlow>
   )
 }
 
 /** Short on-canvas caption for the current hop, so the explanation sits next to the action. */
-function Caption({ design, step, index, total, cloud, cross }: {
-  design: Design; step: Flow['steps'][number]; index: number; total: number; cloud: Cloud; cross: boolean
+function Caption({ design, step, index, total, cloud, cross, monitoring, flowId }: {
+  design: Design; step: Flow['steps'][number]; index: number; total: number; cloud: Cloud; cross: boolean; monitoring: boolean; flowId: string
 }) {
   const name = (id: string) => { const n = design.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
+  // Whoever answers records the request's latency and errors: the callee for a request, the sender for a response.
+  const recorder = monitoring ? design.nodes.find(x => x.id === (step.kind === 'res' ? step.from : step.to)) : undefined
+  const watched = recorder && Object.values(emits(recorder.kind)).some(Boolean)
   return (
     <div className="caption" role="status" aria-live="polite">
       <div className="caption-head">
@@ -300,6 +322,14 @@ function Caption({ design, step, index, total, cloud, cross }: {
         {cross && <span className="muted">· cross-zone</span>}
       </div>
       {step.detail && <p>{step.detail}</p>}
+      {monitoring && (
+        <div className="caption-obs">
+          <span className="mono">trace {traceId(flowId)}</span><span>same id on every hop</span>
+          {recorder && (watched
+            ? <span><b>{name(recorder.id)}</b> records {signalsFor(recorder.kind).slice(0, 2).map(s => <code key={s.metric}>{s.metric}</code>)}</span>
+            : <span><b>{name(recorder.id)}</b> cannot be instrumented: measured from our side</span>)}
+        </div>
+      )}
     </div>
   )
 }

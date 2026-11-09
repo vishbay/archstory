@@ -65,6 +65,103 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "limiter-latency",
+        "name": "Limiter overhead",
+        "kind": "latency",
+        "sli": "Limit decisions made within the threshold, divided by all decisions",
+        "target": 99.9,
+        "threshold": "< 2 ms"
+      },
+      {
+        "id": "api-availability",
+        "name": "API availability with the limiter",
+        "kind": "availability",
+        "sli": "Requests that succeed divided by all requests, even when the limiter is degraded",
+        "target": 99.99
+      },
+      {
+        "id": "limit-accuracy",
+        "name": "Limit accuracy",
+        "kind": "correctness",
+        "sli": "Keys admitted within 5% of their configured rate, divided by all keys",
+        "target": 99
+      }
+    ],
+    "alerts": [
+      {
+        "id": "api-burn",
+        "severity": "page",
+        "when": "API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "The limiter must never be the reason the API is down.",
+        "target": "gw",
+        "slo": "api-availability"
+      },
+      {
+        "id": "redis-slow",
+        "severity": "ticket",
+        "when": "Counter store p99 above 2 ms for 10 minutes",
+        "why": "The limiter adds that latency to every request.",
+        "target": "counters",
+        "slo": "limiter-latency"
+      },
+      {
+        "id": "fail-open",
+        "severity": "ticket",
+        "when": "Fail-open decisions above zero for 5 minutes",
+        "why": "Limits are not being enforced. Page if it lasts 15 minutes.",
+        "target": "gw",
+        "slo": "limit-accuracy"
+      },
+      {
+        "id": "reject-spike",
+        "severity": "ticket",
+        "when": "Rejection ratio for one key above 50% for 10 minutes",
+        "why": "An abusive client, or a plan limit set too low for what they need.",
+        "target": "gw"
+      },
+      {
+        "id": "config-stale",
+        "severity": "ticket",
+        "when": "Gateways running a limits table older than 5 minutes",
+        "why": "Plan changes and overrides are not taking effect.",
+        "target": "config"
+      }
+    ],
+    "signals": [
+      {
+        "target": "gw",
+        "name": "Fail-open count",
+        "metric": "ratelimit_failopen_total",
+        "why": "Counts requests let through because the counter store was unreachable."
+      },
+      {
+        "target": "counters",
+        "name": "Latency and evictions",
+        "metric": "redis_latency_seconds",
+        "why": "An evicted bucket resets a key to a full allowance."
+      },
+      {
+        "target": "gw",
+        "name": "Allowed against rejected, by plan",
+        "metric": "ratelimit_decisions_total{result,plan}",
+        "why": "Shows whether limits match how customers really use the API."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Customers get 429 responses they should not",
+        "steps": [
+          "Check the limit the gateway has for that key: is the config table fresh?",
+          "Look at that key's decisions over time: a burst or sustained traffic?",
+          "Check counter store evictions and failovers: lost state changes the allowance.",
+          "Remember the Redis script uses server time, so gateway clock drift is not the cause."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "client",

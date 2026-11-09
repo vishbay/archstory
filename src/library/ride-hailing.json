@@ -72,6 +72,120 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "match-time",
+        "name": "Time to match",
+        "kind": "latency",
+        "sli": "Ride requests with a driver assigned within the threshold, divided by all requests, measured by the matching service",
+        "target": 95,
+        "threshold": "< 5 s"
+      },
+      {
+        "id": "trip-availability",
+        "name": "Trip API availability",
+        "kind": "availability",
+        "sli": "Trip requests that succeed divided by all trip requests, at the load balancer",
+        "target": 99.95
+      },
+      {
+        "id": "location-freshness",
+        "name": "Driver position freshness",
+        "kind": "freshness",
+        "sli": "Driver positions in the index newer than the threshold, divided by all online drivers",
+        "target": 99,
+        "threshold": "< 10 s"
+      },
+      {
+        "id": "charge-once",
+        "name": "Charged once",
+        "kind": "correctness",
+        "sli": "Completed trips charged exactly once, divided by completed trips, from nightly reconciliation",
+        "target": 100
+      }
+    ],
+    "alerts": [
+      {
+        "id": "match-failing",
+        "severity": "page",
+        "when": "Unmatched requests above 10% for 5 minutes while drivers are available nearby",
+        "why": "Riders are waiting and drivers are idle, which means matching is broken, not that supply is low.",
+        "target": "matching",
+        "slo": "match-time"
+      },
+      {
+        "id": "trip-burn",
+        "severity": "page",
+        "when": "Trip API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Riders cannot request or complete trips.",
+        "target": "lb",
+        "slo": "trip-availability"
+      },
+      {
+        "id": "duplicate-charge",
+        "severity": "page",
+        "when": "Any trip charged more than once, found by reconciliation",
+        "why": "It is money, and trust is hard to win back. Stop and fix.",
+        "target": "psp",
+        "slo": "charge-once"
+      },
+      {
+        "id": "stale-positions",
+        "severity": "ticket",
+        "when": "More than 5% of online drivers have a position older than 20 seconds",
+        "why": "Matching starts offering drivers who have already moved.",
+        "target": "geo_index",
+        "slo": "location-freshness"
+      },
+      {
+        "id": "ws-drops",
+        "severity": "ticket",
+        "when": "WebSocket disconnects above 3 times the normal rate for 10 minutes",
+        "why": "Usually a gateway deploy or a network problem. Drivers drop out of the pool.",
+        "target": "ws"
+      }
+    ],
+    "signals": [
+      {
+        "target": "matching",
+        "name": "Unmatched requests by reason",
+        "metric": "match_failures_total{reason}",
+        "why": "Separates no drivers nearby from lock contention and map provider failures."
+      },
+      {
+        "target": "ws",
+        "name": "Open connections per node",
+        "metric": "ws_connections_per_node",
+        "why": "A node near its limit drops connections and causes a reconnect storm."
+      },
+      {
+        "target": "location_svc",
+        "name": "Position updates per second against expected",
+        "metric": "geo_updates_total",
+        "why": "A sudden drop usually means an app or gateway problem, not drivers going offline."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Riders wait too long for a match",
+        "steps": [
+          "Check supply and demand for that city: it may simply be too few drivers.",
+          "Open a slow match trace: nearby search, the maps ETA call, or the lock?",
+          "Check the maps provider latency and error rate.",
+          "Check geo index shard load for that city."
+        ]
+      },
+      {
+        "symptom": "Drivers show as offline",
+        "steps": [
+          "Check WebSocket disconnects by reason.",
+          "Check gateway connections per node: a node near its limit drops connections.",
+          "Check recent gateway deploys: draining connections too fast causes reconnect storms."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "rider",

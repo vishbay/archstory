@@ -1,6 +1,7 @@
 import type { Design, Flow } from '../model/schema'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
+import { MonitoringPanel } from './MonitoringPanel'
 import { cloudIconUrl } from '../model/cloudIcons'
 import { crossing, placement } from '../model/network'
 import { haOf, impactOf, placementsOf, resilience, zoneName } from '../model/availability'
@@ -8,7 +9,7 @@ import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 
-export type InspectorTab = 'step' | 'component' | 'zones' | 'notes'
+export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes'
 
 const HA_TEXT = {
   'active-active': 'Active in every zone behind the load balancer',
@@ -20,9 +21,9 @@ const HA_TEXT = {
 
 const NOTE_ICON = { tradeoff: '⚖️', scaling: '📈', failure: '💥', security: '🔐', note: '📝' } as const
 
-export function Inspector({ design, flow, player, cloud, network, zone, selected, tab, onTab, onFlow }: {
-  design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; zone: ZoneState
-  selected: string | null; tab: InspectorTab; onTab: (t: InspectorTab) => void; onFlow: (id: string) => void
+export function Inspector({ design, flow, player, cloud, network, monitoring = false, zone, selected, tab, onTab, onFlow, onSelect }: {
+  design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zone: ZoneState
+  selected: string | null; tab: InspectorTab; onTab: (t: InspectorTab) => void; onFlow: (id: string) => void; onSelect?: (id: string) => void
 }) {
   const byId = Object.fromEntries(design.nodes.map(n => [n.id, n]))
   const name = (id: string) => nameOf(byId[id], cloud)
@@ -30,8 +31,9 @@ export function Inspector({ design, flow, player, cloud, network, zone, selected
   const cur = flow?.steps[step]
   const node = selected ? byId[selected] : undefined
   const zones = network && (design.network?.zones ?? 1) > 1
-  const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), 'notes'] as const)
-  const shown = tab === 'zones' && !zones ? 'step' : tab
+  const mon = monitoring && !!design.observability
+  const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), ...(mon ? ['monitoring'] as const : []), 'notes'] as const)
+  const shown = (tab === 'zones' && !zones) || (tab === 'monitoring' && !mon) ? 'step' : tab
   const zoneOfInst = (id: string | null) => (id ? zone.zl?.insts.find(i => i.id === id)?.zone ?? null : null)
   const instLabel = (id: string | null) => { const z = zoneOfInst(id); return z === null ? '' : ` (${zoneName(z, cloud)})` }
   const hop = zone.hops?.[step]
@@ -44,7 +46,7 @@ export function Inspector({ design, flow, player, cloud, network, zone, selected
       <div className="tabs" role="tablist">
         {tabs.map(t => (
           <button key={t} role="tab" aria-selected={shown === t} className={shown === t ? 'on' : ''} onClick={() => onTab(t)}>
-            {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : `Notes (${design.notes.length})`}
+            {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : t === 'monitoring' ? 'Monitoring' : `Notes (${design.notes.length})`}
           </button>
         ))}
       </div>
@@ -149,6 +151,8 @@ export function Inspector({ design, flow, player, cloud, network, zone, selected
             </ul>
           </>
         )}
+
+        {shown === 'monitoring' && <MonitoringPanel design={design} cloud={cloud} selected={selected} onSelect={id => onSelect?.(id)} />}
 
         {shown === 'notes' && (
           design.notes.length === 0 ? <p className="muted">No design notes.</p> :

@@ -27,6 +27,8 @@ const AWS_SRC: Record<string, string> = {
   'cognito': 'Amazon-Cognito', 'iam': 'AWS-Identity-and-Access-Management', 'secrets-manager': 'AWS-Secrets-Manager',
   'location': 'Amazon-Location-Service', 'ses': 'Amazon-Simple-Email-Service', 'pinpoint': 'Amazon-Pinpoint',
   'cloudwatch': 'Amazon-CloudWatch', 'mediaconvert': 'AWS-Elemental-MediaConvert',
+  'cloudwatch-logs': 'res:Amazon-CloudWatch_Logs', 'cloudwatch-alarm': 'res:Amazon-CloudWatch_Alarm', 'xray': 'AWS-X-Ray',
+  'adot': 'AWS-Distro-for-OpenTelemetry', 'managed-grafana': 'Amazon-Managed-Grafana', 'managed-prometheus': 'Amazon-Managed-Service-for-Prometheus',
 }
 
 // key → folder in the core package (new-style unique icon) or the legacy package
@@ -41,7 +43,7 @@ const GCP_SRC: Record<string, { core: string } | { legacy: string }> = {
   'cloud-tasks': { legacy: 'cloud_tasks' }, 'cloud-scheduler': { legacy: 'cloud_scheduler' }, 'workflows': { legacy: 'workflows' },
   'dataflow': { legacy: 'dataflow' }, 'bigquery': { core: 'BigQuery' }, 'looker': { core: 'Looker' },
   'identity-platform': { legacy: 'identity_platform' }, 'iam': { legacy: 'identity_and_access_management' },
-  'secret-manager': { legacy: 'secret_manager' }, 'maps': { legacy: 'google_maps_platform' }, 'monitoring': { legacy: 'cloud_monitoring' },
+  'secret-manager': { legacy: 'secret_manager' }, 'maps': { legacy: 'google_maps_platform' }, 'monitoring': { legacy: 'cloud_monitoring' }, 'logging': { legacy: 'cloud_logging' }, 'trace': { legacy: 'trace' },
 }
 
 const work = mkdtempSync(join(tmpdir(), 'sdl-icons-'))

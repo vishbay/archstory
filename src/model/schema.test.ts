@@ -49,3 +49,26 @@ describe('pre-rename files', () => {
     expect(r.ok && r.design.schema).toBe('archstory/v1')
   })
 })
+
+describe('observability section', () => {
+  const withObs = (o: object) => ({ ...minimal(), observability: o })
+  const slo = { id: 's1', name: 'Latency', kind: 'latency', sli: 'good / all', target: 99, threshold: '< 100 ms' }
+  it('accepts SLOs, alerts, signals and debug paths and fills defaults', () => {
+    const r = parseDesign(withObs({ slos: [slo], alerts: [{ id: 'a1', severity: 'page', when: 'x', why: 'y', target: 'api', slo: 's1' }],
+      signals: [{ target: 'api', name: 'Queue age' }], debug: [{ symptom: 's', steps: ['one'] }] }))
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.design.observability!.slos[0].window).toBe(30)
+  })
+  it('rejects unknown components and SLOs, duplicate ids, and targets outside 50 to 100', () => {
+    const r = parseDesign(withObs({ slos: [slo, slo], alerts: [{ id: 'a1', severity: 'page', when: 'x', why: 'y', target: 'ghost', slo: 'nope' }], signals: [{ target: 'ghost', name: 'n' }] }))
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.errors).toContain('observability.slos: duplicate id "s1"')
+      expect(r.errors).toContain('alert "a1": unknown component "ghost"')
+      expect(r.errors).toContain('alert "a1": unknown SLO "nope"')
+      expect(r.errors).toContain('observability.signals[0]: unknown component "ghost"')
+    }
+    expect(parseDesign(withObs({ slos: [{ ...slo, target: 30 }] })).ok).toBe(false)
+  })
+  it('is optional', () => { expect(parseDesign(minimal()).ok).toBe(true) })
+})

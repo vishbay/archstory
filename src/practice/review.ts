@@ -10,6 +10,7 @@ export const DIMENSIONS = [
   { id: 'data', title: 'Data', rubric: 'storage choices, data model, caching and consistency' },
   { id: 'scale', title: 'Scalability', rubric: 'handles the stated load; names bottlenecks; partitioning and replication' },
   { id: 'reliability', title: 'Reliability', rubric: 'no single points of failure; failure handling; meets availability targets' },
+  { id: 'operations', title: 'Monitoring', rubric: 'how it would be run: SLIs and SLOs tied to the requirements, alerts on symptoms users feel, tracing and logging to find a cause (from the written reasoning or monitoring components if present, otherwise say it was not addressed)' },
   { id: 'tradeoffs', title: 'Trade-offs', rubric: 'explains choices and alternatives (from the written reasoning if present, otherwise judged from the design)' },
 ] as const
 export const SEVERITIES = ['critical', 'major', 'minor', 'praise'] as const
@@ -59,7 +60,7 @@ export function signature(d: Design): string {
 
 const REASONING_TITLES: Record<string, string> = {
   requirements: 'Requirements and assumptions', estimates: 'Capacity estimates', api: 'API design',
-  data_model: 'Data model', tradeoffs: 'Trade-offs and bottlenecks',
+  data_model: 'Data model', monitoring: 'Monitoring and alerting', tradeoffs: 'Trade-offs and bottlenecks',
 }
 
 const EXAMPLE: Review = {
@@ -85,6 +86,11 @@ export function reviewPrompt(attempt: Design, ref: Design, checks: Check[], incl
     edges: ref.edges,
     flows: ref.flows.map(f => ({ title: f.title, steps: f.steps.map(s => `${s.from} → ${s.to}: ${s.label}`) })),
     notes: ref.notes.map(n => n.text),
+    monitoring: ref.observability && {
+      slos: ref.observability.slos.map(s => `${s.name}: ${s.target}%${s.threshold ? ` ${s.threshold}` : ''}`),
+      pages: ref.observability.alerts.filter(a => a.severity === 'page').map(a => a.when),
+      tickets: ref.observability.alerts.filter(a => a.severity === 'ticket').map(a => a.when),
+    },
   }
   const ids = attempt.nodes.map(n => `"${n.id}"`).join(', ') || '(none)'
 

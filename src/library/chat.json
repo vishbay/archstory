@@ -77,6 +77,124 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "delivery-latency",
+        "name": "Delivery speed",
+        "kind": "latency",
+        "sli": "Messages delivered to an online recipient within the threshold, divided by all such messages, from send to delivery acknowledgement",
+        "target": 99,
+        "threshold": "< 500 ms"
+      },
+      {
+        "id": "durability",
+        "name": "No message lost",
+        "kind": "durability",
+        "sli": "Acknowledged messages that can still be read, divided by acknowledged messages",
+        "target": 99.9999
+      },
+      {
+        "id": "connect-availability",
+        "name": "Connection availability",
+        "kind": "availability",
+        "sli": "Connection attempts that succeed, divided by all attempts, at the load balancer",
+        "target": 99.95
+      }
+    ],
+    "alerts": [
+      {
+        "id": "delivery-slow",
+        "severity": "page",
+        "when": "p99 delivery latency above 500 ms for 10 minutes",
+        "why": "Chat that is not instant feels broken.",
+        "target": "chat_svc",
+        "slo": "delivery-latency"
+      },
+      {
+        "id": "write-quorum",
+        "severity": "page",
+        "when": "Message store cannot reach write quorum",
+        "why": "Writes are failing, and acknowledged messages are at risk.",
+        "target": "msg_db",
+        "slo": "durability"
+      },
+      {
+        "id": "connect-burn",
+        "severity": "page",
+        "when": "Connection failures burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Users cannot get online.",
+        "target": "lb",
+        "slo": "connect-availability"
+      },
+      {
+        "id": "gw-capacity",
+        "severity": "ticket",
+        "when": "Connections per gateway above 80% of the limit",
+        "why": "Add gateways before a node hits its limit and drops its users.",
+        "target": "ws"
+      },
+      {
+        "id": "push-age",
+        "severity": "ticket",
+        "when": "Oldest push queue message above 60 seconds",
+        "why": "Offline users learn about messages late.",
+        "target": "push_q"
+      },
+      {
+        "id": "session-drift",
+        "severity": "ticket",
+        "when": "Registered sessions differ from open connections by more than 2%",
+        "why": "Messages get routed to gateways that no longer hold the user.",
+        "target": "sessions"
+      }
+    ],
+    "signals": [
+      {
+        "target": "ws",
+        "name": "Disconnects by reason",
+        "metric": "ws_disconnects_total{reason}",
+        "why": "Separates network problems from deploys and overload."
+      },
+      {
+        "target": "sessions",
+        "name": "Registered sessions against open connections",
+        "metric": "session_registry_drift",
+        "why": "Drift means stale entries or missed heartbeats."
+      },
+      {
+        "target": "msg_db",
+        "name": "Write quorum failures",
+        "metric": "store_quorum_failures_total",
+        "why": "The earliest sign that durability is at risk."
+      },
+      {
+        "target": "media",
+        "name": "Upload failures",
+        "metric": "object_errors_total{code}",
+        "why": "Shows whether signed URLs or storage are the problem."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Messages are delayed",
+        "steps": [
+          "Break delivery latency down by step: store write, session lookup or gateway hop.",
+          "Check message store write latency and quorum errors.",
+          "Check the session registry hit rate: a miss sends the message down the offline path.",
+          "Check gateway CPU and connection counts."
+        ]
+      },
+      {
+        "symptom": "Offline users get no push",
+        "steps": [
+          "Check the push queue age and worker errors.",
+          "Check provider responses: unregistered tokens (410) should be removed.",
+          "Check provider throttling."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "alice",

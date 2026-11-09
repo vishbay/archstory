@@ -4,7 +4,11 @@
   "meta": {
     "title": "Notification System",
     "summary": "One service that sends push and email for every team, respecting preferences, deduplicating retries and surviving provider outages.",
-    "tags": ["queues", "fan-out", "retries"],
+    "tags": [
+      "queues",
+      "fan-out",
+      "retries"
+    ],
     "difficulty": "medium"
   },
   "requirements": {
@@ -21,8 +25,14 @@
       "A provider outage loses nothing"
     ],
     "scale": [
-      { "label": "Notifications", "value": "1B / day" },
-      { "label": "Campaign bursts", "value": "Several million in minutes" }
+      {
+        "label": "Notifications",
+        "value": "1B / day"
+      },
+      {
+        "label": "Campaign bursts",
+        "value": "Several million in minutes"
+      }
     ]
   },
   "network": {
@@ -30,38 +40,297 @@
     "zones": 3,
     "egress": "nat",
     "subnets": [
-      { "id": "app", "label": "App", "tiers": ["services", "async"], "cidr": "10.9.16.0/20" },
-      { "id": "data", "label": "Data", "tiers": ["data"], "cidr": "10.9.32.0/20" }
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.9.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.9.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "critical-latency",
+        "name": "Critical delivery speed",
+        "kind": "latency",
+        "sli": "Critical notifications handed to the provider within the threshold, divided by all critical notifications",
+        "target": 99,
+        "threshold": "< 5 s"
+      },
+      {
+        "id": "delivery-rate",
+        "name": "Delivery rate",
+        "kind": "availability",
+        "sli": "Notifications accepted by the provider divided by those sent, excluding invalid devices",
+        "target": 99.5
+      },
+      {
+        "id": "no-duplicates",
+        "name": "No duplicates",
+        "kind": "correctness",
+        "sli": "Notifications sent once, divided by notifications requested, by idempotency key",
+        "target": 99.99
+      }
+    ],
+    "alerts": [
+      {
+        "id": "critical-age",
+        "severity": "page",
+        "when": "Oldest critical message above 30 seconds for 5 minutes",
+        "why": "Login codes and security alerts are late, and the person is waiting.",
+        "target": "critical_q",
+        "slo": "critical-latency"
+      },
+      {
+        "id": "push-errors",
+        "severity": "page",
+        "when": "Push provider error ratio above 10% for 5 minutes",
+        "why": "Notifications are not reaching phones.",
+        "target": "apns",
+        "slo": "delivery-rate"
+      },
+      {
+        "id": "bulk-age",
+        "severity": "ticket",
+        "when": "Oldest bulk message above 15 minutes",
+        "why": "A campaign is running late. Not urgent, but worth knowing.",
+        "target": "bulk_q"
+      },
+      {
+        "id": "dlq",
+        "severity": "ticket",
+        "when": "Dead-letter queue above zero",
+        "why": "Every message here failed all its retries and needs a human or a fix.",
+        "target": "dlq"
+      },
+      {
+        "id": "email-throttle",
+        "severity": "ticket",
+        "when": "Email provider throttling above 5% for 15 minutes",
+        "why": "Workers should pace themselves to the quota instead of hitting it.",
+        "target": "email_worker"
+      },
+      {
+        "id": "dedupe-memory",
+        "severity": "ticket",
+        "when": "Dedupe store above 80% memory",
+        "why": "If keys are evicted early, duplicates get through.",
+        "target": "dedupe",
+        "slo": "no-duplicates"
+      }
+    ],
+    "signals": [
+      {
+        "target": "critical_q",
+        "name": "Age of the oldest message",
+        "metric": "queue_oldest_message_age_seconds",
+        "why": "The most direct measure of whether urgent messages are on time."
+      },
+      {
+        "target": "dlq",
+        "name": "Depth and arrival rate",
+        "metric": "queue_depth",
+        "why": "It should be empty. A steady trickle means a real bug."
+      },
+      {
+        "target": "apns",
+        "name": "Unregistered (410) rate",
+        "metric": "client_errors_total{peer,code}",
+        "why": "A rise means many users uninstalled or tokens have gone stale."
+      },
+      {
+        "target": "email_worker",
+        "name": "Provider 429 share",
+        "metric": "client_throttled_total",
+        "why": "Shows whether pacing matches the provider quota."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Login codes arrive late",
+        "steps": [
+          "Check the critical queue age: is it backing up?",
+          "Check worker concurrency and errors.",
+          "Check provider latency and error codes.",
+          "Check that critical messages are not stuck behind preference or quiet-hours logic."
+        ]
+      }
     ]
   },
   "nodes": [
-    { "id": "phone", "label": "User's Phone", "kind": "mobile_client" },
-    { "id": "producer", "label": "Internal Services", "kind": "service", "description": "Auth, orders, marketing … any team that needs to notify users", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
-    { "id": "notif_api", "label": "Notification API", "kind": "service", "description": "Validates, deduplicates, applies preferences, renders templates", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
-    { "id": "dedupe", "label": "Dedupe Store", "kind": "cache", "description": "Idempotency keys with a 24 h TTL", "cloud": { "aws": "ElastiCache Redis", "gcp": "Memorystore Redis" } },
-    { "id": "prefs", "label": "Preferences & Devices", "kind": "nosql_db", "description": "Channels, opt-outs, quiet hours, device tokens", "cloud": { "aws": "DynamoDB", "gcp": "Firestore" } },
-    { "id": "critical_q", "label": "Critical Queue", "kind": "queue", "cloud": { "aws": "SQS", "gcp": "Pub/Sub" } },
-    { "id": "bulk_q", "label": "Bulk Queue", "kind": "queue", "cloud": { "aws": "SQS", "gcp": "Pub/Sub" } },
-    { "id": "dlq", "label": "Dead-letter Queue", "kind": "queue", "description": "Messages that failed every retry", "cloud": { "aws": "SQS", "gcp": "Pub/Sub" } },
-    { "id": "push_worker", "label": "Push Workers", "kind": "worker", "cloud": { "aws": "Lambda", "gcp": "Cloud Run" } },
-    { "id": "email_worker", "label": "Email Workers", "kind": "worker", "description": "Throttled to the provider's send quota", "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" } },
-    { "id": "apns", "label": "APNs / FCM", "kind": "notification_provider", "description": "Apple and Google push services" },
-    { "id": "email", "label": "Email Provider", "kind": "notification_provider", "cloud": { "aws": "SES" } }
+    {
+      "id": "phone",
+      "label": "User's Phone",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "producer",
+      "label": "Internal Services",
+      "kind": "service",
+      "description": "Auth, orders, marketing … any team that needs to notify users",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "notif_api",
+      "label": "Notification API",
+      "kind": "service",
+      "description": "Validates, deduplicates, applies preferences, renders templates",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "dedupe",
+      "label": "Dedupe Store",
+      "kind": "cache",
+      "description": "Idempotency keys with a 24 h TTL",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "prefs",
+      "label": "Preferences & Devices",
+      "kind": "nosql_db",
+      "description": "Channels, opt-outs, quiet hours, device tokens",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Firestore"
+      }
+    },
+    {
+      "id": "critical_q",
+      "label": "Critical Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "bulk_q",
+      "label": "Bulk Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "dlq",
+      "label": "Dead-letter Queue",
+      "kind": "queue",
+      "description": "Messages that failed every retry",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "push_worker",
+      "label": "Push Workers",
+      "kind": "worker",
+      "cloud": {
+        "aws": "Lambda",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "email_worker",
+      "label": "Email Workers",
+      "kind": "worker",
+      "description": "Throttled to the provider's send quota",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "apns",
+      "label": "APNs / FCM",
+      "kind": "notification_provider",
+      "description": "Apple and Google push services"
+    },
+    {
+      "id": "email",
+      "label": "Email Provider",
+      "kind": "notification_provider",
+      "cloud": {
+        "aws": "SES"
+      }
+    }
   ],
   "groups": [],
   "edges": [
-    { "from": "producer", "to": "notif_api" },
-    { "from": "notif_api", "to": "dedupe" },
-    { "from": "notif_api", "to": "prefs" },
-    { "from": "notif_api", "to": "critical_q", "async": true },
-    { "from": "notif_api", "to": "bulk_q", "async": true },
-    { "from": "critical_q", "to": "push_worker" },
-    { "from": "bulk_q", "to": "email_worker" },
-    { "from": "push_worker", "to": "apns" },
-    { "from": "email_worker", "to": "email" },
-    { "from": "push_worker", "to": "dlq", "async": true },
-    { "from": "email_worker", "to": "dlq", "async": true },
-    { "from": "apns", "to": "phone" }
+    {
+      "from": "producer",
+      "to": "notif_api"
+    },
+    {
+      "from": "notif_api",
+      "to": "dedupe"
+    },
+    {
+      "from": "notif_api",
+      "to": "prefs"
+    },
+    {
+      "from": "notif_api",
+      "to": "critical_q",
+      "async": true
+    },
+    {
+      "from": "notif_api",
+      "to": "bulk_q",
+      "async": true
+    },
+    {
+      "from": "critical_q",
+      "to": "push_worker"
+    },
+    {
+      "from": "bulk_q",
+      "to": "email_worker"
+    },
+    {
+      "from": "push_worker",
+      "to": "apns"
+    },
+    {
+      "from": "email_worker",
+      "to": "email"
+    },
+    {
+      "from": "push_worker",
+      "to": "dlq",
+      "async": true
+    },
+    {
+      "from": "email_worker",
+      "to": "dlq",
+      "async": true
+    },
+    {
+      "from": "apns",
+      "to": "phone"
+    }
   ],
   "flows": [
     {
@@ -69,19 +338,84 @@
       "title": "Critical push (login code)",
       "summary": "Deduplicate, check preferences, then a dedicated high-priority queue so nothing waits behind marketing.",
       "steps": [
-        { "from": "producer", "to": "notif_api", "kind": "req", "label": "POST /notify", "payload": "POST /notify\nIdempotency-Key: otp-u_17-1762601000\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\" }" },
-        { "from": "notif_api", "to": "dedupe", "kind": "req", "label": "SET NX idem:… EX 86400", "detail": "Producers retry on timeouts. The first call wins; a repeat with the same key is acknowledged but not sent again." },
-        { "from": "dedupe", "to": "notif_api", "kind": "res", "label": "OK (first time)" },
-        { "from": "notif_api", "to": "prefs", "kind": "req", "label": "GET u_17" },
-        { "from": "prefs", "to": "notif_api", "kind": "res", "label": "push on, 2 devices", "detail": "Quiet hours apply to most messages, but security codes bypass them.",
-          "payload": "{ \"push\": true, \"email\": true, \"quiet_hours\": \"22:00-07:00\", \"locale\": \"es-MX\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"] }" },
-        { "from": "notif_api", "to": "notif_api", "kind": "local", "label": "render template (es-MX)" },
-        { "from": "notif_api", "to": "critical_q", "kind": "async", "label": "enqueue", "detail": "Critical and bulk traffic use separate queues and workers, so a 5M-user campaign cannot delay a login code." },
-        { "from": "notif_api", "to": "producer", "kind": "res", "label": "202 Accepted" },
-        { "from": "critical_q", "to": "push_worker", "kind": "async", "label": "message" },
-        { "from": "push_worker", "to": "apns", "kind": "req", "label": "send to 2 devices" },
-        { "from": "apns", "to": "push_worker", "kind": "res", "label": "200 / 410 Unregistered", "detail": "410 means the app was uninstalled; the stale device token is removed so it is not retried forever." },
-        { "from": "apns", "to": "phone", "kind": "async", "label": "\"Your code is 482913\"" }
+        {
+          "from": "producer",
+          "to": "notif_api",
+          "kind": "req",
+          "label": "POST /notify",
+          "payload": "POST /notify\nIdempotency-Key: otp-u_17-1762601000\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\" }"
+        },
+        {
+          "from": "notif_api",
+          "to": "dedupe",
+          "kind": "req",
+          "label": "SET NX idem:… EX 86400",
+          "detail": "Producers retry on timeouts. The first call wins; a repeat with the same key is acknowledged but not sent again."
+        },
+        {
+          "from": "dedupe",
+          "to": "notif_api",
+          "kind": "res",
+          "label": "OK (first time)"
+        },
+        {
+          "from": "notif_api",
+          "to": "prefs",
+          "kind": "req",
+          "label": "GET u_17"
+        },
+        {
+          "from": "prefs",
+          "to": "notif_api",
+          "kind": "res",
+          "label": "push on, 2 devices",
+          "detail": "Quiet hours apply to most messages, but security codes bypass them.",
+          "payload": "{ \"push\": true, \"email\": true, \"quiet_hours\": \"22:00-07:00\", \"locale\": \"es-MX\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"] }"
+        },
+        {
+          "from": "notif_api",
+          "to": "notif_api",
+          "kind": "local",
+          "label": "render template (es-MX)"
+        },
+        {
+          "from": "notif_api",
+          "to": "critical_q",
+          "kind": "async",
+          "label": "enqueue",
+          "detail": "Critical and bulk traffic use separate queues and workers, so a 5M-user campaign cannot delay a login code."
+        },
+        {
+          "from": "notif_api",
+          "to": "producer",
+          "kind": "res",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "critical_q",
+          "to": "push_worker",
+          "kind": "async",
+          "label": "message"
+        },
+        {
+          "from": "push_worker",
+          "to": "apns",
+          "kind": "req",
+          "label": "send to 2 devices"
+        },
+        {
+          "from": "apns",
+          "to": "push_worker",
+          "kind": "res",
+          "label": "200 / 410 Unregistered",
+          "detail": "410 means the app was uninstalled; the stale device token is removed so it is not retried forever."
+        },
+        {
+          "from": "apns",
+          "to": "phone",
+          "kind": "async",
+          "label": "\"Your code is 482913\""
+        }
       ]
     },
     {
@@ -89,25 +423,104 @@
       "title": "Marketing email campaign",
       "summary": "Filter by opt-in, spread sends under the provider's quota, retry with backoff, and park permanent failures in a dead-letter queue.",
       "steps": [
-        { "from": "producer", "to": "notif_api", "kind": "req", "label": "POST /campaigns", "payload": "{ \"segment\": \"inactive_30d\", \"template\": \"winback_nov\", \"channel\": \"email\", \"priority\": \"bulk\" }" },
-        { "from": "notif_api", "to": "prefs", "kind": "req", "label": "filter opted-in (paged)" },
-        { "from": "prefs", "to": "notif_api", "kind": "res", "label": "1.4M eligible", "detail": "Users who opted out of marketing are dropped here, which is also a legal requirement in many regions." },
-        { "from": "notif_api", "to": "bulk_q", "kind": "async", "label": "enqueue 1.4M (batches)" },
-        { "from": "notif_api", "to": "producer", "kind": "res", "label": "202 campaign c_77" },
-        { "from": "bulk_q", "to": "email_worker", "kind": "async", "label": "batch of 500" },
-        { "from": "email_worker", "to": "email_worker", "kind": "local", "label": "token bucket 2k/s", "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled." },
-        { "from": "email_worker", "to": "email", "kind": "req", "label": "send batch" },
-        { "from": "email", "to": "email_worker", "kind": "res", "label": "429 throttled (some)", "detail": "Temporary failures are retried; permanent ones (invalid address) are not." },
-        { "from": "email_worker", "to": "bulk_q", "kind": "async", "label": "retry with backoff + jitter", "detail": "Delays grow 1 s, 4 s, 16 s … with randomness so retries do not arrive in a synchronized wave." },
-        { "from": "email_worker", "to": "dlq", "kind": "async", "label": "after 5 attempts → DLQ", "detail": "Nothing is silently dropped. An alert fires, and messages are replayed from the DLQ once the cause is fixed." }
+        {
+          "from": "producer",
+          "to": "notif_api",
+          "kind": "req",
+          "label": "POST /campaigns",
+          "payload": "{ \"segment\": \"inactive_30d\", \"template\": \"winback_nov\", \"channel\": \"email\", \"priority\": \"bulk\" }"
+        },
+        {
+          "from": "notif_api",
+          "to": "prefs",
+          "kind": "req",
+          "label": "filter opted-in (paged)"
+        },
+        {
+          "from": "prefs",
+          "to": "notif_api",
+          "kind": "res",
+          "label": "1.4M eligible",
+          "detail": "Users who opted out of marketing are dropped here, which is also a legal requirement in many regions."
+        },
+        {
+          "from": "notif_api",
+          "to": "bulk_q",
+          "kind": "async",
+          "label": "enqueue 1.4M (batches)"
+        },
+        {
+          "from": "notif_api",
+          "to": "producer",
+          "kind": "res",
+          "label": "202 campaign c_77"
+        },
+        {
+          "from": "bulk_q",
+          "to": "email_worker",
+          "kind": "async",
+          "label": "batch of 500"
+        },
+        {
+          "from": "email_worker",
+          "to": "email_worker",
+          "kind": "local",
+          "label": "token bucket 2k/s",
+          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled."
+        },
+        {
+          "from": "email_worker",
+          "to": "email",
+          "kind": "req",
+          "label": "send batch"
+        },
+        {
+          "from": "email",
+          "to": "email_worker",
+          "kind": "res",
+          "label": "429 throttled (some)",
+          "detail": "Temporary failures are retried; permanent ones (invalid address) are not."
+        },
+        {
+          "from": "email_worker",
+          "to": "bulk_q",
+          "kind": "async",
+          "label": "retry with backoff + jitter",
+          "detail": "Delays grow 1 s, 4 s, 16 s … with randomness so retries do not arrive in a synchronized wave."
+        },
+        {
+          "from": "email_worker",
+          "to": "dlq",
+          "kind": "async",
+          "label": "after 5 attempts → DLQ",
+          "detail": "Nothing is silently dropped. An alert fires, and messages are replayed from the DLQ once the cause is fixed."
+        }
       ]
     }
   ],
   "notes": [
-    { "kind": "tradeoff", "text": "Separate queues per priority (and often per channel) isolate failures: an email provider outage backs up email only, while push keeps flowing." },
-    { "target": "dedupe", "kind": "tradeoff", "text": "Delivery is at-least-once end to end. Idempotency keys at the API and message ids at the workers turn that into effectively-once for users." },
-    { "target": "email", "kind": "failure", "text": "Keep a second provider configured. Workers switch over when the primary's error rate crosses a threshold." },
-    { "target": "prefs", "kind": "note", "text": "Also enforce per-user frequency caps (for example, at most 3 marketing pushes a day) so many teams cannot collectively spam a user." },
-    { "kind": "scaling", "text": "Track every message's state (queued, sent, delivered, opened) in an event log for debugging and campaign analytics." }
+    {
+      "kind": "tradeoff",
+      "text": "Separate queues per priority (and often per channel) isolate failures: an email provider outage backs up email only, while push keeps flowing."
+    },
+    {
+      "target": "dedupe",
+      "kind": "tradeoff",
+      "text": "Delivery is at-least-once end to end. Idempotency keys at the API and message ids at the workers turn that into effectively-once for users."
+    },
+    {
+      "target": "email",
+      "kind": "failure",
+      "text": "Keep a second provider configured. Workers switch over when the primary's error rate crosses a threshold."
+    },
+    {
+      "target": "prefs",
+      "kind": "note",
+      "text": "Also enforce per-user frequency caps (for example, at most 3 marketing pushes a day) so many teams cannot collectively spam a user."
+    },
+    {
+      "kind": "scaling",
+      "text": "Track every message's state (queued, sent, delivered, opened) in an event log for debugging and campaign analytics."
+    }
   ]
 }

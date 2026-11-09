@@ -70,6 +70,112 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "redirect-availability",
+        "name": "Redirect availability",
+        "kind": "availability",
+        "sli": "Redirects answered with a 2xx or 3xx, divided by all redirect requests, measured at the load balancer",
+        "target": 99.99
+      },
+      {
+        "id": "redirect-latency",
+        "name": "Redirect speed",
+        "kind": "latency",
+        "sli": "Redirects served within the threshold, divided by all redirects, measured at the load balancer",
+        "target": 99,
+        "threshold": "< 100 ms"
+      },
+      {
+        "id": "create-success",
+        "name": "Link creation",
+        "kind": "availability",
+        "sli": "Successful creates divided by create attempts, measured at the API",
+        "target": 99.9
+      }
+    ],
+    "alerts": [
+      {
+        "id": "redirect-burn",
+        "severity": "page",
+        "when": "Redirect errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Users are getting broken links right now. Alerting on the burn rate pages quickly for a real outage and ignores brief blips.",
+        "target": "lb",
+        "slo": "redirect-availability"
+      },
+      {
+        "id": "redirect-slow",
+        "severity": "page",
+        "when": "p99 redirect latency above 100 ms for 10 minutes",
+        "why": "Redirects are the whole product; slow ones feel broken.",
+        "target": "lb",
+        "slo": "redirect-latency"
+      },
+      {
+        "id": "cache-hit",
+        "severity": "ticket",
+        "when": "Cache hit ratio below 90% for 30 minutes",
+        "why": "Not visible to users yet, but every miss becomes a database read. Fix it before latency suffers.",
+        "target": "cache"
+      },
+      {
+        "id": "replica-lag",
+        "severity": "ticket",
+        "when": "Replica lag above 5 seconds for 15 minutes",
+        "why": "Lagging replicas return stale or missing links right after a link is created.",
+        "target": "replica"
+      },
+      {
+        "id": "key-pool",
+        "severity": "ticket",
+        "when": "Unissued key pool below 20%",
+        "why": "If keys run out, every create fails. Refill automatically, and ticket it if the pool keeps falling.",
+        "target": "kgs",
+        "slo": "create-success"
+      }
+    ],
+    "signals": [
+      {
+        "target": "kgs",
+        "name": "Unissued keys remaining",
+        "metric": "keys_available",
+        "why": "The one resource that, if exhausted, breaks every write."
+      },
+      {
+        "target": "cache",
+        "name": "Hit ratio",
+        "metric": "cache_hit_ratio",
+        "why": "Redirects are 100:1 reads, so the hit ratio decides how much reaches the database."
+      },
+      {
+        "target": "replica",
+        "name": "Replication lag",
+        "metric": "db_replication_lag_seconds",
+        "why": "Replicas are written asynchronously: lag is the price of cheap reads."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Redirects are slow",
+        "steps": [
+          "Open the SLO dashboard: is it every region or just one?",
+          "Check the cache hit ratio. A drop means the database is answering more of the reads.",
+          "Open a slow trace and find the longest span: cache, replica or network?",
+          "If the replica span is long, check replica lag and connection counts.",
+          "Look for a viral link: one hot key can overload a single cache shard."
+        ]
+      },
+      {
+        "symptom": "Creates are failing",
+        "steps": [
+          "Check the key pool: an empty pool means the key generator cannot issue codes.",
+          "Look at primary database errors and connection saturation.",
+          "Check recent deploys of the API and the key generator."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "client",

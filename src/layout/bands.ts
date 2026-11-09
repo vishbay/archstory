@@ -7,6 +7,8 @@ import { tierOf } from '../model/kinds'
 
 export const NODE_W = 188, NODE_H = 58
 export const CELL = 228, ROW_H = 118, BAND_GAP = 14, LABEL_W = 170
+// Monitoring layer: a collector fanning out to three stores, then alerts, then on-call.
+export const OBS_NODE_W = 166, OBS_COL = 198, OBS_ROW = 68, OBS_H = 222
 
 export type Side = 'top' | 'right' | 'bottom' | 'left'
 export interface Box { x: number; y: number; w: number; h: number }
@@ -16,13 +18,15 @@ export interface Layout {
   groups: (Box & { id: string; label: string; kind: string })[]
   vpc: Box | null
   subnets: (Box & { id: string; label: string; public: boolean; cidr?: string })[]
+  /** The monitoring layer's band and node positions, when asked for. */
+  obs: { band: Box; pos: Record<string, { x: number; y: number }> } | null
   width: number; height: number
   handles: (from: string, to: string) => [Side, Side]
 }
 
 const OUT = '\u0000out', VPC = '\u0000vpc'
 
-export function layoutBands(d: Design, opts: { network?: boolean } = {}): Layout {
+export function layoutBands(d: Design, opts: { network?: boolean; observability?: boolean } = {}): Layout {
   const net = opts.network && d.network ? d.network : null
   const subnet = (n: DNode) => (net ? subnetOf(d, n, tierOf(n)) : null)
   const segOf = (n: DNode) => n.group ?? (subnet(n) ? VPC : OUT)
@@ -103,5 +107,24 @@ export function layoutBands(d: Design, opts: { network?: boolean } = {}): Layout
     if (dt !== 0) return dt > 0 ? ['bottom', 'top'] : ['top', 'bottom']
     return pos[to].x > pos[from].x ? ['right', 'left'] : ['left', 'right']
   }
-  return { pos, bands, groups, vpc, subnets, width, height: tiers.length * ROW_H, handles }
+  let obs: Layout['obs'] = null, outWidth = width
+  if (opts.observability) {
+    const span = 3 * OBS_COL + OBS_NODE_W
+    outWidth = Math.max(width, LABEL_W + span + 12)
+    const dx = (outWidth - width) / 2          // keep the design centred when the canvas has to widen
+    if (dx > 0) {
+      for (const id of Object.keys(pos)) pos[id] = { ...pos[id], x: pos[id].x + dx }
+      for (const g of groups) g.x += dx
+      if (vpc) vpc.x += dx
+      for (const s of subnets) s.x += dx
+    }
+    bands.forEach(b => { b.w = outWidth })
+    const top = tiers.length * ROW_H, x0 = LABEL_W + (outWidth - LABEL_W - 12 - span) / 2, r0 = top + 14
+    const at = (col: number, row: number) => ({ x: x0 + col * OBS_COL, y: r0 + row * OBS_ROW })
+    obs = {
+      band: { x: 0, y: top, w: outWidth, h: OBS_H },
+      pos: { 'obs:collector': at(0, 1), 'obs:metrics': at(1, 0), 'obs:logs': at(1, 1), 'obs:traces': at(1, 2), 'obs:alerts': at(2, 0), 'obs:oncall': at(3, 0) },
+    }
+  }
+  return { pos, bands, groups, vpc, subnets, obs, width: outWidth, height: tiers.length * ROW_H + (obs ? OBS_H + BAND_GAP : 0), handles }
 }

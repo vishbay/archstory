@@ -424,3 +424,28 @@ button.big { height: 40px; padding: 0 18px; font-size: 14.5px; }
 .react-flow__panel.right { margin-right: var(--pr); }
 /* cards inside glass stay translucent */
 .left .card, .right .card { background: color-mix(in srgb, var(--surface-2) 62%, transparent); }
+
+/* ---------- monitoring layer ---------- */
+.node-signals { position: absolute; left: 10px; bottom: -8px; display: flex; gap: 3px; }
+.node-signals i { font: normal 700 9px/14px var(--font); min-width: 14px; text-align: center; border-radius: 4px; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--border-strong); }
+.node.telemetry { border-style: dashed; }
+.node.telemetry.compact { padding: 7px 9px; }
+.node.telemetry .node-name { white-space: normal; line-height: 1.2; font-size: 12px; }
+.node.telemetry .node-sub { display: none; }
+.caption-obs { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.caption-obs code { font: 11.5px var(--mono); margin-left: 5px; color: var(--text); background: var(--surface-3); border-radius: 4px; padding: 0 4px; }
+
+.slo { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: color-mix(in srgb, var(--surface-2) 62%, transparent); }
+.slo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.slo-target { font-weight: 600; margin: 2px 0 4px; }
+.slo p { margin: 3px 0; }
+.alerts { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.alerts li { padding: 9px 0; border-top: 1px solid var(--border); }
+.alerts li > b { display: block; margin-top: 4px; }
+.alerts p { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; }
+.alerts code, td code { display: block; font: 11.5px var(--mono); color: var(--muted); margin-top: 2px; }
+.alert-links { display: flex; gap: 10px; align-items: center; margin-top: 3px; }
+.signals th { width: 84px; }
+.debug { margin: 6px 0; } .debug ol { margin: 6px 0 0; padding-left: 20px; font-size: 13px; color: var(--muted); } .debug ol li { margin: 3px 0; }
+.stack { list-style: none; padding: 0; margin: 0; font-size: 13px; } .stack li { padding: 6px 0; border-top: 1px solid var(--border); } .stack p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }

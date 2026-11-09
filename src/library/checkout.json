@@ -68,6 +68,126 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "checkout-availability",
+        "name": "Checkout availability",
+        "kind": "availability",
+        "sli": "Order requests that succeed divided by all order requests, at the API gateway, excluding card declines",
+        "target": 99.95
+      },
+      {
+        "id": "checkout-latency",
+        "name": "Checkout speed",
+        "kind": "latency",
+        "sli": "Order requests completed within the threshold, divided by all order requests",
+        "target": 99,
+        "threshold": "< 2 s"
+      },
+      {
+        "id": "single-charge",
+        "name": "Charged exactly once",
+        "kind": "correctness",
+        "sli": "Orders charged exactly once, divided by paid orders, from reconciliation",
+        "target": 100
+      },
+      {
+        "id": "no-oversell",
+        "name": "Never oversold",
+        "kind": "correctness",
+        "sli": "Units sold never above stock, checked against inventory after each sale window",
+        "target": 100
+      }
+    ],
+    "alerts": [
+      {
+        "id": "duplicate-charge",
+        "severity": "page",
+        "when": "Any order charged more than once",
+        "why": "It is money, and it breaks trust. Stop and fix.",
+        "target": "payment_svc",
+        "slo": "single-charge"
+      },
+      {
+        "id": "checkout-burn",
+        "severity": "page",
+        "when": "Checkout errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Customers cannot buy.",
+        "target": "gw",
+        "slo": "checkout-availability"
+      },
+      {
+        "id": "psp-errors",
+        "severity": "page",
+        "when": "Payment provider error ratio above 5% for 5 minutes",
+        "why": "Customers cannot pay. Open the circuit breaker, then queue or retry.",
+        "target": "psp",
+        "slo": "checkout-availability"
+      },
+      {
+        "id": "outbox-lag",
+        "severity": "ticket",
+        "when": "Oldest unpublished outbox row above 60 seconds",
+        "why": "Emails and analytics are delayed. The orders themselves are fine.",
+        "target": "relay"
+      },
+      {
+        "id": "stuck-pending",
+        "severity": "ticket",
+        "when": "Orders pending longer than 15 minutes",
+        "why": "A step of the saga stalled. Reconciliation should resolve or cancel them.",
+        "target": "order_svc"
+      },
+      {
+        "id": "hot-sku",
+        "severity": "ticket",
+        "when": "Lock waits above 100 ms on a single SKU row",
+        "why": "A flash sale concentrates writes on one row. Split the stock into buckets.",
+        "target": "inventory_db",
+        "slo": "checkout-latency"
+      }
+    ],
+    "signals": [
+      {
+        "target": "relay",
+        "name": "Outbox lag",
+        "metric": "outbox_oldest_row_age_seconds",
+        "why": "The age of the oldest committed event that has not been published."
+      },
+      {
+        "target": "psp",
+        "name": "Timeouts and unknown outcomes",
+        "metric": "client_errors_total{peer,code}",
+        "why": "A timeout leaves the charge state unknown, so track it separately from declines."
+      },
+      {
+        "target": "inventory_db",
+        "name": "Row lock wait time",
+        "metric": "db_lock_wait_seconds",
+        "why": "Contention on a hot SKU is the first thing to give in a flash sale."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Orders stuck in PENDING",
+        "steps": [
+          "Find the step that stalled: reservation, payment or the final commit. Follow the order id in the trace.",
+          "Check provider timeouts and unknown outcomes.",
+          "Run reconciliation for the affected window.",
+          "Verify reservations are expiring as they should."
+        ]
+      },
+      {
+        "symptom": "Customers were charged but got no confirmation",
+        "steps": [
+          "Check outbox lag: the event may simply be late.",
+          "Check email worker errors and the provider status.",
+          "Confirm the order shows PAID in the orders database."
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "client",

@@ -7,6 +7,8 @@ export const STEP_KINDS = ['req', 'res', 'async', 'local'] as const
 export const GROUP_KINDS = ['region', 'zone', 'network', 'tenant', 'cluster', 'boundary'] as const
 export const HA_MODES = ['active-active', 'primary-standby', 'quorum', 'regional', 'single'] as const
 export const NOTE_KINDS = ['tradeoff', 'scaling', 'failure', 'security', 'note'] as const
+export const SLO_KINDS = ['availability', 'latency', 'freshness', 'durability', 'correctness'] as const
+export const ALERT_SEVERITIES = ['page', 'ticket'] as const
 
 const Id = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'ids are lowercase letters, digits, "-" or "_"')
 
@@ -68,6 +70,34 @@ export const NoteSchema = z.object({
   text: z.string(),
 })
 
+export const SloSchema = z.object({
+  id: Id, name: z.string(), kind: z.enum(SLO_KINDS),
+  sli: z.string().describe('How it is measured: good events divided by all events, and where it is measured'),
+  target: z.number().min(50).max(100).describe('Percent of events that must be good, e.g. 99.9'),
+  threshold: z.string().optional().describe('What counts as a good event for latency or freshness SLOs, e.g. "< 100 ms"'),
+  window: z.number().int().positive().default(30).describe('Rolling window in days'),
+})
+
+export const AlertSchema = z.object({
+  id: Id, severity: z.enum(ALERT_SEVERITIES).describe('page: wake someone now (users are hurting); ticket: fix in working hours'),
+  when: z.string().describe('The condition, with a threshold and duration'),
+  why: z.string().describe('What it protects and why this severity'),
+  target: Id.optional().describe('Component it watches'), slo: Id.optional().describe('SLO it protects'),
+})
+
+export const SignalSchema = z.object({
+  target: Id, name: z.string(), metric: z.string().optional(), why: z.string().optional(),
+}).describe('A signal specific to this design, shown with the component\'s standard signals')
+
+export const DebugSchema = z.object({ symptom: z.string(), steps: z.array(z.string()).min(1) })
+
+export const ObservabilitySchema = z.object({
+  slos: z.array(SloSchema).default([]),
+  alerts: z.array(AlertSchema).default([]),
+  signals: z.array(SignalSchema).default([]),
+  debug: z.array(DebugSchema).default([]),
+}).describe('Optional monitoring layer: service level objectives, alerts, signals and debugging paths. Standard signals per component type are built in.')
+
 export const DesignSchema = z.object({
   schema: z.literal('archstory/v1'),
   id: Id,
@@ -90,6 +120,7 @@ export const DesignSchema = z.object({
   flows: z.array(FlowSchema).default([]),
   notes: z.array(NoteSchema).default([]),
   network: NetworkSchema.optional(),
+  observability: ObservabilitySchema.optional(),
   reasoning: z.record(z.string(), z.string()).optional()
     .describe('Practice mode written answers keyed by section, e.g. { "estimates": "…", "api": "…" }'),
 })
@@ -104,6 +135,9 @@ export type Flow = z.infer<typeof FlowSchema>
 export type Step = z.infer<typeof StepSchema>
 export type Group = z.infer<typeof GroupSchema>
 export type Network = z.infer<typeof NetworkSchema>
+export type Observability = z.infer<typeof ObservabilitySchema>
+export type Slo = z.infer<typeof SloSchema>
+export type Alert = z.infer<typeof AlertSchema>
 export type Subnet = z.infer<typeof SubnetSchema>
 
 export type ParseResult = { ok: true; design: Design } | { ok: false; errors: string[] }
@@ -157,6 +191,17 @@ export function parseDesign(input: unknown): ParseResult {
       errors.push(`node "${n.id}": unknown subnet "${n.subnet}"`)
   } else {
     for (const n of d.nodes) if (n.subnet) errors.push(`node "${n.id}": has a subnet but the design has no network section`)
+  }
+  if (d.observability) {
+    const o = d.observability, sloIds = new Set<string>(), alertIds = new Set<string>()
+    for (const s of o.slos) { if (sloIds.has(s.id)) errors.push(`observability.slos: duplicate id "${s.id}"`); sloIds.add(s.id) }
+    for (const a of o.alerts) {
+      if (alertIds.has(a.id)) errors.push(`observability.alerts: duplicate id "${a.id}"`)
+      alertIds.add(a.id)
+      if (a.target && !nodeIds.has(a.target)) errors.push(`alert "${a.id}": unknown component "${a.target}"`)
+      if (a.slo && !sloIds.has(a.slo)) errors.push(`alert "${a.id}": unknown SLO "${a.slo}"`)
+    }
+    o.signals.forEach((s, i) => { if (!nodeIds.has(s.target)) errors.push(`observability.signals[${i}]: unknown component "${s.target}"`) })
   }
   const targets = new Set([...nodeIds, ...groupIds, ...flowIds])
   d.notes.forEach((n, i) => { if (n.target && !targets.has(n.target)) errors.push(`notes[${i}]: unknown target "${n.target}"`) })

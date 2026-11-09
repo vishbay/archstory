@@ -44,6 +44,26 @@ describe('attempt editing', () => {
   })
 })
 
+describe('monitoring check', () => {
+  const chat = LIBRARY.find(x => x.id === 'chat')!
+  const base = () => { const { d, ids: [c, lb, svc] } = build(['web_client', 'load_balancer', 'service']); return { d: connect(connect(d, c, lb), lb, svc) } }
+  const monitoring = (d: Design) => runChecks(d, chat).checks.find(c => c.id === 'monitoring')!
+  it('warns when the answer says nothing about monitoring, and hints at what the reference tracks', () => {
+    const c = monitoring(base().d)
+    expect(c.level).toBe('warn')
+    expect(c.detail).toMatch(/Delivery speed/)
+  })
+  it('passes with a monitoring component or written reasoning', () => {
+    expect(monitoring(addNode(base().d, 'metrics_store').design).level).toBe('pass')
+    expect(monitoring({ ...base().d, reasoning: { monitoring: 'SLO: 99.9% of sends delivered in 500 ms; page on burn rate.' } }).level).toBe('pass')
+    expect(monitoring({ ...base().d, reasoning: { monitoring: '   ' } }).level).toBe('warn')
+  })
+  it('does not call a monitoring component an unexplained extra', () => {
+    const titles = runChecks(addNode(base().d, 'log_store').design, chat).checks.map(c => c.title)
+    expect(titles.some(t => /log store|Log store/i.test(t))).toBe(false)
+  })
+})
+
 describe('practice checks', () => {
   it('every reference design passes its own checks', () => {
     for (const ref of LIBRARY) {

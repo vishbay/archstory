@@ -50,7 +50,13 @@ export const PRODUCTS: Record<Cloud, Product[]> = {
     { key: 'location', match: /location service/i },
     { key: 'ses', match: /\bses\b|simple email/i },
     { key: 'pinpoint', match: /pinpoint/i },
+    { key: 'cloudwatch-logs', match: /cloudwatch logs/i },
+    { key: 'cloudwatch-alarm', match: /cloudwatch alarm/i },
     { key: 'cloudwatch', match: /cloudwatch/i },
+    { key: 'xray', match: /x-?ray/i },
+    { key: 'adot', match: /distro for opentelemetry|\badot\b/i },
+    { key: 'managed-grafana', match: /managed grafana/i },
+    { key: 'managed-prometheus', match: /managed (service for )?prometheus/i },
     { key: 'mediaconvert', match: /mediaconvert/i },
   ],
   gcp: [
@@ -84,7 +90,9 @@ export const PRODUCTS: Record<Cloud, Product[]> = {
     { key: 'iam', match: /\biam\b/i },
     { key: 'secret-manager', match: /secret manager/i },
     { key: 'maps', match: /maps|fleet engine/i },
-    { key: 'monitoring', match: /monitoring|cloud logging/i },
+    { key: 'monitoring', match: /monitoring/i },
+    { key: 'logging', match: /cloud logging/i },
+    { key: 'trace', match: /cloud trace/i },
   ],
 }
 

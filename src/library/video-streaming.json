@@ -72,6 +72,112 @@
       }
     ]
   },
+  "observability": {
+    "slos": [
+      {
+        "id": "playback-start",
+        "name": "Playback start",
+        "kind": "latency",
+        "sli": "Plays that start within the threshold, divided by all plays, measured in the player",
+        "target": 95,
+        "threshold": "< 2 s"
+      },
+      {
+        "id": "segment-availability",
+        "name": "Segment availability",
+        "kind": "availability",
+        "sli": "Segment requests answered successfully, divided by all segment requests, at the CDN",
+        "target": 99.95
+      },
+      {
+        "id": "transcode-time",
+        "name": "Time to ready",
+        "kind": "latency",
+        "sli": "Uploads playable within the threshold, divided by all uploads",
+        "target": 95,
+        "threshold": "< 15 min"
+      }
+    ],
+    "alerts": [
+      {
+        "id": "rebuffer",
+        "severity": "page",
+        "when": "Player rebuffering ratio above 1% for 10 minutes",
+        "why": "Viewers are watching a spinner. Only the player can see this, which is why it is measured on the client.",
+        "target": "viewer",
+        "slo": "playback-start"
+      },
+      {
+        "id": "cdn-errors",
+        "severity": "page",
+        "when": "CDN error rate above 0.5% for 5 minutes",
+        "why": "Segments are failing to load, so playback stops.",
+        "target": "cdn",
+        "slo": "segment-availability"
+      },
+      {
+        "id": "cdn-hit",
+        "severity": "ticket",
+        "when": "CDN cache hit ratio below 90% for 30 minutes",
+        "why": "Origin storage costs and latency rise as hits fall.",
+        "target": "cdn"
+      },
+      {
+        "id": "transcode-age",
+        "severity": "ticket",
+        "when": "Oldest transcode job above 10 minutes",
+        "why": "Creators wait longer to publish, long before anything fails.",
+        "target": "transcode_q",
+        "slo": "transcode-time"
+      },
+      {
+        "id": "transcoder-fail",
+        "severity": "ticket",
+        "when": "Transcoder failure rate above 2% for 15 minutes",
+        "why": "Some uploads never become playable until retried.",
+        "target": "transcoder"
+      }
+    ],
+    "signals": [
+      {
+        "target": "viewer",
+        "name": "Rebuffering ratio and startup time",
+        "metric": "player_rebuffer_ratio",
+        "why": "Measured in the player: the only place that sees what viewers actually experience."
+      },
+      {
+        "target": "cdn",
+        "name": "Origin fetch rate",
+        "metric": "origin_requests_total",
+        "why": "A jump means popular segments are not cached, or the cache keys changed."
+      },
+      {
+        "target": "transcode_q",
+        "name": "Age of the oldest job",
+        "metric": "queue_oldest_message_age_seconds",
+        "why": "Backlog shows up here before creators complain."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Videos buffer",
+        "steps": [
+          "Break rebuffering down by region, ISP and rendition.",
+          "Check CDN hit ratio and origin latency for that region.",
+          "Check whether the player is stuck on a high rendition: look at the adaptive bitrate decisions.",
+          "Check segment storage errors."
+        ]
+      },
+      {
+        "symptom": "New uploads stay in processing",
+        "steps": [
+          "Check the transcode queue age.",
+          "Check transcoder failures by input format.",
+          "Check storage events: are uploads triggering jobs at all?"
+        ]
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "creator",

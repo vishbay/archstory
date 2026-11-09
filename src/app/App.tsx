@@ -65,6 +65,7 @@ export function App() {
   const [view, setView] = useState<View>(() => (params.get('view') === 'timeline' ? 'timeline' : 'canvas'))
   const [network, setNetwork] = useState(() => params.get('net') === '1')
   const [zonesView, setZonesView] = useState(() => params.get('zones') === '1')
+  const [monitoring, setMonitoring] = useState(() => params.get('mon') === '1')
   const [failed, setFailed] = useState<number | null>(null)
   const [home, setHome] = useState(1)
   const [cloud, setCloud] = useState<Cloud>(() => store.get('archstory.cloud', 'neutral'))
@@ -99,9 +100,10 @@ export function App() {
     u.searchParams.set('view', view)
     if (network) u.searchParams.set('net', '1'); else u.searchParams.delete('net')
     if (zonesView) u.searchParams.set('zones', '1'); else u.searchParams.delete('zones')
+    if (monitoring) u.searchParams.set('mon', '1'); else u.searchParams.delete('mon')
     if (design.id !== shared?.id) u.hash = ''
     history.replaceState(null, '', u)
-  }, [design.id, flow, view, network, zonesView, shared, mode, problemId])
+  }, [design.id, flow, view, network, zonesView, monitoring, shared, mode, problemId])
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 3500)
@@ -112,7 +114,7 @@ export function App() {
   useEffect(() => { store.set('archstory.right', rightOpen) }, [rightOpen])
 
   const open = (id: string) => { setDesignId(id); setFlowId(''); setSelected(null); setTab('step') }
-  const select = (id: string | null) => { setSelected(id); if (id) { setTab('component'); setRightOpen(true) } }
+  const select = (id: string | null) => { setSelected(id); if (id) { setTab(t => (t === 'monitoring' ? t : 'component')); setRightOpen(true) } }
   const saveMine = (list: Design[]) => { setMine(list); store.set(MINE_KEY, list) }
   const importDesign = (d: Design) => {
     const id = LIBRARY.some(x => x.id === d.id) ? `${d.id}-mine` : d.id
@@ -203,6 +205,9 @@ export function App() {
             <ToolbarSep />
             <Toggle on={net} disabled={!design.network} onClick={() => setNetwork(v => !v)}
               title={design.network ? 'Show VPC, subnets and availability zones' : 'This design has no network section'}>Network</Toggle>
+            <Toggle on={monitoring && !!design.observability} disabled={!design.observability}
+              onClick={() => { setMonitoring(v => !v); if (!monitoring) { setTab('monitoring'); setRightOpen(true) } }}
+              title={design.observability ? 'Show where telemetry comes from, SLOs, alerts and what to watch' : 'This design has no monitoring section'}>Monitoring</Toggle>
             {net && zoneCount > 1 && (
               <AvailabilityMenu zoneCount={zoneCount} cloud={cloud} zonesView={zonesView} onZonesView={setZonesView}
                 failed={failedZone} onFailed={setFailed} home={homeZone} onHome={setHome} />
@@ -213,7 +218,7 @@ export function App() {
           {view === 'timeline' && flow
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <ReactFlowProvider>
-                <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} selected={selected}
+                <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
                   zonesView={zonesView} zone={zone} insets={insets}
                   onSelect={select} colorMode={theme.resolved} />
               </ReactFlowProvider>}
@@ -223,8 +228,8 @@ export function App() {
 
       {rightOpen && (
         <aside className="right">
-          <Inspector design={design} flow={flow} player={player} cloud={cloud} network={net} zone={zonesView ? zone : { ...zone, hops: null }} selected={selected}
-            tab={tab} onTab={setTab} onFlow={setFlowId} />
+          <Inspector design={design} flow={flow} player={player} cloud={cloud} network={net} monitoring={monitoring} zone={zonesView ? zone : { ...zone, hops: null }} selected={selected}
+            tab={tab} onTab={setTab} onFlow={setFlowId} onSelect={select} />
         </aside>
       )}
       </>)}
