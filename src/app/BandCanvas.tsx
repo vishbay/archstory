@@ -97,13 +97,21 @@ function FlowEdge(p: EdgeProps) {
   const [path, lx, ly] = getBezierPath(p)
   const color = d.picked ? 'var(--accent)' : edgeColor(d)
   const dashed = d.state === 'active' ? d.kind === 'async' : d.async
-  const label = d.state === 'active' ? d.label : d.note
+  const label = d.state === 'active' ? undefined : d.note   // the active step's label travels with the packet
   return (
     <>
       <BaseEdge id={p.id} path={path} markerEnd={p.markerEnd}
         interactionWidth={18}
         style={{ stroke: color, strokeWidth: d.state === 'active' || d.picked ? 3 : 1.6, strokeDasharray: dashed ? '6 5' : undefined }} />
       {d.packet && <Packet key={d.packet.key} path={path} ms={d.packet.ms} reverse={d.packet.reverse} color={color} />}
+      {d.packet && d.label && (
+        <EdgeLabelRenderer>
+          <div key={d.packet.key} className="packet-tag" title={d.label}
+            style={{ offsetPath: `path("${path}")`, animationDuration: `${d.packet.ms}ms`, animationDirection: d.packet.reverse ? 'reverse' : 'normal', borderColor: color, color }}>
+            {d.label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {label && (
         <EdgeLabelRenderer>
           <div className={`edge-label${d.state === 'active' ? '' : ' quiet'}`}

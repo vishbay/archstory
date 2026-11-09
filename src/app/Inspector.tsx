@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { Design, Flow } from '../model/schema'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
@@ -7,7 +8,7 @@ import { crossing, placement } from '../model/network'
 import { haOf, impactOf, placementsOf, resilience, zoneName } from '../model/availability'
 import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
-import type { Player } from './hooks'
+import { reducedMotion, type Player } from './hooks'
 
 export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes'
 
@@ -28,6 +29,11 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const byId = Object.fromEntries(design.nodes.map(n => [n.id, n]))
   const name = (id: string) => nameOf(byId[id], cloud)
   const { step, jump } = player
+  // Keep the current step in view while the flow plays.
+  const listRef = useRef<HTMLOListElement>(null)
+  useEffect(() => {
+    listRef.current?.querySelector('li.cur')?.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' })
+  }, [step, flow?.id, tab])
   const cur = flow?.steps[step]
   const node = selected ? byId[selected] : undefined
   const zones = network && (design.network?.zones ?? 1) > 1
@@ -77,9 +83,11 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             ) : (
               <div className="card muted">Press ▶ or space to send a request through the system. ← → step through it.</div>
             )}
-            <ol className="steps">
+            <ol className="steps" ref={listRef}>
               {flow.steps.map((s, i) => (
-                <li key={i} className={i === step ? 'cur' : i < step ? 'done' : ''} onClick={() => jump(i)}>
+                <li key={i} className={i === step ? 'cur' : i < step ? 'done' : ''} onClick={() => jump(i)}
+                  role="button" tabIndex={0} aria-current={i === step ? 'step' : undefined} aria-label={`Step ${i + 1}: ${name(s.from)}${s.from !== s.to ? ` to ${name(s.to)}` : ''}, ${s.label}`}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(i) } }}>
                   <span className="dot" style={{ background: KIND_VAR[s.kind] }} />
                   <span>{name(s.from)}{s.from !== s.to && ` → ${name(s.to)}`}</span>
                   <span className="mono muted">{s.label}</span>

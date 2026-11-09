@@ -107,7 +107,16 @@ aside.right { justify-self: end; width: 360px; margin: 10px 10px 10px 0; }
 /* ---------- player ---------- */
 .player { display: flex; align-items: center; gap: 10px; padding: 8px var(--pr) 8px var(--pl); background: var(--surface); border-top: 1px solid var(--border); }
 .player-buttons { display: flex; gap: 4px; }
-.player .scrub { flex: 1; accent-color: var(--accent); min-width: 80px; }
+.scrub-wrap { position: relative; flex: 1; min-width: 80px; height: 26px; }
+.player .scrub { -webkit-appearance: none; appearance: none; position: absolute; inset: 0; width: 100%; height: 26px; margin: 0; background: transparent; cursor: pointer; }
+.player .scrub::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) var(--p), var(--surface-3) var(--p)); }
+.player .scrub::-moz-range-track { height: 4px; border-radius: 2px; background: var(--surface-3); }
+.player .scrub::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+.player .scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--accent); }
+.player .scrub::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--accent); }
+.tick { position: absolute; top: 4px; width: 4px; height: 8px; margin-left: -2px; padding: 0; border: 0; border-radius: 2px; opacity: .45; cursor: pointer; z-index: 1; }
+.tick.done { opacity: .9; } .tick.cur { opacity: 1; height: 10px; top: 3px; }
+.tick:hover { opacity: 1; transform: scaleY(1.4); }
 .player .count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; min-width: 52px; text-align: center; }
 .player select:first-child { max-width: 220px; }
 
@@ -169,8 +178,8 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .node-rep { font-size: 11px; color: var(--muted); background: var(--surface-3); border-radius: 6px; padding: 0 5px; }
 .node-note { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); white-space: nowrap; font: 11.5px var(--mono);
   color: var(--k-local); background: var(--surface); border: 1px solid var(--k-local); border-radius: 6px; padding: 2px 7px; }
-.node.st-active { box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent), var(--shadow); transform: translateY(-1px); }
-.node.st-flow { opacity: .7; } .node.st-off { opacity: .3; }
+.node.st-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 7px var(--accent-soft), 0 10px 24px color-mix(in srgb, var(--accent) 26%, transparent); transform: translateY(-1px); opacity: 1; filter: none; }
+.node.st-visited { opacity: .92; } .node.st-flow { opacity: .62; } .node.st-off { opacity: .2; filter: grayscale(.6); }
 .node.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
 .node .react-flow__handle { opacity: 0; width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; }
 .edge-label { position: absolute; pointer-events: none; font: 11.5px var(--mono); background: var(--surface); border: 1px solid; border-radius: 6px; padding: 2px 7px; white-space: nowrap; z-index: 1000; box-shadow: var(--shadow); }
@@ -449,3 +458,15 @@ button.big { height: 40px; padding: 0 18px; font-size: 14.5px; }
 .signals th { width: 84px; }
 .debug { margin: 6px 0; } .debug ol { margin: 6px 0 0; padding-left: 20px; font-size: 13px; color: var(--muted); } .debug ol li { margin: 3px 0; }
 .stack { list-style: none; padding: 0; margin: 0; font-size: 13px; } .stack li { padding: 6px 0; border-top: 1px solid var(--border); } .stack p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+
+/* ---------- coloured sub-headings and panel titles ---------- */
+.panel-body h3, .dialog h3 { color: var(--accent-text); }
+summary { color: var(--accent-text); }
+
+/* ---------- packet tag: the step label travels with the packet ---------- */
+.packet-tag { position: absolute; top: 0; left: 0; z-index: 1001; pointer-events: none; offset-rotate: 0deg; offset-anchor: -12px 32px; offset-distance: 0%;
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11.5px var(--mono); background: var(--surface);
+  border: 1.5px solid; border-radius: 7px; padding: 2px 8px; box-shadow: var(--shadow); animation: packet-move linear forwards; }
+@keyframes packet-move { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+@media (prefers-reduced-motion: reduce) { .packet-tag { animation: none; offset-distance: 100%; } }
+.steps li { cursor: pointer; } .steps li:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

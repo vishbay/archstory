@@ -26,3 +26,6 @@ dist-ssr
 # Official AWS / Google Cloud icons are downloaded from the providers (npm run icons), never committed.
 # See THIRD_PARTY_NOTICES.md.
 public/icons/
+
+# local before/after screenshots from the UI pass
+ux-pass/
