@@ -6,7 +6,7 @@
   --bg: #f4f6fa; --surface: #ffffff; --surface-2: #f1f4f9; --surface-3: #e8ecf3;
   --border: #e1e6ee; --border-strong: #cbd3df;
   --text: #0f172a; --muted: #5b6577; --faint: #8a94a6;
-  --accent: #4f46e5; --accent-soft: #eef0ff; --on-accent: #ffffff;
+  --accent: #4f46e5; --accent-soft: #eef0ff; --on-accent: #ffffff; --accent-text: #4338ca;
   --canvas: #f8fafc; --grid: #e3e8f0; --band: #0f172a05; --band-border: #e3e8f0;
   --node-bg: #ffffff; --shadow: 0 1px 2px #0f172a14, 0 4px 14px #0f172a0d;
   --edge-visited: #64748b; --edge-flow: #b8c2d2; --edge-off: #e2e8f0;
@@ -22,7 +22,7 @@
   --bg: #121212; --surface: #1c1c1e; --surface-2: #242426; --surface-3: #2e2e31;
   --border: #2c2c2e; --border-strong: #3d3d40;
   --text: #ececee; --muted: #a1a1a6; --faint: #75757a;
-  --accent: #6366f1; --accent-soft: #6366f126; --on-accent: #ffffff;
+  --accent: #6366f1; --accent-soft: #6366f126; --on-accent: #ffffff; --accent-text: #a5a8fb;
   --canvas: #121212; --grid: #1f1f21; --band: #ffffff06; --band-border: #2a2a2d;
   --node-bg: #1c1c1e; --shadow: 0 1px 2px #0008, 0 6px 20px #0006;
   --edge-visited: #8e8e93; --edge-flow: #48484c; --edge-off: #28282a;
@@ -37,7 +37,7 @@
     --bg: #121212; --surface: #1c1c1e; --surface-2: #242426; --surface-3: #2e2e31;
     --border: #2c2c2e; --border-strong: #3d3d40;
     --text: #ececee; --muted: #a1a1a6; --faint: #75757a;
-    --accent: #6366f1; --accent-soft: #6366f126; --on-accent: #ffffff;
+    --accent: #6366f1; --accent-soft: #6366f126; --on-accent: #ffffff; --accent-text: #a5a8fb;
     --canvas: #121212; --grid: #1f1f21; --band: #ffffff06; --band-border: #2a2a2d;
     --node-bg: #1c1c1e; --shadow: 0 1px 2px #0008, 0 6px 20px #0006;
     --edge-visited: #8e8e93; --edge-flow: #48484c; --edge-off: #28282a;
@@ -53,7 +53,7 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
 h3 { margin: 0 0 4px; font-size: 15px; }
-h4 { margin: 18px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
+h4 { margin: 18px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--accent-text); }
 p { margin: 6px 0; }
 a { color: var(--accent); }
 code, .mono { font-family: var(--mono); font-size: 12px; }
@@ -154,7 +154,7 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .react-flow { --xy-background-color: var(--canvas); --xy-controls-button-background-color: var(--surface); --xy-controls-button-border-color: var(--border); }
 .band { border: 1px solid var(--band-border); border-radius: 14px; background: var(--band); pointer-events: none; display: flex; }
 .band-head { width: 158px; padding: 0 14px; border-right: 1px solid var(--band-border); display: flex; flex-direction: column; justify-content: center; }
-.band-head b { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.band-head b { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: color-mix(in srgb, var(--tier, var(--text)) 72%, var(--text)); }
 .band-head span { font-size: 11px; color: var(--faint); line-height: 1.35; }
 .group { position: relative; border: 1.5px dashed var(--border-strong); border-radius: 12px; pointer-events: none; }
 .group span { position: absolute; top: -9px; left: 12px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); background: var(--canvas); }
@@ -246,8 +246,8 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 /* ---------- collapsible sidebar sections ---------- */
 .section { margin-top: 14px; }
 .section-head { width: 100%; justify-content: flex-start; gap: 6px; border: 0; background: none; padding: 4px 0; border-radius: 6px;
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
-.section-head:hover:not(:disabled) { background: none; color: var(--text); }
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--accent-text); }
+.section-head:hover:not(:disabled) { background: none; color: var(--accent-text); filter: brightness(1.15); }
 .chev { display: inline-block; width: 12px; font-size: 14px; line-height: 1; transition: transform .15s; }
 .chev.open { transform: rotate(90deg); }
 .count-pill { margin-left: 4px; font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); letter-spacing: 0; }
@@ -271,7 +271,7 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .field textarea { padding: 8px 10px; resize: vertical; }
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 8px 0; cursor: pointer; }
 .palette-group { margin: 10px 0; }
-.palette-tier { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 4px; }
+.palette-tier { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent-text); margin-bottom: 4px; }
 .palette { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; }
 button.danger { color: var(--hard); border-color: color-mix(in srgb, var(--hard) 45%, transparent); }
@@ -383,7 +383,7 @@ button.big { height: 40px; padding: 0 18px; font-size: 14.5px; }
 .how-step p { margin: 0; color: var(--muted); font-size: 13.5px; }
 .how-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 .lib-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.lib-head h2 { font-size: 20px; margin: 0; margin-right: auto; }
+.lib-head h2 { font-size: 20px; margin: 0; margin-right: auto; color: var(--accent-text); }
 .lib-head .search { width: 220px; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 16px; }
 .design-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;

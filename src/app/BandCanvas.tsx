@@ -23,9 +23,9 @@ export interface ZoneState { failed: number | null; home: number; zl: ZoneLayout
 
 // ---------- background nodes ----------
 function BandNode({ data }: NodeProps) {
-  const { tier, title, blurb, w, h } = data as { tier?: Tier; title?: string; blurb?: string; w: number; h: number }
+  const { tier, title, blurb, color, w, h } = data as { tier?: Tier; title?: string; blurb?: string; color?: string; w: number; h: number }
   return (
-    <div className="band" style={{ width: w, height: h }}>
+    <div className="band" style={{ width: w, height: h, ['--tier' as string]: color ?? TIER_INFO[tier!].color }}>
       <div className="band-head"><b>{title ?? TIER_INFO[tier!].title}</b><span>{blurb ?? TIER_INFO[tier!].blurb}</span></div>
     </div>
   )
@@ -251,7 +251,7 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
         data: { label: g.label, kind: g.kind, w: g.w, h: g.h } })),
       ...(L.obs ? [
         { id: 'band:obs', type: 'band', position: { x: L.obs.band.x, y: L.obs.band.y }, ...fixed, zIndex: -5,
-          data: { title: 'Monitoring', blurb: 'Every component emits metrics, logs and traces; alerts page a person', w: L.obs.band.w, h: L.obs.band.h } },
+          data: { title: 'Monitoring', color: '#14b8a6', blurb: 'Every component emits metrics, logs and traces; alerts page a person', w: L.obs.band.w, h: L.obs.band.h } },
         ...telemetryNodes().map(t => ({ id: t.id, type: 'component', position: L.obs!.pos[t.id], draggable: false,
           data: { node: t, cloud, state: 'visited' as State, selected: false, compact: true, telemetry: true } satisfies NodeData })),
       ] : []),

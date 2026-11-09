@@ -50,14 +50,14 @@ export const tierOf = (n: DNode): Tier => n.tier ?? kindInfo(n.kind).tier
 export const iconOf = (n: DNode) => n.icon ?? kindInfo(n.kind).icon
 export const colorOf = (n: DNode) => kindInfo(n.kind).color
 
-export const TIER_INFO: Record<Tier, { title: string; blurb: string }> = {
-  client:   { title: 'Clients',  blurb: 'Who makes the request' },
-  edge:     { title: 'Edge',     blurb: 'Near the user: DNS, TLS, caching' },
-  entry:    { title: 'Entry',    blurb: 'Front door: routing, auth, limits' },
-  services: { title: 'Services', blurb: 'Stateless business logic' },
-  data:     { title: 'Data',     blurb: 'State: caches, databases, blobs' },
-  async:    { title: 'Async',    blurb: 'Off the request path' },
-  external: { title: 'External', blurb: 'Third-party systems' },
+export const TIER_INFO: Record<Tier, { title: string; blurb: string; color: string }> = {
+  client:   { title: 'Clients',  blurb: 'Who makes the request', color: '#64748b' },
+  edge:     { title: 'Edge',     blurb: 'Near the user: DNS, TLS, caching', color: '#0ea5e9' },
+  entry:    { title: 'Entry',    blurb: 'Front door: routing, auth, limits', color: '#8b5cf6' },
+  services: { title: 'Services', blurb: 'Stateless business logic', color: '#10b981' },
+  data:     { title: 'Data',     blurb: 'State: caches, databases, blobs', color: '#f59e0b' },
+  async:    { title: 'Async',    blurb: 'Off the request path', color: '#ec4899' },
+  external: { title: 'External', blurb: 'Third-party systems', color: '#94a3b8' },
 }
 
 export type Cloud = 'neutral' | 'aws' | 'gcp' | 'azure'
