@@ -51,6 +51,12 @@ describe('practice checks', () => {
       expect(checks.filter(c => c.level === 'fail' || c.level === 'warn').map(c => c.title), ref.id).toEqual([])
     }
   })
+  it('treats a missing DNS as a gentle warning, not a failure', () => {
+    const { d: d0, ids: [c, lb, svc] } = build(['web_client', 'load_balancer', 'service'])
+    const d = connect(connect(d0, c, lb), lb, svc)
+    const titles = runChecks(d, LIBRARY.find(x => x.id === 'chat')!).checks.map(x => `${x.level}: ${x.title}`)
+    expect(titles).toContain('warn: Missing DNS (usually implied, but worth saying)')
+  })
   it('asks for more when the attempt is nearly empty', () => {
     expect(runChecks(build(['service']).d, url).checks[0].id).toBe('size')
   })

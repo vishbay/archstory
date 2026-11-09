@@ -69,6 +69,16 @@
       "kind": "web_client"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the search hostname at the CDN",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
@@ -186,6 +196,10 @@
     {
       "from": "builder",
       "to": "snapshots"
+    },
+    {
+      "from": "client",
+      "to": "dns"
     }
   ],
   "flows": [
@@ -194,6 +208,20 @@
       "title": "Keystroke (cache hit)",
       "summary": "Most prefixes are short and popular, so the CDN answers without reaching the origin.",
       "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve search.example.com",
+          "detail": "Cached by the browser and by resolvers, so the lookup happens once per session and autocomplete keystrokes never wait on DNS."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "label": "CDN edge address",
+          "payload": "search.example.com.  60  IN A  203.0.113.10"
+        },
         {
           "from": "client",
           "to": "client",

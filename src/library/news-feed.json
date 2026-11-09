@@ -82,6 +82,16 @@
       "description": "Mobile or web app"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the app hostname at the CDN",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
@@ -253,6 +263,10 @@
     {
       "from": "timeline_svc",
       "to": "graph_svc"
+    },
+    {
+      "from": "client",
+      "to": "dns"
     }
   ],
   "flows": [
@@ -261,6 +275,20 @@
       "title": "Post an update",
       "summary": "Write path with fan-out on write: store the post once, then push its id into every follower's cached timeline in the background.",
       "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve feed.example.com",
+          "detail": "The app resolves the API hostname, which points at the CDN. The answer is cached on the phone and by resolvers."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "label": "CDN edge address",
+          "payload": "feed.example.com.  60  IN A  203.0.113.10"
+        },
         {
           "from": "client",
           "to": "cdn",

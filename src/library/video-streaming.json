@@ -84,6 +84,16 @@
       "kind": "mobile_client"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the site and video hostnames at the CDN",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
@@ -265,6 +275,14 @@
     {
       "from": "counter",
       "to": "meta_db"
+    },
+    {
+      "from": "creator",
+      "to": "dns"
+    },
+    {
+      "from": "viewer",
+      "to": "dns"
     }
   ],
   "flows": [
@@ -273,6 +291,20 @@
       "title": "Upload and transcode",
       "summary": "Bytes go straight to object storage with signed URLs; an event kicks off parallel transcoding.",
       "steps": [
+        {
+          "from": "creator",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve video.example.com",
+          "detail": "The hostname points at the CDN, so viewers fetch the page and every video segment from the nearest edge. Resolvers cache the answer."
+        },
+        {
+          "from": "dns",
+          "to": "creator",
+          "kind": "res",
+          "label": "CDN edge address",
+          "payload": "video.example.com.  60  IN A  203.0.113.10"
+        },
         {
           "from": "creator",
           "to": "lb",
@@ -390,6 +422,20 @@
       "title": "Watch a video",
       "summary": "A tiny API call for the manifest, then every byte of video comes from the CDN edge.",
       "steps": [
+        {
+          "from": "viewer",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve video.example.com",
+          "detail": "The hostname points at the CDN, so viewers fetch the page and every video segment from the nearest edge. Resolvers cache the answer."
+        },
+        {
+          "from": "dns",
+          "to": "viewer",
+          "kind": "res",
+          "label": "CDN edge address",
+          "payload": "video.example.com.  60  IN A  203.0.113.10"
+        },
         {
           "from": "viewer",
           "to": "cdn",

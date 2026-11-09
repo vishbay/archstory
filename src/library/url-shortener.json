@@ -78,6 +78,16 @@
       "description": "Browser / app"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the short domain at the CDN",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
@@ -227,6 +237,10 @@
     {
       "from": "worker",
       "to": "analytics"
+    },
+    {
+      "from": "client",
+      "to": "dns"
     }
   ],
   "flows": [
@@ -235,6 +249,20 @@
       "title": "Create link",
       "summary": "Write path: the client submits a long URL and gets back a short code.",
       "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve sho.rt",
+          "detail": "DNS points the short domain at the CDN, which answers from the nearest edge location. Browsers and resolvers cache the answer, so most clicks skip this lookup entirely."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "label": "CDN edge address",
+          "payload": "sho.rt.  60  IN A  203.0.113.10"
+        },
         {
           "from": "client",
           "to": "cdn",
@@ -337,6 +365,20 @@
       "title": "Redirect (cache hit)",
       "summary": "The hot path, ~99% of traffic: resolve a code from cache and redirect.",
       "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve sho.rt",
+          "detail": "DNS points the short domain at the CDN, which answers from the nearest edge location. Browsers and resolvers cache the answer, so most clicks skip this lookup entirely."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "label": "CDN edge address",
+          "payload": "sho.rt.  60  IN A  203.0.113.10"
+        },
         {
           "from": "client",
           "to": "cdn",

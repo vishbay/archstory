@@ -72,6 +72,16 @@
       "kind": "client"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the API hostname at the load balancer",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "lb",
       "label": "Network Load Balancer",
       "kind": "network_load_balancer",
@@ -143,6 +153,10 @@
     {
       "from": "gw",
       "to": "api"
+    },
+    {
+      "from": "client",
+      "to": "dns"
     }
   ],
   "flows": [
@@ -151,6 +165,20 @@
       "title": "Allowed request",
       "summary": "One atomic round trip to Redis decides, then the request continues to the backend.",
       "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve api.example.com",
+          "detail": "A network load balancer has fixed IP addresses, which customers can allowlist in their firewalls. DNS answers with them and clients cache the result."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "label": "NLB static IPs",
+          "payload": "api.example.com.  60  IN A  203.0.113.10"
+        },
         {
           "from": "client",
           "to": "lb",
@@ -367,6 +395,11 @@
       "target": "lb",
       "kind": "tradeoff",
       "text": "A network (L4) load balancer is enough here because the gateways already parse HTTP. It adds less latency, handles huge connection counts and can expose static IPs that customers allowlist."
+    },
+    {
+      "target": "dns",
+      "kind": "note",
+      "text": "Static IPs from the network load balancer let enterprise customers allowlist the API. Plan any IP change carefully: they cache and firewall these addresses."
     }
   ]
 }

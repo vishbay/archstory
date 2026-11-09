@@ -26,6 +26,8 @@ const FAMILY_NAME: Record<string, string> = {
 }
 const nameOfFamily = (f: string) => FAMILY_NAME[f] ?? `a ${f.replace(/_/g, ' ')}`
 const UNCHECKED = new Set(['client', 'service'])
+// Pieces interviewers usually treat as implied: worth saying out loud, but not a failure when missing.
+const IMPLIED = new Set(['dns'])
 
 export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: number; total: number } {
   const checks: Check[] = []
@@ -66,7 +68,8 @@ export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: 
     const why = ref.notes.find(n => refNodes.some(r => r.id === n.target))?.text ?? refNodes[0].description
     // Components the reference only uses for background work are worth mentioning, not failing.
     const background = !refNodes.some(n => onRequestPath(ref, n.id))
-    add({ id: `has:${fam}`, level: background ? 'warn' : 'fail', title: `Missing ${nameOfFamily(fam)}${background ? ' (background work)' : ''}`,
+    const implied = IMPLIED.has(fam)
+    add({ id: `has:${fam}`, level: background || implied ? 'warn' : 'fail', title: `Missing ${nameOfFamily(fam)}${background ? ' (background work)' : implied ? ' (usually implied, but worth saying)' : ''}`,
       detail: `The reference uses ${refNodes.map(n => n.label).join(', ')}.${why ? ` ${why}` : ''}` })
   }
 

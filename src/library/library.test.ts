@@ -3,6 +3,7 @@ import { LIBRARY } from '.'
 import { layoutZones, resolveFlow } from '../layout/zones'
 import { resilience } from '../model/availability'
 import { layoutBands, NODE_W } from '../layout/bands'
+import { tierOf } from '../model/kinds'
 
 describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
   const zones = d.network?.zones ?? 1
@@ -12,6 +13,15 @@ describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
     expect(d.flows.length).toBeGreaterThan(0)
     for (const f of d.flows) expect(f.steps.some(s => s.detail), f.id).toBe(true)
     expect(d.notes.length).toBeGreaterThan(2)
+  })
+
+  // Any client that calls the system has to find it by name. Designs where clients are only called (push
+  // notifications) are exempt.
+  it('resolves the system through DNS for every client that calls it', () => {
+    const dns = new Set(d.nodes.filter(n => n.kind === 'dns').map(n => n.id))
+    const callers = d.nodes.filter(n => tierOf(n) === 'client' && d.edges.some(e => e.from === n.id))
+    for (const c of callers)
+      expect(d.edges.some(e => e.from === c.id && dns.has(e.to)), `${c.label} has no connection to a DNS node`).toBe(true)
   })
 
   it('lays out without overlapping nodes, with and without the network layer', () => {

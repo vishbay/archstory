@@ -3,17 +3,19 @@
   "id": "chat",
   "meta": {
     "title": "Chat Messaging",
-    "summary": "1:1 and group messaging (WhatsApp / Messenger style) over persistent connections, with offline delivery and push notifications.",
+    "summary": "1:1 and group messaging (WhatsApp / Messenger style) over persistent connections, with offline delivery, push notifications and encrypted media.",
     "tags": [
       "realtime",
       "websockets",
-      "messaging"
+      "messaging",
+      "media"
     ],
     "difficulty": "hard"
   },
   "requirements": {
     "functional": [
       "Send 1:1 and small-group text messages",
+      "Send photos, voice notes and files up to ~100 MB",
       "Sent, delivered and read receipts",
       "Offline users get a push notification and receive missed messages on reconnect",
       "Message history syncs across a user's devices"
@@ -35,6 +37,10 @@
       {
         "label": "Concurrent connections",
         "value": "~200M"
+      },
+      {
+        "label": "Media",
+        "value": "~10% of messages carry a file (~4B/day, mostly < 1 MB)"
       }
     ]
   },
@@ -157,6 +163,36 @@
       "label": "APNs / FCM",
       "kind": "notification_provider",
       "description": "Apple and Google push services"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Geo / latency routed: sends each client to the nearest region's load balancer",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "cdn",
+      "label": "CDN (media)",
+      "kind": "cdn",
+      "description": "Caches encrypted media near recipients; chat traffic never goes through it",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "media",
+      "label": "Media Storage",
+      "kind": "object_store",
+      "description": "Encrypted images, videos, voice notes and files",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
     }
   ],
   "groups": [],
@@ -201,9 +237,111 @@
     {
       "from": "apns",
       "to": "bob"
+    },
+    {
+      "from": "alice",
+      "to": "dns"
+    },
+    {
+      "from": "bob",
+      "to": "dns"
+    },
+    {
+      "from": "alice",
+      "to": "media"
+    },
+    {
+      "from": "chat_svc",
+      "to": "media"
+    },
+    {
+      "from": "bob",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "media"
     }
   ],
   "flows": [
+    {
+      "id": "connect",
+      "title": "Connect and go online",
+      "summary": "Resolve the service, open one long-lived connection, and register which gateway holds it so messages can find this user.",
+      "steps": [
+        {
+          "from": "alice",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve chat.example.com",
+          "detail": "Clients look the service up by name, and DNS answers with the nearest region's load balancer (geo or latency routing). A short TTL (about 60 s) lets traffic move away from a failing region. This happens once per connect, not per message.",
+          "payload": "chat.example.com.  IN A"
+        },
+        {
+          "from": "dns",
+          "to": "alice",
+          "kind": "res",
+          "label": "NLB address (nearest region)",
+          "detail": "Apps also ship a fallback hostname and a list of IPs, because DNS can be slow or blocked on some networks.",
+          "payload": "chat.example.com.  60  IN A  203.0.113.10"
+        },
+        {
+          "from": "alice",
+          "to": "lb",
+          "kind": "req",
+          "label": "TCP + TLS + WebSocket upgrade",
+          "detail": "One connection stays open for hours, so the cost of setting it up is paid once. The layer-4 balancer just passes the bytes through.",
+          "payload": "GET /ws HTTP/1.1\nUpgrade: websocket\nAuthorization: Bearer eyJ…"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "pick a gateway (least connections)",
+          "detail": "Spreading connections evenly matters more than spreading requests: each gateway holds about a million sockets."
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "authenticate + register",
+          "detail": "The gateway checks the token, then tells the message service this user is online here."
+        },
+        {
+          "from": "chat_svc",
+          "to": "sessions",
+          "kind": "req",
+          "label": "SET session:alice gateway-17 EX 60",
+          "detail": "This entry is how every later message finds Alice. The gateway refreshes it with a heartbeat every 30 s, so if the gateway dies the entry expires within a minute and she is treated as offline.",
+          "payload": "SET session:alice gateway-17 EX 60"
+        },
+        {
+          "from": "sessions",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "OK"
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "label": "ready"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "label": "101 Switching Protocols"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "res",
+          "label": "connected",
+          "detail": "From here Alice can send and receive over the same socket. The client reconnects automatically with backoff and jitter, so a gateway restart does not cause a stampede."
+        }
+      ]
+    },
     {
       "id": "online",
       "title": "Send (recipient online)",
@@ -462,6 +600,193 @@
           "label": "3 new messages"
         }
       ]
+    },
+    {
+      "id": "media",
+      "title": "Send an image",
+      "summary": "Media skips the chat servers: it goes straight to object storage with a short-lived signed URL, and the message carries only a reference. The recipient downloads it through a CDN.",
+      "steps": [
+        {
+          "from": "alice",
+          "to": "alice",
+          "kind": "local",
+          "label": "encrypt on device",
+          "detail": "The file is encrypted with a fresh random key before it leaves the phone. The key travels inside the end-to-end encrypted message, so storage and the CDN only ever see ciphertext."
+        },
+        {
+          "from": "alice",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS frame: request upload",
+          "detail": "Alice asks for an upload slot over her open connection.",
+          "payload": "{ \"type\": \"upload\", \"size\": 842113, \"content_type\": \"image/jpeg\", \"sha256\": \"9f2c…\" }"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "same TCP connection"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "request upload"
+        },
+        {
+          "from": "chat_svc",
+          "to": "chat_svc",
+          "kind": "local",
+          "label": "sign upload URL",
+          "detail": "The service signs a PUT URL locally with its storage credentials: it expires in 5 minutes and is bound to this size and content type. Nothing is sent to storage yet."
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "label": "signed URL"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "label": "signed URL"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "res",
+          "label": "upload slot",
+          "detail": "A 5 MB photo never touches the chat servers, which stay free for messages."
+        },
+        {
+          "from": "alice",
+          "to": "media",
+          "kind": "req",
+          "label": "PUT ciphertext (direct)",
+          "detail": "Gigabytes per second of uploads go straight to object storage. A failed upload is retried on its own, without resending a message.",
+          "payload": "PUT https://media…/m/8c1f?X-Amz-Signature=…\nContent-Length: 842113"
+        },
+        {
+          "from": "media",
+          "to": "alice",
+          "kind": "res",
+          "label": "200 OK"
+        },
+        {
+          "from": "alice",
+          "to": "lb",
+          "kind": "req",
+          "label": "WS frame: send (media ref)",
+          "detail": "Now the ordinary message: text plus a reference to the file and its decryption key (inside the encrypted body).",
+          "payload": "{ \"type\": \"send\", \"conv_id\": \"c_alice_bob\", \"client_msg_id\": \"a1-0043\", \"body\": \"<ciphertext: ref m/8c1f + key>\" }"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "label": "same TCP connection"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "label": "send"
+        },
+        {
+          "from": "chat_svc",
+          "to": "media",
+          "kind": "req",
+          "label": "HEAD m/8c1f",
+          "detail": "Before accepting the message, check the file really arrived and its size matches. Otherwise Bob would get a message pointing at nothing."
+        },
+        {
+          "from": "media",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "200, 842113 bytes"
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "label": "INSERT (QUORUM)",
+          "detail": "The message is stored like any other; only its body differs."
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "label": "OK, msg_id"
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "label": "ack ✓"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "label": "ack ✓"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "res",
+          "label": "✓ sent",
+          "detail": "Delivery to Bob works exactly as in \"Send (recipient online)\" and is not repeated here."
+        },
+        {
+          "from": "bob",
+          "to": "bob",
+          "kind": "local",
+          "label": "message arrives with a media reference",
+          "detail": "Bob sees a blurred thumbnail (sent inline in the message) while the full file downloads."
+        },
+        {
+          "from": "bob",
+          "to": "cdn",
+          "kind": "req",
+          "label": "GET /m/8c1f",
+          "detail": "Downloads use a plain HTTPS URL on the CDN, not the chat connection.",
+          "payload": "GET /m/8c1f HTTP/2\nHost: media.example.com"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "label": "MISS",
+          "detail": "First recipient in this region. In a group chat, everyone after Bob gets a HIT, so the file leaves origin storage once."
+        },
+        {
+          "from": "cdn",
+          "to": "media",
+          "kind": "req",
+          "label": "fetch from origin"
+        },
+        {
+          "from": "media",
+          "to": "cdn",
+          "kind": "res",
+          "label": "ciphertext",
+          "detail": "The CDN caches the ciphertext. It cannot read it, and storage lifecycle rules delete it after about 30 days."
+        },
+        {
+          "from": "cdn",
+          "to": "bob",
+          "kind": "res",
+          "label": "ciphertext"
+        },
+        {
+          "from": "bob",
+          "to": "bob",
+          "kind": "local",
+          "label": "decrypt with the key from the message",
+          "detail": "Only Bob and Alice hold the key."
+        }
+      ]
     }
   ],
   "notes": [
@@ -492,6 +817,21 @@
     {
       "kind": "tradeoff",
       "text": "Groups: small groups fan out on write (one delivery per member). Large broadcast channels switch to fan-out on read."
+    },
+    {
+      "target": "dns",
+      "kind": "scaling",
+      "text": "Geo or latency routing keeps each user in the nearest region and lets you shift traffic away from a failing one. TTLs are short (about 60 s) for that reason; clients also keep fallback hostnames and IPs."
+    },
+    {
+      "target": "media",
+      "kind": "tradeoff",
+      "text": "Sending media through the chat servers would tie up gateway connections and bandwidth. Direct-to-storage upload with signed URLs scales independently and makes uploads resumable."
+    },
+    {
+      "target": "cdn",
+      "kind": "scaling",
+      "text": "Chat traffic is unique, long-lived connections, so a CDN cannot help there. It only serves media downloads, where one group photo is fetched by many recipients."
     }
   ]
 }

@@ -84,6 +84,16 @@
       "kind": "mobile_client"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Geo routed: sends each app to its city's region",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "lb",
       "label": "Load Balancer (L7)",
       "kind": "load_balancer",
@@ -239,6 +249,14 @@
     {
       "from": "matching",
       "to": "ws"
+    },
+    {
+      "from": "rider",
+      "to": "dns"
+    },
+    {
+      "from": "driver",
+      "to": "dns"
     }
   ],
   "flows": [
@@ -296,6 +314,20 @@
       "title": "Request a ride",
       "summary": "Find nearby drivers, rank by real road ETA, lock one so nobody else can take it, and offer the trip.",
       "steps": [
+        {
+          "from": "rider",
+          "to": "dns",
+          "kind": "req",
+          "label": "resolve api.rides.example.com",
+          "detail": "Geo routing sends each app to its city's region, so the rider, the driver and the matching service for that city share a region. A short TTL lets traffic move if a region fails."
+        },
+        {
+          "from": "dns",
+          "to": "rider",
+          "kind": "res",
+          "label": "ALB address (nearest region)",
+          "payload": "api.rides.example.com.  60  IN A  203.0.113.10"
+        },
         {
           "from": "rider",
           "to": "lb",
@@ -550,6 +582,11 @@
       "target": "lb",
       "kind": "tradeoff",
       "text": "ALB vs NLB: an application (L7) load balancer handles WebSockets and adds TLS termination and path routing. At ~1M long-lived driver connections, many teams put a network (L4) load balancer in front of the WebSocket gateways instead: higher connection limits, lower latency, static IPs, and the gateways terminate TLS themselves."
+    },
+    {
+      "target": "dns",
+      "kind": "scaling",
+      "text": "Geo routing keeps a city in one region, which keeps the driver geo index and matching local. If a region fails, change the DNS answer and drivers reconnect to another region within a few minutes (about one TTL)."
     }
   ]
 }
