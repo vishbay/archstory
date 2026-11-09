@@ -5,7 +5,7 @@ import './app.css'
 import { LIBRARY } from '../library'
 import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
-import { store, usePlayer, useTheme } from './hooks'
+import { PANEL_LEFT, PANEL_RIGHT, store, usePlayer, useTheme, useWide } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
 import { AvailabilityMenu, Seg, Toggle, Toolbar, ToolbarSep } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
@@ -74,6 +74,8 @@ export function App() {
   const [rightOpen, setRightOpen] = useState(() => store.get('archstory.right', true))
   const [importing, setImporting] = useState(false)
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
+  const wide = useWide()
+  const insets = { left: wide && leftOpen ? PANEL_LEFT : 12, right: wide && rightOpen ? PANEL_RIGHT : 12 }
   const net = network && !!design.network
   const zoneCount = design.network?.zones ?? 1
   const failedZone = net && failed !== null && failed < zoneCount ? failed : null
@@ -153,17 +155,21 @@ export function App() {
             <button className="link" onClick={saveShared}>Save to My designs</button>
           </span>
         )}
-        <nav className="seg" aria-label="Mode">
-          <button className={mode === 'explore' ? 'on' : ''} onClick={() => setMode('explore')}>Explore</button>
-          <button className={mode === 'practice' ? 'on' : ''}
-            onClick={() => { if (LIBRARY.some(d => d.id === design.id)) setProblemId(design.id); setMode('practice') }}>Practice</button>
-        </nav>
+        {mode !== 'home' && (
+          <nav className="seg" aria-label="Mode">
+            <button className={mode === 'explore' ? 'on' : ''} onClick={() => setMode('explore')}>Explore</button>
+            <button className={mode === 'practice' ? 'on' : ''}
+              onClick={() => { if (LIBRARY.some(d => d.id === design.id)) setProblemId(design.id); setMode('practice') }}>Practice</button>
+          </nav>
+        )}
         <span className="spacer" />
-        <div className="seg" role="group" aria-label="Cloud">
-          {(['neutral', 'aws', 'gcp'] as Cloud[]).map(c => (
-            <button key={c} className={cloud === c ? 'on' : ''} onClick={() => setCloud(c)}>{c === 'neutral' ? 'Neutral' : c.toUpperCase()}</button>
-          ))}
-        </div>
+        {mode !== 'home' && (
+          <div className="seg" role="group" aria-label="Cloud">
+            {(['neutral', 'aws', 'gcp'] as Cloud[]).map(c => (
+              <button key={c} className={cloud === c ? 'on' : ''} onClick={() => setCloud(c)}>{c === 'neutral' ? 'Neutral' : c.toUpperCase()}</button>
+            ))}
+          </div>
+        )}
         {mode === 'explore' && <button onClick={share} title="Copy a link to this design, flow and view">Share</button>}
         <button className="icon ghost" title={`Theme: ${theme.pref}`} onClick={theme.cycle}>{themeIcon}</button>
         {mode !== 'home' && <button className="icon ghost" title="Toggle inspector" onClick={() => setRightOpen(o => !o)}>◫</button>}
@@ -208,7 +214,7 @@ export function App() {
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <ReactFlowProvider>
                 <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} selected={selected}
-                  zonesView={zonesView} zone={zone}
+                  zonesView={zonesView} zone={zone} insets={insets}
                   onSelect={select} colorMode={theme.resolved} />
               </ReactFlowProvider>}
         </div>

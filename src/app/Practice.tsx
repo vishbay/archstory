@@ -14,7 +14,7 @@ import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { Section } from './Sidebar'
-import { store, usePlayer } from './hooks'
+import { PANEL_LEFT, PANEL_RIGHT, store, usePlayer, useWide } from './hooks'
 import { commit, initHistory, redo, undo } from '../practice/history'
 import type { StoredReview } from './ReviewPanel'
 
@@ -61,6 +61,8 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
   const [reasoningOn, setReasoningOn] = useState(() => store.get('archstory.reasoning', false))
   useEffect(() => { store.set('archstory.reasoning', reasoningOn) }, [reasoningOn])
 
+  const wide = useWide()
+  const insets = { left: wide && leftOpen ? PANEL_LEFT : 12, right: wide && rightOpen ? PANEL_RIGHT : 12 }
   const shown = showRef ? ref : attempt
   const flow = shown.flows.find(f => f.id === flowId) ?? shown.flows[0]
   const player = usePlayer(flow?.steps.length ?? 0, `${shown.id}/${flow?.id}`)
@@ -214,7 +216,7 @@ export function Practice({ problemId, onProblem, cloud, colorMode, leftOpen, rig
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
             : <ReactFlowProvider>
                 <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  zonesView={false} zone={NO_ZONES} selected={selected} onSelect={onNode} colorMode={colorMode}
+                  zonesView={false} zone={NO_ZONES} insets={insets} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={showRef ? undefined : {
                     onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
                     onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },

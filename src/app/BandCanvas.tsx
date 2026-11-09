@@ -134,16 +134,22 @@ export interface EditProps {
   mode?: 'record' | 'connect' | null
 }
 
-export function BandCanvas({ design, flow, player, cloud, network, zonesView, zone, selected, onSelect, colorMode, edit }: {
+export function BandCanvas({ design, flow, player, cloud, network, zonesView, zone, selected, onSelect, colorMode, edit, insets = { left: 12, right: 12 } }: {
   design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; zonesView: boolean; zone: ZoneState
   selected: string | null; onSelect: (id: string | null) => void; colorMode: 'light' | 'dark'; edit?: EditProps
+  /** Pixels at the left and right edge covered by floating panels. */
+  insets?: { left: number; right: number }
 }) {
   const rf = useReactFlow()
   // Each side has overlapping source and target handles, and React Flow reverses a connection dragged from a
   // target handle. The component where the drag started is always the caller.
   const dragFrom = useRef<string | null>(null)
   const count = design.nodes.length
-  useEffect(() => { if (edit) requestAnimationFrame(() => rf.fitView({ duration: 250, padding: { top: '24px', bottom: '24px', left: '24px', right: '24px' } })) },
+  type Px = `${number}px`
+  const px = (n: number): Px => `${n}px`
+  const pad = (top: number, bottom: number, side: number) =>
+    ({ top: px(top), bottom: px(bottom), left: px(insets.left + side), right: px(insets.right + side) })
+  useEffect(() => { if (edit) requestAnimationFrame(() => rf.fitView({ duration: 250, padding: pad(24, 24, 24) })) },
     // refit the editor when components are added or removed
     [count]) // eslint-disable-line react-hooks/exhaustive-deps
   const net = network && !!design.network
@@ -154,8 +160,8 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
   // Camera follows the request: frame the two components of the current hop; zoom back out on reset.
   const [follow, setFollow] = useState(() => store.get('archstory.follow', true))
   const toggleFollow = () => setFollow(f => { store.set('archstory.follow', !f); return !f })
-  const FRAME = { top: '40px', bottom: '150px', left: '80px', right: '80px' } as const
-  const OVERVIEW = { top: '24px', bottom: '24px', left: '24px', right: '24px' } as const
+  const FRAME = pad(40, 150, 80)
+  const OVERVIEW = pad(24, 24, 24)
   useEffect(() => {
     if (!follow || edit?.mode) return
     const duration = reducedMotion() ? 0 : 450
@@ -164,7 +170,7 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
     const ids = (zoned && zone.hops?.[step] ? [zone.hops[step].from, zone.hops[step].to] : [cur.from, cur.to])
       .filter((id): id is string => !!id)
     if (ids.length) rf.fitView({ nodes: [...new Set(ids)].map(id => ({ id })), duration, padding: FRAME, maxZoom: 1 })
-  }, [step, nonce, follow, flow?.id, zoned]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, nonce, follow, flow?.id, zoned, insets.left, insets.right]) // eslint-disable-line react-hooks/exhaustive-deps
   const { failed } = zone
 
   const { nodes, edges } = useMemo(() => {
@@ -266,7 +272,7 @@ export function BandCanvas({ design, flow, player, cloud, network, zonesView, zo
       }}
       onEdgeClick={(_, e) => edit?.onEdgeClick(e.source, e.target)}
       onNodeClick={(_, n) => onSelect(n.type === 'component' ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
-      fitView fitViewOptions={{ padding: { top: '24px', bottom: '24px', left: '24px', right: '24px' } }}
+      fitView fitViewOptions={{ padding: pad(24, 24, 24) }}
       minZoom={0.2} maxZoom={1.3} proOptions={{ hideAttribution: true }}>
       <Background gap={24} color="var(--grid)" />
       <Controls showInteractive={false} position="top-right">

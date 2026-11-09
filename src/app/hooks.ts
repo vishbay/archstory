@@ -73,3 +73,11 @@ export type Player = ReturnType<typeof usePlayer>
 
 /** Whether the viewer asked the OS to reduce motion. */
 export const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+
+/** Wide enough for the side panels to float over the canvas (below this they stack under it). */
+const wideQuery = typeof matchMedia === 'function' ? matchMedia('(min-width: 901px)') : null
+const subscribeWide = (cb: () => void) => { wideQuery?.addEventListener('change', cb); return () => wideQuery?.removeEventListener('change', cb) }
+export const useWide = () => useSyncExternalStore(subscribeWide, () => wideQuery?.matches ?? true)
+
+/** How far the floating panels cover the canvas, so the camera frames designs in the visible middle. */
+export const PANEL_LEFT = 300, PANEL_RIGHT = 380
