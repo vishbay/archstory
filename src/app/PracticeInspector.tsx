@@ -7,6 +7,9 @@ import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import { NodeIcon } from './NodeIcon'
 import type { Player } from './hooks'
 import { TimedPanel, type TimedControls } from './TimedPanel'
+import { AiInterviewer } from './AiInterviewer'
+import { useState } from 'react'
+import { store } from './hooks'
 import { mmss, status } from '../practice/timed'
 
 export type PracticeTab = 'build' | 'flows' | 'check' | 'reasoning' | 'review' | 'interview'
@@ -33,6 +36,8 @@ export function PracticeInspector(p: {
   timed: TimedControls
 }) {
   const { attempt: d, setAttempt, cloud, tab } = p
+  const [mode, setModeState] = useState<'timed' | 'ai'>(() => store.get('archstory.interviewMode', 'timed'))
+  const setMode = (m: 'timed' | 'ai') => { setModeState(m); store.set('archstory.interviewMode', m) }
   const node = p.selected ? d.nodes.find(n => n.id === p.selected) : undefined
   const edge = p.picked ? d.edges.find(e => e.from === p.picked!.from && e.to === p.picked!.to) : undefined
   const label = (id: string) => { const n = d.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
@@ -180,7 +185,16 @@ export function PracticeInspector(p: {
             onSelectNode={id => { p.onPick(null); p.onSelect(id) }} cloud={cloud} />
         )}
 
-        {shownTab === 'interview' && <TimedPanel t={p.timed} attempt={d} checks={p.result.checks} />}
+        {shownTab === 'interview' && (
+          <>
+            <div className="seg iv-mode" role="group" aria-label="Interview mode">
+              {(['timed', 'ai'] as const).map(m => <button key={m} className={mode === m ? 'on' : ''} aria-pressed={mode === m} onClick={() => setMode(m)}>{m === 'timed' ? 'Timed' : 'AI interviewer'}</button>)}
+            </div>
+            {mode === 'timed'
+              ? <TimedPanel t={p.timed} attempt={d} checks={p.result.checks} />
+              : <AiInterviewer attempt={d} reference={p.reference} checks={p.result.checks} cloud={cloud} onSelectNode={id => { p.onPick(null); p.onSelect(id) }} />}
+          </>
+        )}
 
         {shownTab === 'reasoning' && (
           <>

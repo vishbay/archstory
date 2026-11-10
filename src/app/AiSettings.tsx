@@ -61,6 +61,14 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
         <span className="muted small">Change this if your account uses a different model. Design reviews and generated designs work best with a strong model.</span>
       </label>
 
+      <div className="field">Your prices (optional, per million tokens)
+        <div className="ai-prices">
+          <label>Input<input type="text" inputMode="decimal" value={draft.prices.input} placeholder="e.g. 3" onChange={e => set({ prices: { ...draft.prices, input: e.target.value } })} /></label>
+          <label>Output<input type="text" inputMode="decimal" value={draft.prices.output} placeholder="e.g. 15" onChange={e => set({ prices: { ...draft.prices, output: e.target.value } })} /></label>
+        </div>
+        <span className="muted small">Copy them from your provider's pricing page. Used only to show a running cost estimate in the AI interviewer.</span>
+      </div>
+
       <label className="check-row">
         <input type="checkbox" checked={draft.remember} onChange={e => set({ remember: e.target.checked })} />
         Remember on this device (otherwise it is forgotten when you close this tab)

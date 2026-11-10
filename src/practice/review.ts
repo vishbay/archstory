@@ -58,7 +58,7 @@ export function signature(d: Design): string {
   return (h >>> 0).toString(36)
 }
 
-const REASONING_TITLES: Record<string, string> = {
+export const REASONING_TITLES: Record<string, string> = {
   requirements: 'Requirements and assumptions', estimates: 'Capacity estimates', api: 'API design',
   data_model: 'Data model', monitoring: 'Monitoring and alerting', tradeoffs: 'Trade-offs and bottlenecks',
 }
