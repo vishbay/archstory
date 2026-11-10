@@ -33,7 +33,7 @@ describe('buildRequest', () => {
   })
   it('maps Gemini roles and keeps the key out of the URL', () => {
     const r = buildRequest(cfg({ provider: 'gemini' }), [...msg, { role: 'assistant', content: 'ok' }], 50)
-    expect(r.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent')
+    expect(r.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent')
     expect(r.init.headers['x-goog-api-key']).toBe('sk-test-1234567890')
     expect(JSON.parse(r.init.body).contents.map((c: { role: string }) => c.role)).toEqual(['user', 'model'])
   })
@@ -86,7 +86,7 @@ describe('errors', () => {
     const e = describeHttpError(c, 401, JSON.stringify({ error: { message: 'Incorrect API key provided: sk-test-1234567890.' } }))
     expect(e.kind).toBe('auth'); expect(e.message).toContain('rejected the key'); expect(e.message).not.toContain('sk-test-1234567890')
     expect(describeHttpError(c, 429, '{}').kind).toBe('limit')
-    expect(describeHttpError(c, 404, '{}').message).toContain('gpt-4.1')
+    expect(describeHttpError(c, 404, '{}').message).toContain('gpt-6.1-sol')
     expect(describeHttpError(c, 503, 'down').message).toContain('HTTP 503')
   })
   it('tells a local-server user about CORS when the request cannot connect', async () => {
@@ -118,7 +118,7 @@ describe('configuration', () => {
   })
   it('ignores stored junk and falls back to defaults', () => {
     const n = normalise({ provider: 'nope', keys: { openai: 5 }, models: { openai: '' }, remember: 'yes' })
-    expect(n.provider).toBe('anthropic'); expect(n.keys.openai).toBe(''); expect(n.models.openai).toBe('gpt-4.1'); expect(n.remember).toBe(false)
+    expect(n.provider).toBe('anthropic'); expect(n.keys.openai).toBe(''); expect(n.models.openai).toBe('gpt-6.1-sol'); expect(n.remember).toBe(false)
   })
 })
 

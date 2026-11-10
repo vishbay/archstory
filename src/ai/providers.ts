@@ -20,8 +20,8 @@ export const noUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheW
 
 export const PROVIDERS: Record<ProviderId, { label: string; defaultModel: string; keyHint: string; keyUrl?: string; needsKey: boolean }> = {
   anthropic: { label: 'Anthropic (Claude)', defaultModel: 'claude-sonnet-5-5', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys', needsKey: true },
-  openai: { label: 'OpenAI', defaultModel: 'gpt-4.1', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys', needsKey: true },
-  gemini: { label: 'Google Gemini', defaultModel: 'gemini-2.5-flash', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey', needsKey: true },
+  openai: { label: 'OpenAI', defaultModel: 'gpt-6.1-sol', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys', needsKey: true },
+  gemini: { label: 'Google Gemini', defaultModel: 'gemini-3.8-flash', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey', needsKey: true },
   custom: { label: 'Custom (OpenAI-compatible)', defaultModel: 'llama3.1', keyHint: 'optional', needsKey: false },
 }
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[]
