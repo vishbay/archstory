@@ -726,5 +726,71 @@
       "kind": "tradeoff",
       "text": "Exact real-time view counts are expensive and not needed. Batch aggregation trades a minute of delay for orders of magnitude fewer writes."
     }
+  ],
+  "questions": [
+    {
+      "id": "adaptive",
+      "q": "How does playback adapt to a viewer whose network speed keeps changing?",
+      "a": "Transcode every video into several bitrates and split each into short segments with a manifest (HLS or DASH). The player measures throughput and picks the bitrate for each next segment, so quality drops instead of stalling. All of it is static files served by the CDN.",
+      "topic": "performance",
+      "targets": [
+        "segments",
+        "cdn",
+        "viewer"
+      ]
+    },
+    {
+      "id": "transcode-fail",
+      "q": "A transcoder crashes halfway through a long video. What happens?",
+      "a": "The job was never acknowledged, so it reappears on the queue after its visibility timeout and another worker retries it from the raw upload. Splitting a video into chunks that are transcoded in parallel makes retries cheap and finishes long videos faster. After a few failures the job goes to a dead-letter queue for a person to look at.",
+      "topic": "reliability",
+      "targets": [
+        "transcode_q",
+        "transcoder",
+        "raw"
+      ]
+    },
+    {
+      "id": "cdn-cost",
+      "q": "Egress is the biggest cost. How do you reduce it?",
+      "a": "Serve as much as possible from the CDN edge, with long cache lifetimes because segments never change. Push popular content to the edge ahead of time and let the long tail come from origin. Efficient codecs cut bytes per minute, and very large platforms place caches inside ISP networks.",
+      "topic": "tradeoffs",
+      "targets": [
+        "cdn",
+        "segments"
+      ]
+    },
+    {
+      "id": "views",
+      "q": "How do you count views at this scale without a hot row for popular videos?",
+      "a": "Never increment a database row per view. Players send view events to a stream; aggregators count them in time windows and write the totals periodically. The displayed count lags by seconds or minutes, which is acceptable, and you can filter fraud before counting.",
+      "topic": "consistency",
+      "targets": [
+        "views",
+        "counter",
+        "meta_db"
+      ]
+    },
+    {
+      "id": "upload",
+      "q": "How do you make uploads of very large files reliable?",
+      "a": "Use resumable, chunked uploads straight to object storage with signed URLs, so a dropped connection resumes from the last chunk instead of starting over. The upload service only creates the upload and records metadata. When the last chunk lands, an event starts transcoding.",
+      "topic": "reliability",
+      "targets": [
+        "creator",
+        "upload_svc",
+        "raw"
+      ]
+    },
+    {
+      "id": "metadata",
+      "q": "The Playback API is read heavily for titles, thumbnails and manifest URLs. How do you scale it?",
+      "a": "Metadata changes rarely, so cache it aggressively: in the CDN for public video pages and in an in-memory cache in front of the database. Use read replicas for the rest. Invalidate on the few writes, such as a title change or a newly finished transcode.",
+      "topic": "scale",
+      "targets": [
+        "meta_svc",
+        "meta_db"
+      ]
+    }
   ]
 }

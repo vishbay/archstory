@@ -1,4 +1,5 @@
 import type { Design, Flow } from '../model/schema'
+import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
 import { MonitoringPanel } from './MonitoringPanel'
@@ -12,7 +13,7 @@ import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 
-export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes'
+export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes' | 'questions'
 
 const HA_TEXT = {
   'active-active': 'Active in every zone behind the load balancer',
@@ -35,8 +36,8 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const node = selected ? byId[selected] : undefined
   const zones = network && (design.network?.zones ?? 1) > 1
   const mon = monitoring && !!design.observability
-  const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), ...(mon ? ['monitoring'] as const : []), 'notes'] as const)
-  const shown = (tab === 'zones' && !zones) || (tab === 'monitoring' && !mon) ? 'step' : tab
+  const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), ...(mon ? ['monitoring'] as const : []), 'notes', ...(design.questions.length ? ['questions'] as const : [])] as const)
+  const shown = (tab === 'zones' && !zones) || (tab === 'monitoring' && !mon) || (tab === 'questions' && !design.questions.length) ? 'step' : tab
   const zoneOfInst = (id: string | null) => (id ? zone.zl?.insts.find(i => i.id === id)?.zone ?? null : null)
   const instLabel = (id: string | null) => { const z = zoneOfInst(id); return z === null ? '' : ` (${zoneName(z, cloud)})` }
   const hop = zone.hops?.[step]
@@ -49,7 +50,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
       <div className="tabs" role="tablist">
         {tabs.map(t => (
           <button key={t} role="tab" aria-selected={shown === t} className={shown === t ? 'on' : ''} onClick={() => onTab(t)}>
-            {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : t === 'monitoring' ? 'Monitoring' : `Notes (${design.notes.length})`}
+            {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : t === 'monitoring' ? 'Monitoring' : t === 'questions' ? `Questions (${design.questions.length})` : `Notes (${design.notes.length})`}
           </button>
         ))}
       </div>
@@ -152,6 +153,8 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
         )}
 
         {shown === 'monitoring' && <MonitoringPanel design={design} cloud={cloud} selected={selected} onSelect={id => onSelect?.(id)} />}
+
+        {shown === 'questions' && <QuestionsPanel design={design} cloud={cloud} onSelect={id => onSelect?.(id)} />}
 
         {shown === 'notes' && (
           design.notes.length === 0 ? <p className="muted">No design notes.</p> :

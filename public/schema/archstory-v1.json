@@ -580,6 +580,56 @@
       },
       "description": "Optional monitoring layer: service level objectives, alerts, signals and debugging paths. Standard signals per component type are built in."
     },
+    "questions": {
+      "default": [],
+      "description": "Follow-up questions with model answers, for drilling",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "q": {
+            "type": "string",
+            "description": "A follow-up question an interviewer would ask about this design"
+          },
+          "a": {
+            "type": "string",
+            "description": "A short model answer: the points a strong candidate makes, in 2 to 4 sentences"
+          },
+          "topic": {
+            "type": "string",
+            "enum": [
+              "requirements",
+              "scale",
+              "data",
+              "consistency",
+              "reliability",
+              "performance",
+              "security",
+              "operations",
+              "tradeoffs"
+            ]
+          },
+          "targets": {
+            "default": [],
+            "description": "Ids of the components the question is about",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]*$"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "q",
+          "a"
+        ]
+      }
+    },
     "reasoning": {
       "description": "Practice mode written answers keyed by section, e.g. { \"estimates\": \"…\", \"api\": \"…\" }",
       "type": "object",

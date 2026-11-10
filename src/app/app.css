@@ -680,3 +680,21 @@ h4.by-hand { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; let
 .est-results td b { display: block; font-variant-numeric: tabular-nums; }
 .est-results td span { display: block; color: var(--faint); font-size: 11.5px; }
 @media (max-width: 700px) { .est-grid { grid-template-columns: 1fr; } }
+
+/* ---------- follow-up questions and drill ---------- */
+.q-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.q-head h3 { margin: 0; }
+.q-list { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 10px; }
+.q-list li { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+.q-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.q-text { margin: 0 0 6px; font-weight: 600; font-size: 13.5px; }
+.q-targets { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12px; }
+.q-answer { margin: 6px 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border)); font-size: 13px; line-height: 1.55; }
+.q-rate { display: flex; gap: 6px; flex-wrap: wrap; }
+.q-rate button.on { border-color: var(--accent); background: var(--accent-soft); }
+.drill-dialog { width: min(620px, calc(100vw - 32px)); }
+.drill-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.drill-card { display: grid; gap: 8px; margin: 10px 0; }
+.drill-q { font-size: 16px; font-weight: 600; margin: 0; }
+.home-drill { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.home-drill b { color: var(--accent-text); }

@@ -1026,5 +1026,72 @@
       "kind": "scaling",
       "text": "Chat traffic is unique, long-lived connections, so a CDN cannot help there. It only serves media downloads, where one group photo is fetched by many recipients."
     }
+  ],
+  "questions": [
+    {
+      "id": "ordering",
+      "q": "How do you keep messages in the right order within a conversation?",
+      "a": "Assign a per-conversation sequence number on the server when the message is stored, not the client's clock. Clients display by that sequence and can detect gaps. Ordering across different conversations does not matter, which is what lets you partition the message store by conversation.",
+      "topic": "consistency",
+      "targets": [
+        "chat_svc",
+        "msg_db"
+      ]
+    },
+    {
+      "id": "offline",
+      "q": "Bob is offline when Alice sends a message. How does he get it?",
+      "a": "The message is stored first, so it is never lost. Because Bob has no live connection in the session registry, a push notification job goes on the queue and the workers send it through APNs or FCM. When Bob opens the app it syncs everything after the last sequence number it saw.",
+      "topic": "reliability",
+      "targets": [
+        "chat_svc",
+        "push_q",
+        "push_worker",
+        "apns"
+      ]
+    },
+    {
+      "id": "delivery",
+      "q": "How do you make sure a message is delivered exactly once even with retries?",
+      "a": "Delivery is at least once and display is exactly once. The client attaches a unique message id, the server stores it idempotently so a retry does not create a duplicate, and the recipient ignores ids it has already shown. Acks for sent, delivered and read are separate events on the same id.",
+      "topic": "reliability",
+      "targets": [
+        "alice",
+        "chat_svc",
+        "msg_db"
+      ]
+    },
+    {
+      "id": "routing",
+      "q": "With millions of connections across many gateways, how does a message find the recipient's connection?",
+      "a": "The session registry maps each online user to the gateway holding their connection. The message service looks up Bob's gateway and forwards to it, or publishes on a channel that gateway subscribes to. Entries are refreshed by heartbeats and expire so a dead gateway does not keep stale routes.",
+      "topic": "scale",
+      "targets": [
+        "ws",
+        "sessions",
+        "chat_svc"
+      ]
+    },
+    {
+      "id": "groups",
+      "q": "How does group chat change the design, especially for very large groups?",
+      "a": "Store a group message once and fan out only the delivery: look up members and push to those online, notify the rest. For large groups, avoid per-member writes and let clients pull by sequence number. Cap group size or switch very large groups to a broadcast or channel model.",
+      "topic": "scale",
+      "targets": [
+        "chat_svc",
+        "msg_db"
+      ]
+    },
+    {
+      "id": "media",
+      "q": "How are images and videos sent without overloading the chat servers?",
+      "a": "The sender uploads the file directly to object storage with a signed URL and the message carries only a reference and a small thumbnail. Recipients download it through the CDN. Chat servers only handle small messages, which keeps connection handling fast.",
+      "topic": "performance",
+      "targets": [
+        "media",
+        "cdn",
+        "chat_svc"
+      ]
+    }
   ]
 }

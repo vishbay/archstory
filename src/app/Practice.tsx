@@ -17,6 +17,7 @@ import { Section } from './Sidebar'
 import { panelInsets, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
+import { openDrill } from './useDeck'
 import { end as endTimed, nextPhase, pause as pauseTimed, resume as resumeTimed, startSession, toggleTick, type TimedSession } from '../practice/timed'
 import { commit, initHistory, redo, undo } from '../practice/history'
 import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
@@ -162,6 +163,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     reset: () => { putSession(null); setSavedAs(null) },
     tick: key => session && putSession(toggleTick(session, key)),
     calculator: () => setEstimating(true),
+    drill: () => openDrill(ref.id),
     notes: section => {
       setReasoningOn(true); setTab('reasoning')
       requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`#reasoning-${section} textarea`)?.focus())
@@ -173,7 +175,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
   }
   const onNode = (id: string | null) => {
-    if (showRef) { setSelected(id); if (id) setRefTab(t => (t === 'monitoring' ? t : 'component')); return }
+    if (showRef) { setSelected(id); if (id) setRefTab(t => (t === 'monitoring' || t === 'questions' ? t : 'component')); return }
     if (connecting && id) {
       if (connFrom && connFrom !== id) setAttempt(connect(attempt, connFrom, id))
       setConnFrom(id)

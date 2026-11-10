@@ -635,5 +635,70 @@
       "kind": "security",
       "text": "Enterprise silos often get customer-managed encryption keys and a dedicated network for compliance."
     }
+  ],
+  "questions": [
+    {
+      "id": "noisy-neighbour",
+      "q": "One tenant runs a huge import and slows down everyone in the pool. How do you prevent that?",
+      "a": "Apply per-tenant limits at the gateway and per-tenant quotas on expensive work, and move heavy jobs to the queue where concurrency per tenant is capped. Monitor per-tenant usage so one tenant cannot quietly consume the shared capacity. Tenants who consistently need more move to a dedicated tier.",
+      "topic": "reliability",
+      "targets": [
+        "gw",
+        "app",
+        "pool_db"
+      ]
+    },
+    {
+      "id": "isolation",
+      "q": "In the pooled database, how do you make sure a bug never shows one tenant another tenant's data?",
+      "a": "Every table carries a tenant id, and the database enforces it, for example with row-level security bound to the tenant from the verified token, rather than relying on every query remembering a filter. Add tests that try cross-tenant reads. Cache keys must include the tenant id as well.",
+      "topic": "security",
+      "targets": [
+        "app",
+        "pool_db"
+      ]
+    },
+    {
+      "id": "routing",
+      "q": "How does a request find the right database for its tenant?",
+      "a": "The tenant is resolved from the hostname or token, and the tenant catalog maps it to its tier and data location: the pooled database or a dedicated one. The catalog is small and read constantly, so it is cached in each service with short expiry. Moving a tenant updates the catalog, not the code.",
+      "topic": "data",
+      "targets": [
+        "gw",
+        "catalog",
+        "app"
+      ]
+    },
+    {
+      "id": "silo-migration",
+      "q": "A pooled tenant upgrades to the enterprise tier. How do you move them to a dedicated database without downtime?",
+      "a": "Copy their rows to the new database, then stream ongoing changes until it catches up. Briefly pause writes for that tenant, verify, and switch the catalog entry so new requests go to the new database. Keep the old copy until you are confident, then delete it.",
+      "topic": "operations",
+      "targets": [
+        "catalog",
+        "pool_db",
+        "silo_db"
+      ]
+    },
+    {
+      "id": "per-tenant-ops",
+      "q": "How do you know which tenants are affected during an incident?",
+      "a": "Tag every metric, log and trace with the tenant id and tier, so you can break down errors and latency per tenant. Per-tenant SLOs show whether the enterprise tenants are within their contract. Watch label cardinality: tag by tenant, not by user.",
+      "topic": "operations",
+      "targets": [
+        "app",
+        "silo_worker"
+      ]
+    },
+    {
+      "id": "schema-changes",
+      "q": "How do you roll out a schema change across one pooled database and many dedicated ones?",
+      "a": "Use backward-compatible, expand-and-contract migrations: add the new column, deploy code that writes both, backfill, switch reads, then remove the old one later. Roll it through dedicated databases in waves with automation and tracking, since each is its own deployment.",
+      "topic": "operations",
+      "targets": [
+        "pool_db",
+        "silo_db"
+      ]
+    }
   ]
 }

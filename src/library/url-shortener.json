@@ -746,5 +746,69 @@
       "kind": "failure",
       "text": "Every tier spans 3 availability zones: losing one zone removes a third of capacity, the database fails over to a replica in another zone, and redirects keep working."
     }
+  ],
+  "questions": [
+    {
+      "id": "unique-codes",
+      "q": "How do you guarantee short codes never collide when many API servers create links at once?",
+      "a": "Hand out codes that are unique by construction instead of checking after the fact. The key generation service pre-allocates ranges (or batches of random codes) to each API server, so two servers never issue the same code and no write has to retry. A unique index on the code in the database is the safety net, not the mechanism.",
+      "topic": "scale",
+      "targets": [
+        "kgs",
+        "db"
+      ]
+    },
+    {
+      "id": "cache-miss-storm",
+      "q": "A link goes viral and its cache entry expires. What happens, and how do you prevent it?",
+      "a": "Thousands of concurrent misses all hit the database for the same key at once, a cache stampede. Coalesce the misses so only one request refills the entry (a lock or single-flight per key), serve the stale value while it refreshes, and add jitter to expiry times. Reads that do reach storage go to the read replica, not the primary.",
+      "topic": "performance",
+      "targets": [
+        "cache",
+        "db",
+        "replica"
+      ]
+    },
+    {
+      "id": "redirect-code",
+      "q": "Should the redirect be a 301 or a 302?",
+      "a": "A 301 is cached by browsers, which cuts load and latency but means repeat clicks never reach you, so click counts undercount. A 302 sends every click through the service, so analytics are complete at the cost of more traffic. Most shorteners that sell analytics use 302 and lean on the CDN and cache for speed.",
+      "topic": "tradeoffs",
+      "targets": [
+        "api"
+      ]
+    },
+    {
+      "id": "analytics-path",
+      "q": "Why is click counting asynchronous, and what happens if the analytics pipeline is down?",
+      "a": "Counting a click must never slow down or break a redirect, so the API only drops an event on the queue and responds. If the workers or the analytics store are down, events wait in the queue and are processed when they recover; counts are late, not lost, as long as the queue retention covers the outage.",
+      "topic": "reliability",
+      "targets": [
+        "queue",
+        "worker",
+        "analytics"
+      ]
+    },
+    {
+      "id": "replica-lag",
+      "q": "A user creates a link and clicks it immediately, but the redirect returns 404. Why?",
+      "a": "The read went to a replica that had not caught up with the primary yet. Fix it by writing the new mapping to the cache as part of the create call, or by reading from the primary for a short window after a write. Read-your-own-writes matters here; eventual consistency for other users is fine.",
+      "topic": "consistency",
+      "targets": [
+        "db",
+        "replica",
+        "cache"
+      ]
+    },
+    {
+      "id": "expiry",
+      "q": "How would you support links that expire, and clean up old ones?",
+      "a": "Store an expiry time with each link and check it on redirect, so an expired link stops working immediately even before cleanup. Remove expired rows lazily on read and with a background job in small batches, so cleanup never competes with live traffic. Freed codes should not be reused for a while to avoid sending old links somewhere new.",
+      "topic": "data",
+      "targets": [
+        "db",
+        "worker"
+      ]
+    }
   ]
 }

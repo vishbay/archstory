@@ -17,6 +17,8 @@ import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
 import { AiSettings } from './AiSettings'
 import { EstimateDialog } from './EstimateDialog'
+import { DrillDialog } from './Questions'
+import { onOpenDrill } from './useDeck'
 import { onOpenAiSettings } from './useAiConfig'
 import { JsonDialog } from './JsonDialog'
 import { DesignPicker } from './DesignPicker'
@@ -71,6 +73,8 @@ export function App() {
   const [importText, setImportText] = useState('')
   const [aiOpen, setAiOpen] = useState(false)
   const [estimating, setEstimating] = useState(false)
+  const [drill, setDrill] = useState<{ id: string | null } | null>(null)
+  useEffect(() => onOpenDrill(id => setDrill({ id })), [])
   useEffect(() => onOpenAiSettings(() => setAiOpen(true)), [])
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
   const viewport = useViewportWidth()
@@ -113,7 +117,7 @@ export function App() {
   useEffect(() => { store.set('archstory.right', rightOpen) }, [rightOpen])
 
   const open = (id: string) => { setDesignId(id); setFlowId(''); setSelected(null); setTab('step') }
-  const select = (id: string | null) => { setSelected(id); if (id) { setTab(t => (t === 'monitoring' ? t : 'component')); setRightOpen(true) } }
+  const select = (id: string | null) => { setSelected(id); if (id) { setTab(t => (t === 'monitoring' || t === 'questions' ? t : 'component')); setRightOpen(true) } }
   const saveMine = (list: Design[]) => { setMine(list); store.set(MINE_KEY, list) }
   const importDesign = (d: Design) => {
     const id = LIBRARY.some(x => x.id === d.id) ? `${d.id}-mine` : d.id
@@ -225,6 +229,7 @@ export function App() {
       {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
       {estimating && <EstimateDialog problem={design} onClose={() => setEstimating(false)} />}
+      {drill && <DrillDialog designs={[...LIBRARY, ...mine]} onlyId={drill.id} onClose={() => setDrill(null)} />}
       {picking && <DesignPicker library={LIBRARY} mine={mode === 'practice' ? [] : mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
         onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}
         onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }} />}

@@ -771,5 +771,72 @@
       "kind": "failure",
       "text": "Kafka replicates each partition across 3 zones; with one zone down it still has a majority of replicas and keeps accepting writes."
     }
+  ],
+  "questions": [
+    {
+      "id": "double-charge",
+      "q": "The shopper double-clicks \"Place order\". How do you avoid two orders and two charges?",
+      "a": "The client sends an idempotency key with the request, and the order service records the key with the order in the same transaction. A repeat with the same key returns the first result instead of creating a new order. The payment call reuses the key with the provider, so the card is charged once.",
+      "topic": "reliability",
+      "targets": [
+        "client",
+        "gw",
+        "order_svc",
+        "payment_svc"
+      ]
+    },
+    {
+      "id": "saga",
+      "q": "Inventory is reserved but the payment is declined. How does the system undo it?",
+      "a": "Checkout is a saga: each step has a compensating action. When payment fails, the order service releases the reservation and marks the order failed. There is no distributed transaction, so every step and every compensation must be idempotent and safe to retry.",
+      "topic": "consistency",
+      "targets": [
+        "order_svc",
+        "inventory_svc",
+        "payment_svc"
+      ]
+    },
+    {
+      "id": "outbox",
+      "q": "Why use an outbox instead of publishing the order event directly after the database write?",
+      "a": "Writing to the database and publishing to the broker are two systems; a crash between them loses the event or publishes one for an order that was rolled back. The outbox row is written in the same transaction as the order, and the relay publishes it afterwards, so the event exists if and only if the order does. Consumers must tolerate duplicates.",
+      "topic": "reliability",
+      "targets": [
+        "order_svc",
+        "orders_db",
+        "relay",
+        "events"
+      ]
+    },
+    {
+      "id": "oversell",
+      "q": "Two shoppers buy the last item at the same time. How do you avoid overselling?",
+      "a": "Reserve stock with an atomic conditional update, such as decrementing only where quantity is greater than zero, and check that a row changed. Only one request wins. Reservations expire if payment never completes, so stock is not held forever.",
+      "topic": "consistency",
+      "targets": [
+        "inventory_svc",
+        "inventory_db"
+      ]
+    },
+    {
+      "id": "psp-timeout",
+      "q": "The payment provider times out. Do you retry, fail, or wait?",
+      "a": "The outcome is unknown, so retry with the same idempotency key, which is safe, or query the provider for the payment status. Mark the order payment pending meanwhile rather than failing it, and let the shopper see that state. A reconciliation job settles anything still pending.",
+      "topic": "reliability",
+      "targets": [
+        "payment_svc",
+        "psp"
+      ]
+    },
+    {
+      "id": "flash-sale",
+      "q": "A flash sale sends 50 times the normal traffic at one product. What breaks first and what do you do?",
+      "a": "The single inventory row for that product becomes a hot spot. Rate limit at the gateway, queue buyers into a waiting room, and split stock into several counters (buckets) that are claimed independently. Keep browsing traffic on the CDN and caches so it does not compete with checkout.",
+      "topic": "scale",
+      "targets": [
+        "gw",
+        "inventory_svc"
+      ]
+    }
   ]
 }

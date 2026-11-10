@@ -545,5 +545,70 @@
       "kind": "scaling",
       "text": "Track every message's state (queued, sent, delivered, opened) in an event log for debugging and campaign analytics."
     }
+  ],
+  "questions": [
+    {
+      "id": "priority",
+      "q": "Why separate critical and bulk queues?",
+      "a": "A marketing campaign can enqueue millions of messages; in one shared queue a login code would wait behind them. Separate queues and worker pools keep critical notifications fast regardless of bulk volume, and bulk can be throttled to protect providers and users.",
+      "topic": "performance",
+      "targets": [
+        "notif_api",
+        "critical_q",
+        "bulk_q"
+      ]
+    },
+    {
+      "id": "dedupe",
+      "q": "A service retries and sends the same notification request twice. How do you avoid notifying the user twice?",
+      "a": "Producers send an idempotency key; the API records it in the dedupe store with an expiry and drops repeats. Workers also deduplicate before sending, because queues deliver at least once. The expiry is long enough to cover retries but short enough to keep the store small.",
+      "topic": "consistency",
+      "targets": [
+        "notif_api",
+        "dedupe"
+      ]
+    },
+    {
+      "id": "provider-down",
+      "q": "APNs or FCM is down or rate limiting. What happens to the queued messages?",
+      "a": "Workers retry with exponential backoff and jitter; messages stay on the queue meanwhile. After a few failed attempts they go to the dead-letter queue for inspection and replay. Expired messages, such as a login code that is no longer valid, should be dropped rather than delivered late.",
+      "topic": "reliability",
+      "targets": [
+        "push_worker",
+        "apns",
+        "dlq"
+      ]
+    },
+    {
+      "id": "preferences",
+      "q": "How do you respect user preferences like quiet hours and opt-outs?",
+      "a": "Check preferences and channel opt-ins before enqueuing, and hold or drop non-critical messages during quiet hours in the user's time zone. Some messages, like security alerts, bypass marketing opt-outs but never the device or legal opt-outs. Unsubscribes must take effect quickly.",
+      "topic": "requirements",
+      "targets": [
+        "prefs",
+        "notif_api"
+      ]
+    },
+    {
+      "id": "rate",
+      "q": "How do you send a 10 million email campaign without getting blocked by providers?",
+      "a": "Throttle the bulk workers to the provider's allowed rate, spread the campaign over time, and warm up sending reputation gradually. Handle bounces and complaints by suppressing those addresses. The queue absorbs the backlog; nothing else needs to scale for it.",
+      "topic": "scale",
+      "targets": [
+        "bulk_q",
+        "email_worker",
+        "email"
+      ]
+    },
+    {
+      "id": "tracking",
+      "q": "How do you know notifications are actually being delivered?",
+      "a": "Track each message through accepted, sent, delivered and opened, using provider callbacks where available. Alert on drops in delivery rate and on queue age for the critical queue, which is the symptom users feel. Per-provider dashboards show which channel is failing.",
+      "topic": "operations",
+      "targets": [
+        "push_worker",
+        "email_worker"
+      ]
+    }
   ]
 }

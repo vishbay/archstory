@@ -12,6 +12,8 @@ export interface TimedControls {
   tick: (key: string) => void
   /** Open the estimate calculator. */
   calculator: () => void
+  /** Drill this problem's follow-up questions. */
+  drill: () => void
   /** Open the Reasoning section where this phase's notes belong. */
   notes: (section: string) => void
   /** Name of the attempt saved when the interview ended, if any. */
@@ -100,7 +102,7 @@ export function TimedPanel({ t, attempt, checks }: { t: TimedControls; attempt: 
           ))}</tbody>
         </table>
         {missed.length > 0 && <><h4>To practise next time</h4><ul className="reqs">{missed.map(m => <li key={m}>{m}</li>)}</ul></>}
-        <div className="row wrap"><button className="primary" onClick={t.reset}>Start another</button></div>
+        <div className="row wrap"><button className="primary" onClick={t.reset}>Start another</button><button onClick={t.drill}>Practise the follow-up questions</button></div>
       </>
     )
   }

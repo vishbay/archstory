@@ -687,5 +687,69 @@
       "kind": "scaling",
       "text": "Media is most of the bytes. Serving it from the CDN keeps the origin small."
     }
+  ],
+  "questions": [
+    {
+      "id": "celebrity",
+      "q": "A celebrity with 50 million followers posts. Why is fan-out on write a problem, and what do you do?",
+      "a": "Writing one entry into 50 million timelines takes minutes and floods the cache and queue. Use a hybrid: fan out on write for normal accounts, but skip it for accounts above a follower threshold and merge their recent posts into the timeline at read time. Readers pay a small merge cost; the system avoids huge write storms.",
+      "topic": "scale",
+      "targets": [
+        "fanout_worker",
+        "timeline_cache",
+        "posts_db"
+      ]
+    },
+    {
+      "id": "timeline-cache-lost",
+      "q": "The timeline cache loses a node. What do users see and how do you recover?",
+      "a": "Users whose timelines lived on that node get a cache miss. The timeline service rebuilds those timelines on read from the follow graph and recent posts, which is slower but correct, and writes them back. Keep the cache replicated across zones so one node loss does not cause a rebuild storm.",
+      "topic": "reliability",
+      "targets": [
+        "timeline_cache",
+        "timeline_svc"
+      ]
+    },
+    {
+      "id": "ordering",
+      "q": "How do you keep posts in a sensible order when they arrive late or out of order?",
+      "a": "Order by a timestamp or a time-sortable id (like a Snowflake id) generated when the post is created, not by arrival time in the fan-out queue. Timelines store post ids sorted by that key, so a delayed fan-out still lands in the right place. Ranked feeds sort by score instead, but still need stable ids for paging.",
+      "topic": "consistency",
+      "targets": [
+        "timeline_svc",
+        "posts_db"
+      ]
+    },
+    {
+      "id": "pagination",
+      "q": "How does infinite scroll page through a timeline efficiently?",
+      "a": "Use cursor-based paging: the client sends the id of the last post it saw and gets the next N older ones. Offsets break when new posts arrive and get slower deep into the list. Keep only the most recent few hundred entries per user in the cache and fall back to storage for older pages.",
+      "topic": "performance",
+      "targets": [
+        "timeline_svc",
+        "timeline_cache"
+      ]
+    },
+    {
+      "id": "follow-graph",
+      "q": "How would you store the follow graph so both \"who do I follow\" and \"who follows me\" are fast?",
+      "a": "Store each edge twice, once keyed by follower and once by followee, so both lookups are a single partition read. Partition by user id. For accounts with millions of followers, page through the follower list during fan-out rather than loading it at once.",
+      "topic": "data",
+      "targets": [
+        "graph_svc",
+        "graph_db"
+      ]
+    },
+    {
+      "id": "media",
+      "q": "Where do photos and videos in posts go, and why not through the post service?",
+      "a": "Clients upload media directly to object storage with a short-lived signed URL and the post only stores a reference. Viewers fetch media through the CDN. Pushing large files through the post service would tie up its workers and bandwidth for no benefit.",
+      "topic": "performance",
+      "targets": [
+        "media",
+        "cdn",
+        "post_svc"
+      ]
+    }
   ]
 }

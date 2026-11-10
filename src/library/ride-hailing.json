@@ -743,5 +743,71 @@
       "kind": "scaling",
       "text": "Geo routing keeps a city in one region, which keeps the driver geo index and matching local. If a region fails, change the DNS answer and drivers reconnect to another region within a few minutes (about one TTL)."
     }
+  ],
+  "questions": [
+    {
+      "id": "location-rate",
+      "q": "Drivers send their location every few seconds. How do you handle that write volume?",
+      "a": "Treat locations as ephemeral: keep only the latest position per driver in an in-memory geo index, not a database row per update. Drivers stream over persistent WebSocket connections so there is no per-update handshake. The full history goes to a stream for analytics, off the hot path.",
+      "topic": "scale",
+      "targets": [
+        "driver",
+        "ws",
+        "location_svc",
+        "geo_index"
+      ]
+    },
+    {
+      "id": "nearby",
+      "q": "How do you find nearby available drivers quickly?",
+      "a": "Index drivers by a geospatial cell such as a geohash or H3 cell, then look up the rider's cell and its neighbours. That turns a search over every driver into a few small lookups. Cell size is a trade-off: too large returns many candidates to filter, too small needs many neighbouring cells.",
+      "topic": "data",
+      "targets": [
+        "geo_index",
+        "matching"
+      ]
+    },
+    {
+      "id": "double-match",
+      "q": "Two riders are offered the same driver at the same moment. How do you prevent a double booking?",
+      "a": "Make the assignment an atomic claim: the driver's state changes from available to offered with a conditional write (compare-and-set) or a short lease. Only the request that wins the claim proceeds; the other moves to the next candidate. The trip record is created only after the driver accepts.",
+      "topic": "consistency",
+      "targets": [
+        "matching",
+        "trip_svc",
+        "trips_db"
+      ]
+    },
+    {
+      "id": "ws-failover",
+      "q": "A WebSocket gateway instance dies. What happens to the connected drivers and riders?",
+      "a": "Their connections drop and the apps reconnect, with backoff and jitter, through the load balancer to another instance. Nothing important lived only in the gateway: trip state is in the trip service and positions are refreshed by the next update. A connection registry is updated on reconnect so pushes reach the new instance.",
+      "topic": "reliability",
+      "targets": [
+        "ws",
+        "driver",
+        "rider"
+      ]
+    },
+    {
+      "id": "payments",
+      "q": "The payment provider times out at the end of a trip. Was the rider charged?",
+      "a": "You do not know, so never blindly retry a charge. Send every charge with an idempotency key tied to the trip, so a retry returns the original result instead of charging twice. Mark the trip as payment pending and reconcile with the provider asynchronously; the rider can leave immediately.",
+      "topic": "reliability",
+      "targets": [
+        "trip_svc",
+        "psp"
+      ]
+    },
+    {
+      "id": "surge",
+      "q": "How would you compute surge pricing?",
+      "a": "Aggregate supply (available drivers) and demand (ride requests) per geo cell over a short sliding window from the location and request streams. Price is a function of the ratio, smoothed so it does not flicker. It runs asynchronously; matching only reads the latest multiplier for a cell.",
+      "topic": "tradeoffs",
+      "targets": [
+        "matching",
+        "events"
+      ]
+    }
   ]
 }

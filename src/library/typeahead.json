@@ -521,5 +521,71 @@
       "kind": "note",
       "text": "Personalization (your own recent searches) is usually a separate small per-user list merged in on the client or at the service."
     }
+  ],
+  "questions": [
+    {
+      "id": "latency",
+      "q": "Suggestions must appear within about 100 ms of each keystroke. Where does that time budget go?",
+      "a": "Serve from memory: the suggest service holds the trie for the top prefixes, so a lookup is microseconds. Cache popular prefix responses at the CDN and in the browser, and debounce keystrokes on the client. The rebuilt trie is loaded from a snapshot, never queried from a database on the hot path.",
+      "topic": "performance",
+      "targets": [
+        "suggest",
+        "snapshots",
+        "cdn"
+      ]
+    },
+    {
+      "id": "freshness",
+      "q": "A breaking news term should start appearing in suggestions. How fresh can they be?",
+      "a": "The batch pipeline rebuilds the trie hourly, which is fine for most terms. For trending terms add a small fast path: a streaming counter over recent minutes whose top terms are merged into the results at query time. Freshness is a trade-off against cost and stability.",
+      "topic": "consistency",
+      "targets": [
+        "aggregator",
+        "builder",
+        "snapshots"
+      ]
+    },
+    {
+      "id": "ranking",
+      "q": "How do you decide which completions to show for a prefix?",
+      "a": "Rank by query frequency with time decay so recent popularity counts more, and store the top K completions at every trie node so a lookup does not have to search the subtree. Personal history can be blended on the client or in a separate step. Filter offensive or unsafe terms before they enter the trie.",
+      "topic": "data",
+      "targets": [
+        "counts",
+        "builder"
+      ]
+    },
+    {
+      "id": "size",
+      "q": "The trie no longer fits in one server's memory. What do you do?",
+      "a": "Shard it by prefix range, for example by the first one or two characters, with a routing table that balances popular ranges. Each shard is replicated for availability. Trimming rare queries from the trie usually shrinks it a lot before sharding is needed.",
+      "topic": "scale",
+      "targets": [
+        "suggest",
+        "snapshots"
+      ]
+    },
+    {
+      "id": "rebuild-safety",
+      "q": "How do you roll out a newly built trie safely?",
+      "a": "Write the new snapshot alongside the old one, validate it (size, sample lookups), then have servers load it in the background and switch atomically. Keep the previous snapshot so you can roll back instantly if suggestions look wrong.",
+      "topic": "operations",
+      "targets": [
+        "builder",
+        "snapshots",
+        "suggest"
+      ]
+    },
+    {
+      "id": "logging",
+      "q": "Every keystroke could be logged. How do you keep the logging volume sane?",
+      "a": "Log completed searches, not every keystroke, and sample if needed; the ranking only needs relative frequencies. Aggregate counts in batches rather than writing one row per query. Drop personal data from what feeds the global suggestions.",
+      "topic": "scale",
+      "targets": [
+        "logs",
+        "aggregator",
+        "counts"
+      ]
+    }
   ]
 }

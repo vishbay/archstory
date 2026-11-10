@@ -10,7 +10,7 @@ export function blankAttempt(ref: Design): Design {
     schema: 'archstory/v1', id: attemptId(ref),
     meta: { title: `My answer: ${ref.meta.title}`, summary: ref.meta.summary, tags: [] },
     requirements: ref.requirements, network: ref.network,
-    nodes: [], groups: [], edges: [], flows: [], notes: [], reasoning: {},
+    nodes: [], groups: [], edges: [], flows: [], notes: [], questions: [], reasoning: {},
   }
 }
 

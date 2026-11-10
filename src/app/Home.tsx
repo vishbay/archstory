@@ -7,6 +7,8 @@ import { runChecks } from '../practice/checks'
 import { percent, practised, progressOf, type Progress } from '../practice/progress'
 import { storeKv } from './hooks'
 import { openAiSettings } from './useAiConfig'
+import { deckStats } from '../practice/cards'
+import { openDrill, today, useDeck } from './useDeck'
 
 /** A miniature of the tier-band canvas: bands, connections and coloured component blocks. */
 function MiniMap({ design }: { design: Design }) {
@@ -78,6 +80,8 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
   // Read once when the page opens; Home remounts each time the learner comes back to it.
   const progress = useMemo(() => Object.fromEntries(library.map(d => [d.id, progressOf(storeKv, d, runChecks)])), [library])
   const done = library.filter(d => practised(progress[d.id])).length
+  const deck = useDeck()
+  const cards = deckStats(library, deck, today())
 
   return (
     <div className="home">
@@ -101,6 +105,19 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
           <div key={s.title} className="how-step"><span className="how-icon">{s.icon}</span><b>{s.title}</b><p>{s.body}</p></div>
         ))}
       </section>
+
+      {cards.total > 0 && (
+        <section className="home-drill">
+          <div>
+            <b>Follow-up questions</b>
+            <p className="muted small">{cards.seen === 0
+              ? `${cards.total} questions interviewers ask next, with model answers. Ten new ones a day, and the ones you miss come back sooner.`
+              : `${cards.due} due today · ${cards.learned} of ${cards.total} learned · ${cards.total - cards.seen} not seen yet`}</p>
+          </div>
+          <span className="spacer" />
+          <button className="primary" onClick={() => openDrill()}>{cards.seen === 0 ? 'Start the daily drill' : 'Drill now'}</button>
+        </section>
+      )}
 
       <section>
         <div className="lib-head">

@@ -65,6 +65,15 @@ export const FlowSchema = z.object({
   steps: z.array(StepSchema).min(1),
 })
 
+export const QUESTION_TOPICS = ['requirements', 'scale', 'data', 'consistency', 'reliability', 'performance', 'security', 'operations', 'tradeoffs'] as const
+export const QuestionSchema = z.object({
+  id: Id,
+  q: z.string().describe('A follow-up question an interviewer would ask about this design'),
+  a: z.string().describe('A short model answer: the points a strong candidate makes, in 2 to 4 sentences'),
+  topic: z.enum(QUESTION_TOPICS).optional(),
+  targets: z.array(Id).default([]).describe('Ids of the components the question is about'),
+})
+
 export const NoteSchema = z.object({
   target: Id.optional().describe('Node, group or flow id; omit for a design-wide note'),
   kind: z.enum(NOTE_KINDS).default('note'),
@@ -122,10 +131,12 @@ export const DesignSchema = z.object({
   notes: z.array(NoteSchema).default([]),
   network: NetworkSchema.optional(),
   observability: ObservabilitySchema.optional(),
+  questions: z.array(QuestionSchema).default([]).describe('Follow-up questions with model answers, for drilling'),
   reasoning: z.record(z.string(), z.string()).optional()
     .describe('Practice mode written answers keyed by section, e.g. { "estimates": "…", "api": "…" }'),
 })
 
+export type Question = z.infer<typeof QuestionSchema>
 export type Tier = typeof TIERS[number]
 export type HAMode = typeof HA_MODES[number]
 export type StepKind = typeof STEP_KINDS[number]
@@ -203,6 +214,12 @@ export function parseDesign(input: unknown): ParseResult {
       if (a.slo && !sloIds.has(a.slo)) errors.push(`alert "${a.id}": unknown SLO "${a.slo}"`)
     }
     o.signals.forEach((s, i) => { if (!nodeIds.has(s.target)) errors.push(`observability.signals[${i}]: unknown component "${s.target}"`) })
+  }
+  const questionIds = new Set<string>()
+  for (const q of d.questions) {
+    if (questionIds.has(q.id)) errors.push(`questions: duplicate id "${q.id}"`)
+    questionIds.add(q.id)
+    for (const t of q.targets) if (!nodeIds.has(t)) errors.push(`question "${q.id}": unknown component "${t}"`)
   }
   const targets = new Set([...nodeIds, ...groupIds, ...flowIds])
   d.notes.forEach((n, i) => { if (n.target && !targets.has(n.target)) errors.push(`notes[${i}]: unknown target "${n.target}"`) })

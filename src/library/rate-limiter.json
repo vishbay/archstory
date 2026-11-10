@@ -526,5 +526,68 @@
       "kind": "note",
       "text": "Static IPs from the network load balancer let enterprise customers allowlist the API. Plan any IP change carefully: they cache and firewall these addresses."
     }
+  ],
+  "questions": [
+    {
+      "id": "algorithm",
+      "q": "Token bucket, fixed window or sliding window: which would you choose and why?",
+      "a": "A token bucket allows short bursts up to a cap while enforcing an average rate, and needs only a count and a timestamp per key. Fixed windows are simpler but let a client send double the limit across a window boundary. A sliding window is the most accurate and costs more memory or computation.",
+      "topic": "tradeoffs",
+      "targets": [
+        "gw",
+        "counters"
+      ]
+    },
+    {
+      "id": "atomic",
+      "q": "Many gateway instances update the same client's counter. How do you avoid race conditions?",
+      "a": "Do the check-and-decrement as one atomic operation in the counter store, for example a Lua script or an atomic increment with expiry in Redis. Reading the value and writing it back in two steps lets concurrent requests both pass. Each request costs one round trip to the store.",
+      "topic": "consistency",
+      "targets": [
+        "gw",
+        "counters"
+      ]
+    },
+    {
+      "id": "fail-open",
+      "q": "The counter store goes down. Do you block all traffic or let everything through?",
+      "a": "Usually fail open: let requests through with a local, per-instance approximate limit, because rejecting everything turns a limiter outage into a full outage. Fail closed only for limits that protect money or security, such as login attempts. Alert either way.",
+      "topic": "reliability",
+      "targets": [
+        "gw",
+        "counters",
+        "api"
+      ]
+    },
+    {
+      "id": "latency",
+      "q": "How do you keep the limiter from adding noticeable latency to every request?",
+      "a": "Keep the counter store close (same zone) and in memory, with one atomic call per request. For very high rates, keep local counters in each gateway and sync with the shared store in batches, accepting a small overshoot. Never call the store more than once per request.",
+      "topic": "performance",
+      "targets": [
+        "gw",
+        "counters"
+      ]
+    },
+    {
+      "id": "config",
+      "q": "How do limits change per customer plan without a deploy?",
+      "a": "Store limits in a config store keyed by plan or customer, and have gateways cache them and refresh periodically or on a change event. Validate changes and roll them out gradually, since a bad limit can block every customer at once.",
+      "topic": "operations",
+      "targets": [
+        "config",
+        "gw"
+      ]
+    },
+    {
+      "id": "client-feedback",
+      "q": "What should a throttled client receive?",
+      "a": "Return HTTP 429 with headers that say the limit, how many requests remain and when to retry (Retry-After). Good clients back off using them. Return the headers on successful responses too, so clients can slow down before they hit the limit.",
+      "topic": "requirements",
+      "targets": [
+        "gw",
+        "client"
+      ]
+    }
   ]
 }
