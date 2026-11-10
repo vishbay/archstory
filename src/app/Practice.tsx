@@ -19,7 +19,7 @@ import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
 import { QuickAdd, Shortcuts } from './QuickAdd'
 import { applySkeleton, duplicateNode, SKELETONS } from '../practice/quick'
-import { openDrill } from './useDeck'
+import { openDrill, reloadDeck } from './useDeck'
 import { end as endTimed, nextPhase, pause as pauseTimed, resume as resumeTimed, startSession, toggleTick, type TimedSession } from '../practice/timed'
 import { commit, initHistory, redo, undo } from '../practice/history'
 import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
@@ -148,7 +148,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     if (!confirm(`Restore ${n} answer${n === 1 ? '' : 's'}? Any different answer you have now is kept as a "Before restore" attempt.`)) return
     const byId = Object.fromEntries(LIBRARY.map(d => [d.id, d]))
     const done = applyBackup(r.backup, kv, new Date(), (id, d) => { const c = runChecks(d, byId[id]); return { passed: c.passed, total: c.total } })
-    reload(ref.id); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
+    reload(ref.id); reloadDeck(); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
     setAttemptMsg(`Restored ${done.attempts} answer${done.attempts === 1 ? '' : 's'} and ${done.snapshots} new saved attempts${done.kept ? `; ${done.kept} current answer${done.kept === 1 ? ' was' : 's were'} kept as "Before restore"` : ''}.${r.skipped.length ? ` Skipped ${r.skipped.length}: ${r.skipped.join('; ')}.` : ''}`)
   }
   /** Ending a timed interview keeps a copy of the answer, so the attempt list shows how each timed run went. */

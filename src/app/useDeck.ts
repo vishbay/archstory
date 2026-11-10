@@ -14,6 +14,8 @@ export function rateCard(key: string, rating: Rating) {
   store.set(KEY, deck)
   listeners.forEach(l => l())
 }
+/** Read the schedule from storage again (after a backup is restored). */
+export function reloadDeck() { deck = null; listeners.forEach(l => l()) }
 export const today = () => dayOf(Date.now())
 
 const OPEN = 'archstory:drill'

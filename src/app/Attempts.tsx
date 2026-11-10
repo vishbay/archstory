@@ -44,7 +44,7 @@ export function Attempts({ snaps, canSave, suggested, onSave, onOpen, onDelete, 
       )}
       {snaps.length >= MAX_SNAPSHOTS && <p className="muted small">The newest {MAX_SNAPSHOTS} attempts are kept; saving another drops the oldest.</p>}
       <div className="row wrap">
-        <button onClick={onBackup} title="Download every answer, review and attempt as one file">Back up</button>
+        <button onClick={onBackup} title="Download every answer, review, attempt and question schedule as one file">Back up</button>
         <button onClick={() => file.current?.click()} title="Load a backup file made by Back up">Restore</button>
         <input ref={file} type="file" accept="application/json,.json" hidden aria-label="Backup file"
           onChange={e => { const f = e.target.files?.[0]; if (f) onRestore(f); e.target.value = '' }} />

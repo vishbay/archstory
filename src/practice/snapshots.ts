@@ -2,6 +2,7 @@
 // snapshot so work can move between browsers. Pure functions over a small key-value interface, so they are testable.
 import { parseDesign, type Design } from '../model/schema'
 import type { StoredReview } from '../app/ReviewPanel'
+import { cleanDeck, type Deck } from './cards'
 
 export const MAX_SNAPSHOTS = 20
 
@@ -15,11 +16,14 @@ export interface Kv { get(key: string): unknown; set(key: string, value: unknown
 export interface Backup {
   app: 'archstory'; kind: 'practice-backup'; version: 1; exportedAt: string
   attempts: Record<string, Design>; reviews: Record<string, StoredReview>; snapshots: Record<string, Snapshot[]>
+  /** Follow-up question review schedule (added later; older backups do not have it). */
+  deck?: Deck
 }
 
 export const attemptKey = (id: string) => `archstory.attempt.${id}`
 export const reviewKey = (id: string) => `archstory.review.${id}`
 export const snapshotsKey = (id: string) => `archstory.snapshots.${id}`
+export const DECK_KEY = 'archstory.deck'
 
 export const loadSnapshots = (kv: Kv, id: string): Snapshot[] => {
   const v = kv.get(snapshotsKey(id))
@@ -66,6 +70,8 @@ export function collectBackup(problemIds: string[], kv: Kv, now: Date): Backup {
     const s = loadSnapshots(kv, id)
     if (s.length) out.snapshots[id] = s
   }
+  const deck = cleanDeck(kv.get(DECK_KEY))
+  if (Object.keys(deck).length) out.deck = deck
   return out
 }
 
@@ -94,7 +100,9 @@ export function parseBackup(input: unknown, problemIds: string[]): BackupResult 
     const ok = (Array.isArray(list) ? list : []).filter(isSnapshot).flatMap(s => { const design = valid(s.design); return design ? [{ ...s, design }] : [] })
     if (ok.length) out.snapshots[id] = ok
   }
-  if (!Object.keys(out.attempts).length && !Object.keys(out.snapshots).length) return { ok: false, errors: ['The backup holds no usable attempts.', ...skipped] }
+  const deck = cleanDeck(b.deck)
+  if (Object.keys(deck).length) out.deck = deck
+  if (!Object.keys(out.attempts).length && !Object.keys(out.snapshots).length && !out.deck) return { ok: false, errors: ['The backup holds no usable attempts.', ...skipped] }
   return { ok: true, backup: out, skipped }
 }
 
@@ -128,6 +136,11 @@ export function applyBackup(backup: Backup, kv: Kv, now: Date, score: (id: strin
       kv.set(attemptKey(id), incoming); attempts++
       if (backup.reviews[id]) kv.set(reviewKey(id), backup.reviews[id])
     }
+  }
+  if (backup.deck) {
+    const mine = cleanDeck(kv.get(DECK_KEY))
+    for (const [k, c] of Object.entries(backup.deck)) if (!mine[k] || c.seen > mine[k].seen) mine[k] = c
+    kv.set(DECK_KEY, mine)
   }
   return { attempts, snapshots, kept }
 }

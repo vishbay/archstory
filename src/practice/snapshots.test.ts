@@ -68,6 +68,18 @@ describe('practice backup', () => {
     expect(JSON.stringify(collectBackup(ids, kv, at(5)))).not.toContain('sk-ant-secret')
   })
 
+  it('carries the question drill schedule and merges it, keeping the more practised card', () => {
+    const { kv } = seed()
+    kv.set('archstory.deck', { 'a:q1': { box: 2, due: 10, seen: 3, last: 'got' } })
+    const file = JSON.parse(JSON.stringify(collectBackup(ids, kv, at(5))))
+    expect(file.deck['a:q1'].seen).toBe(3)
+    const other = memory()
+    other.set('archstory.deck', { 'a:q1': { box: 0, due: 5, seen: 1, last: 'missed' }, 'b:q2': { box: 1, due: 7, seen: 5, last: 'got' } })
+    const r = parseBackup(file, ids)
+    if (r.ok) applyBackup(r.backup, other, at(6), () => ({ passed: 0, total: 0 }))
+    expect(other.get('archstory.deck')).toMatchObject({ 'a:q1': { seen: 3 }, 'b:q2': { seen: 5 } })
+  })
+
   it('omits problems with no work', () => {
     expect(Object.keys(collectBackup(ids, memory(), at(1)).attempts)).toEqual([])
   })
