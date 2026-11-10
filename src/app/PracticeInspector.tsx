@@ -103,7 +103,7 @@ export function PracticeInspector(p: {
               <li><b>Record flows</b> in the Flows tab: click components in the order a request travels, then back for the response.</li>
               <li><b>Check</b> your answer, then compare it with the reference.</li>
             </ol>
-            <p className="muted small">Click a component or connection to edit it. Delete removes the selection; ⌘Z / Ctrl+Z undoes.</p>
+            <p className="muted small">Click a component or connection to edit it. Press <kbd>/</kbd> to add by typing (connected from the selected component), <kbd>⌘D</kbd> to duplicate, Delete to remove, <kbd>⌘Z</kbd> to undo, and <kbd>?</kbd> for all shortcuts.</p>
           </>
         )}
 

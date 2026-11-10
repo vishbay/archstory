@@ -17,6 +17,8 @@ import { Section } from './Sidebar'
 import { panelInsets, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
+import { QuickAdd, Shortcuts } from './QuickAdd'
+import { applySkeleton, duplicateNode, SKELETONS } from '../practice/quick'
 import { openDrill } from './useDeck'
 import { end as endTimed, nextPhase, pause as pauseTimed, resume as resumeTimed, startSession, toggleTick, type TimedSession } from '../practice/timed'
 import { commit, initHistory, redo, undo } from '../practice/history'
@@ -77,6 +79,9 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
   const [session, setSession] = useState<TimedSession | null>(() => store.get(timedKey, null))
   const [savedAs, setSavedAs] = useState<string | null>(null)
   const [estimating, setEstimating] = useState(false)
+  const [quickAdd, setQuickAdd] = useState(false)
+  const [showKeys, setShowKeys] = useState(false)
+  const clipboard = useRef<string | null>(null)
   const running = !!session && session.endedAt === null && !session.pausedAt
   const now = useNow(running)
   const putSession = (next: TimedSession | null) => { setSession(next); store.set(timedKey, next) }
@@ -170,6 +175,17 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     },
   }
 
+  /** Add from the quick-add box: connected from the selected component when there is one. */
+  const quickPick = (kind: string) => {
+    const r = addNode(attempt, kind)
+    const from = selected && attempt.nodes.some(n => n.id === selected) ? selected : null
+    setAttempt(from ? connect(r.design, from, r.id) : r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
+  }
+  const duplicate = (id: string | null) => {
+    const r = id ? duplicateNode(attempt, id) : null
+    if (r) { setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build') }
+  }
+
   const add = (kind: string) => {
     const r = addNode(attempt, kind)
     setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
@@ -195,6 +211,11 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); setHist(h => (e.shiftKey ? redo(h) : undo(h))); return }
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); setHist(redo); return }
+      if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicate(selected); return }
+      if (mod && e.key.toLowerCase() === 'c' && selected) { clipboard.current = selected; return }
+      if (mod && e.key.toLowerCase() === 'v' && clipboard.current) { e.preventDefault(); duplicate(clipboard.current); return }
+      if (e.key === '/' && !mod) { e.preventDefault(); stopRecording(); stopConnecting(); setQuickAdd(true); return }
+      if (e.key === '?') { setShowKeys(true); return }
       if (e.key === 'Escape') { stopRecording(); stopConnecting() }
       if (e.key === 'c' && !mod) { if (connecting) stopConnecting(); else startConnecting() }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
@@ -271,6 +292,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
             {saved !== 'idle' && <span className={`save-state ${saved}`} role="status" aria-label={saved === 'saved' ? 'Saved' : undefined} title={saved === 'saved' ? 'Your answer is saved in this browser' : undefined}>{saved === 'saved' ? <span className="tb-txt">Saved</span> : 'Not saved: browser storage is blocked'}</span>}
             <button className="tb-btn" title="Undo (⌘Z / Ctrl+Z)" aria-label="Undo" disabled={!hist.past.length} onClick={() => setHist(undo)}><span aria-hidden>↶</span><span className="tb-txt"> Undo</span></button>
             <button className="tb-btn" title="Redo (⇧⌘Z / Ctrl+Y)" aria-label="Redo" disabled={!hist.future.length} onClick={() => setHist(redo)}><span aria-hidden>↷</span><span className="tb-txt"> Redo</span></button>
+            <button className="tb-btn" title="Add a component by typing (/)" aria-label="Add a component" onClick={() => { stopRecording(); stopConnecting(); setQuickAdd(true) }}><span aria-hidden>+</span><span className="tb-txt"> Add</span></button>
             <Toggle on={connecting} title="Connect mode (C): click a caller, then what it calls"
               onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</Toggle>
           </>}
@@ -308,7 +330,11 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
           {!showRef && attempt.nodes.length === 0 && (
             <div className="empty-hint">
               <b>Design: {ref.meta.title}</b>
-              <span>Add components from the palette on the left. Drag from one component's edge to another to connect them, then record a request flow.</span>
+              <span>Add components from the palette, or press <kbd>/</kbd> and type. Drag from one component's edge to another to connect them, then record a request flow.</span>
+              <div className="skeletons">
+                <span className="muted small">Or start from a common shape and change it:</span>
+                {SKELETONS.map(k => <button key={k.id} onClick={() => { setAttempt(applySkeleton(attempt, k)); setSelected(null) }}><b>{k.title}</b><span>{k.blurb}</span></button>)}
+              </div>
             </div>
           )}
           {showRef && <div className="ref-badge">Reference design</div>}
@@ -317,6 +343,8 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
         <PlayerBar flows={shown.flows.filter(f => f.steps.length)} flow={flow?.steps.length ? flow : undefined} onFlow={setFlowId} player={player} picker />
       </main>
 
+      {quickAdd && <QuickAdd connectFrom={selected ? attempt.nodes.find(n => n.id === selected)?.label ?? null : null} onPick={quickPick} onClose={() => setQuickAdd(false)} />}
+      {showKeys && <Shortcuts onClose={() => setShowKeys(false)} />}
       {estimating && <EstimateDialog problem={ref} onClose={() => setEstimating(false)}
         onAddToNotes={text => {
           const cur = attempt.reasoning?.estimates?.trim()

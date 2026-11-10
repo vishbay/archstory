@@ -698,3 +698,11 @@ h4.by-hand { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; let
 .drill-q { font-size: 16px; font-weight: 600; margin: 0; }
 .home-drill { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .home-drill b { color: var(--accent-text); }
+
+/* ---------- quick add and shortcuts ---------- */
+dialog.quick-add { height: auto; min-height: 0; max-height: min(460px, 80vh); }
+.shortcuts { width: min(480px, calc(100vw - 32px)); }
+.shortcuts th { white-space: nowrap; padding-right: 14px; }
+.skeletons { display: grid; gap: 8px; margin-top: 12px; width: min(420px, 90%); pointer-events: auto; }
+.skeletons button { display: grid; text-align: left; gap: 2px; padding: 9px 12px; height: auto; }
+.skeletons button span { color: var(--muted); font-size: 12px; font-weight: 400; }
