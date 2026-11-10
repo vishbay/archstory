@@ -319,7 +319,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
             : <ReactFlowProvider>
                 <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={insets} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
+                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={!showRef && session && session.endedAt === null ? { ...insets, top: 56 } : insets} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={showRef ? undefined : {
                     onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
                     onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },

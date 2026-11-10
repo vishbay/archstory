@@ -9,7 +9,7 @@ import type { Player } from './hooks'
 import { TimedPanel, type TimedControls } from './TimedPanel'
 import { AiInterviewer } from './AiInterviewer'
 import { useState } from 'react'
-import { store } from './hooks'
+import { store, useTabStrip } from './hooks'
 import { mmss, status } from '../practice/timed'
 
 export type PracticeTab = 'build' | 'flows' | 'check' | 'reasoning' | 'review' | 'interview'
@@ -43,12 +43,13 @@ export function PracticeInspector(p: {
   const label = (id: string) => { const n = d.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
   const tabs: PracticeTab[] = ['build', 'flows', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review', 'interview']
   const shownTab = tab === 'reasoning' && !p.reasoningOn ? 'build' : tab
+  const tabStrip = useTabStrip(shownTab)
   const tabName = { build: 'Build', flows: `Flows (${d.flows.length})`, check: p.result.total ? `Check ${p.result.passed}/${p.result.total}` : 'Check', reasoning: 'Reasoning', review: p.review ? `Review ${p.review.review.overall}/5` : 'Review',
     interview: p.timed.session && p.timed.session.endedAt === null ? `Interview ${mmss(status(p.timed.session, p.timed.now).totalLeft)}` : 'Interview' }
 
   return (
     <>
-      <div className="tabs" role="tablist">
+      <div className="tabs" role="tablist" ref={tabStrip}>
         {tabs.map(t => <button key={t} role="tab" aria-selected={shownTab === t} className={shownTab === t ? 'on' : ''} onClick={() => p.onTab(t)}>{tabName[t]}</button>)}
       </div>
       <div className="panel-body">

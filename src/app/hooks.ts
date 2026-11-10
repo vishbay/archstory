@@ -1,5 +1,5 @@
 import type { Kv } from '../practice/snapshots'
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 // ---------- storage (best-effort: private windows may throw) ----------
 /** One-time move of browser data saved under the pre-rename "sdl." prefix, so saved answers survive the rename. */
@@ -112,4 +112,32 @@ export function useNow(active: boolean, every = 1000): number {
     return () => clearInterval(t)
   }, [active, every])
   return now
+}
+
+/** For a row of tabs that can overflow: marks whether it does (for an edge fade) and keeps the active tab in view sideways. */
+export function useTabStrip(active: string) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const update = () => {
+      el.dataset.overflow = el.scrollWidth > el.clientWidth + 1 ? (el.scrollLeft + el.clientWidth >= el.scrollWidth - 1 ? 'start' : el.scrollLeft > 1 ? 'both' : 'end') : ''
+    }
+    const on = el.querySelector<HTMLElement>('[aria-selected="true"]')
+    const reveal = () => {   // scroll only the strip, so a phone page never jumps
+      if (on) {
+        const l = on.offsetLeft, r = l + on.offsetWidth
+        if (l < el.scrollLeft) el.scrollLeft = l - 8
+        else if (r > el.scrollLeft + el.clientWidth) el.scrollLeft = r - el.clientWidth + 8
+      }
+      update()
+    }
+    reveal()
+    el.addEventListener('scroll', update, { passive: true })
+    // labels can grow (a running clock in a tab name), so re-check when the strip or the active tab changes size
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reveal) : null
+    ro?.observe(el); if (on) ro?.observe(on)
+    return () => { el.removeEventListener('scroll', update); ro?.disconnect() }
+  }, [active])
+  return ref
 }

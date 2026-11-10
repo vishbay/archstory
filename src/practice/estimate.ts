@@ -49,7 +49,7 @@ export function estimate(i: EstimateInputs): EstimateLine[] {
   const instances = i.perInstance > 0 ? Math.ceil(peakTotal / i.perInstance) : NaN
 
   const source = i.source === 'users'
-    ? `${count(i.dau)} daily users × ${i.writesPerUser} writes each`
+    ? `${count(i.dau)} daily users × ${plural(i.writesPerUser, 'write')} each`
     : i.volumeUnit === 'day' ? `${count(i.volume)} per day as given`
       : i.volumeUnit === 'month' ? `${count(i.volume)} per month ÷ 30 days` : `${count(i.volume)} per second × 86,400 s`
   return [

@@ -185,7 +185,7 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
   design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zonesView: boolean; zone: ZoneState
   selected: string | null; onSelect: (id: string | null) => void; colorMode: 'light' | 'dark'; edit?: EditProps
   /** Pixels at the left and right edge covered by floating panels. */
-  insets?: { left: number; right: number }
+  insets?: { left: number; right: number; top?: number }
   /** Show the step's explanation in the caption (only needed when the Flow panel is closed). */
   captionDetail?: boolean
 }) {
@@ -197,7 +197,7 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
   type Px = `${number}px`
   const px = (n: number): Px => `${n}px`
   const pad = (top: number, bottom: number, side: number) =>
-    ({ top: px(top), bottom: px(bottom), left: px(insets.left + side), right: px(insets.right + side) })
+    ({ top: px(top + (insets.top ?? 0)), bottom: px(bottom), left: px(insets.left + side), right: px(insets.right + side) })
   useEffect(() => { if (edit) requestAnimationFrame(() => rf.fitView({ duration: 250, padding: pad(24, 24, 24) })) },
     // refit the editor when components are added or removed
     [count]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -233,7 +233,7 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
     const ids = (zoned && zone.hops?.[step] ? [zone.hops[step].from, zone.hops[step].to] : [cur.from, cur.to])
       .filter((id): id is string => !!id)
     if (ids.length) rf.fitView({ nodes: [...new Set(ids)].map(id => ({ id })), duration, padding: FRAME, maxZoom: 1 })
-  }, [step, nonce, follow, flow?.id, zoned, insets.left, insets.right]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, nonce, follow, flow?.id, zoned, insets.left, insets.right, insets.top]) // eslint-disable-line react-hooks/exhaustive-deps
   const { failed } = zone
 
   const { nodes, edges } = useMemo(() => {

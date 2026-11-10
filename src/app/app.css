@@ -723,3 +723,25 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 
 .ai-prices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .ai-prices label { display: grid; gap: 4px; font-weight: 400; font-size: 12px; color: var(--muted); }
+
+/* ---------- UX pass 2 ---------- */
+/* tabs that overflow fade at the edge that hides more */
+.tabs[data-overflow="end"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.tabs[data-overflow="start"] { mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+.tabs[data-overflow="both"] { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+/* the sticky step card sits flush with the top of the panel, so nothing peeks out above it */
+.panel-body:has(> .card.current-card) { padding-top: 0; }
+.panel-body:has(> .card.current-card) > :first-child { margin-top: 14px; }
+/* timed checklist: compact rows (only the phase boxes have borders) */
+.timed-phases li .timed-items li { border: 0; padding: 0; background: none; }
+.timed-items .check-row { margin: 4px 0; }
+/* starter skeletons: left-aligned, and the text wraps on small screens */
+.skeletons button { justify-items: start; white-space: normal; text-align: left; width: 100%; }
+.skeletons > span { white-space: normal; }
+/* undo and redo icons large enough to read */
+.tb-btn > span[aria-hidden] { font-size: 15px; line-height: 1; }
+@media (max-width: 900px) {
+  /* phones: logo, title and icons on the first row; mode and cloud on the second */
+  .topbar > .seg { order: 10; }
+  .topbar .sep { display: none; }
+}

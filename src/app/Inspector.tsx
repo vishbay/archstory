@@ -12,6 +12,7 @@ import { haOf, impactOf, placementsOf, resilience, zoneName } from '../model/ava
 import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
+import { useTabStrip } from './hooks'
 
 export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes' | 'questions'
 
@@ -38,6 +39,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const mon = monitoring && !!design.observability
   const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), ...(mon ? ['monitoring'] as const : []), 'notes', ...(design.questions.length ? ['questions'] as const : [])] as const)
   const shown = (tab === 'zones' && !zones) || (tab === 'monitoring' && !mon) || (tab === 'questions' && !design.questions.length) ? 'step' : tab
+  const tabStrip = useTabStrip(shown)
   const zoneOfInst = (id: string | null) => (id ? zone.zl?.insts.find(i => i.id === id)?.zone ?? null : null)
   const instLabel = (id: string | null) => { const z = zoneOfInst(id); return z === null ? '' : ` (${zoneName(z, cloud)})` }
   const hop = zone.hops?.[step]
@@ -47,7 +49,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
 
   return (
     <>
-      <div className="tabs" role="tablist">
+      <div className="tabs" role="tablist" ref={tabStrip}>
         {tabs.map(t => (
           <button key={t} role="tab" aria-selected={shown === t} className={shown === t ? 'on' : ''} onClick={() => onTab(t)}>
             {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : t === 'monitoring' ? 'Monitoring' : t === 'questions' ? `Questions (${design.questions.length})` : `Notes (${design.notes.length})`}
