@@ -14,7 +14,9 @@ import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { Section } from './Sidebar'
-import { panelInsets, store, storeKv, usePlayer, useViewportWidth } from './hooks'
+import { panelInsets, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
+import { TimerBanner, type TimedControls } from './TimedPanel'
+import { end as endTimed, nextPhase, pause as pauseTimed, resume as resumeTimed, startSession, toggleTick, type TimedSession } from '../practice/timed'
 import { commit, initHistory, redo, undo } from '../practice/history'
 import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
 import { Attempts } from './Attempts'
@@ -67,6 +69,14 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
   const [refTab, setRefTab] = useState<InspectorTab>('step')
   const [reasoningOn, setReasoningOn] = useState(() => store.get('archstory.reasoning', false))
   useEffect(() => { store.set('archstory.reasoning', reasoningOn) }, [reasoningOn])
+
+  // Timed interview: kept per problem so a reload does not lose the clock.
+  const timedKey = `archstory.timed.${ref.id}`
+  const [session, setSession] = useState<TimedSession | null>(() => store.get(timedKey, null))
+  const [savedAs, setSavedAs] = useState<string | null>(null)
+  const running = !!session && session.endedAt === null && !session.pausedAt
+  const now = useNow(running)
+  const putSession = (next: TimedSession | null) => { setSession(next); store.set(timedKey, next) }
 
   const viewport = useViewportWidth()
   const insets = panelInsets(viewport, leftOpen, rightOpen)
@@ -133,6 +143,28 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     reload(ref.id); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
     setAttemptMsg(`Restored ${done.attempts} answer${done.attempts === 1 ? '' : 's'} and ${done.snapshots} new saved attempts${done.kept ? `; ${done.kept} current answer${done.kept === 1 ? ' was' : 's were'} kept as "Before restore"` : ''}.${r.skipped.length ? ` Skipped ${r.skipped.length}: ${r.skipped.join('; ')}.` : ''}`)
   }
+  /** Ending a timed interview keeps a copy of the answer, so the attempt list shows how each timed run went. */
+  const finishTimed = (done: TimedSession) => {
+    putSession(done)
+    const name = `Timed interview, ${done.total} min`
+    if (attempt.nodes.length) { saveAttempt(name); setSavedAs(name) } else setSavedAs(null)
+    setTab('interview')
+  }
+  const timed: TimedControls = {
+    session, now, savedAs,
+    start: minutes => { setReasoningOn(true); setSavedAs(null); putSession(startSession(minutes, Date.now())); setTab('interview') },
+    pause: () => session && putSession(pauseTimed(session, Date.now())),
+    resume: () => session && putSession(resumeTimed(session, Date.now())),
+    next: () => { if (!session) return; const s = nextPhase(resumeTimed(session, Date.now()), Date.now()); if (s.endedAt !== null) finishTimed(s); else putSession(s) },
+    end: () => session && finishTimed(endTimed(session, Date.now())),
+    reset: () => { putSession(null); setSavedAs(null) },
+    tick: key => session && putSession(toggleTick(session, key)),
+    notes: section => {
+      setReasoningOn(true); setTab('reasoning')
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`#reasoning-${section} textarea`)?.focus())
+    },
+  }
+
   const add = (kind: string) => {
     const r = addNode(attempt, kind)
     setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
@@ -274,6 +306,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
             </div>
           )}
           {showRef && <div className="ref-badge">Reference design</div>}
+          {!showRef && <TimerBanner t={timed} onOpen={() => setTab('interview')} />}
         </div>
         <PlayerBar flows={shown.flows.filter(f => f.steps.length)} flow={flow?.steps.length ? flow : undefined} onFlow={setFlowId} player={player} picker />
       </main>
@@ -288,7 +321,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
                 flow={flow} onFlow={id => { setFlowId(id); stopRecording() }} player={player}
                 recording={recording} onRecord={() => { stopConnecting(); setRecording(true); setRecFrom(null); setSelected(null); setPicked(null) }} onStopRecording={stopRecording}
                 result={result} reasoningOn={reasoningOn} onCompare={() => setShowRef(true)}
-                reference={ref} review={review} onReview={setReview} />}
+                reference={ref} review={review} onReview={setReview} timed={timed} />}
         </aside>
       )}
     </>

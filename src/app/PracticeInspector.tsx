@@ -6,8 +6,10 @@ import { ReviewPanel, type StoredReview } from './ReviewPanel'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import { NodeIcon } from './NodeIcon'
 import type { Player } from './hooks'
+import { TimedPanel, type TimedControls } from './TimedPanel'
+import { mmss, status } from '../practice/timed'
 
-export type PracticeTab = 'build' | 'flows' | 'check' | 'reasoning' | 'review'
+export type PracticeTab = 'build' | 'flows' | 'check' | 'reasoning' | 'review' | 'interview'
 
 const REASONING = [
   { key: 'requirements', title: 'Requirements and assumptions', hint: 'What is in and out of scope? Which numbers are you assuming?' },
@@ -28,14 +30,16 @@ export function PracticeInspector(p: {
   recording: boolean; onRecord: () => void; onStopRecording: () => void
   result: { checks: Check[]; passed: number; total: number }; reasoningOn: boolean; onCompare: () => void
   reference: Design; review: StoredReview | null; onReview: (r: StoredReview | null) => void
+  timed: TimedControls
 }) {
   const { attempt: d, setAttempt, cloud, tab } = p
   const node = p.selected ? d.nodes.find(n => n.id === p.selected) : undefined
   const edge = p.picked ? d.edges.find(e => e.from === p.picked!.from && e.to === p.picked!.to) : undefined
   const label = (id: string) => { const n = d.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
-  const tabs: PracticeTab[] = ['build', 'flows', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review']
+  const tabs: PracticeTab[] = ['build', 'flows', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review', 'interview']
   const shownTab = tab === 'reasoning' && !p.reasoningOn ? 'build' : tab
-  const tabName = { build: 'Build', flows: `Flows (${d.flows.length})`, check: p.result.total ? `Check ${p.result.passed}/${p.result.total}` : 'Check', reasoning: 'Reasoning', review: p.review ? `Review ${p.review.review.overall}/5` : 'Review' }
+  const tabName = { build: 'Build', flows: `Flows (${d.flows.length})`, check: p.result.total ? `Check ${p.result.passed}/${p.result.total}` : 'Check', reasoning: 'Reasoning', review: p.review ? `Review ${p.review.review.overall}/5` : 'Review',
+    interview: p.timed.session && p.timed.session.endedAt === null ? `Interview ${mmss(status(p.timed.session, p.timed.now).totalLeft)}` : 'Interview' }
 
   return (
     <>
@@ -176,11 +180,13 @@ export function PracticeInspector(p: {
             onSelectNode={id => { p.onPick(null); p.onSelect(id) }} cloud={cloud} />
         )}
 
+        {shownTab === 'interview' && <TimedPanel t={p.timed} attempt={d} checks={p.result.checks} />}
+
         {shownTab === 'reasoning' && (
           <>
             <p className="muted small">Write what you would say out loud in the interview. Saved with your answer and included in exports.</p>
             {REASONING.map(r => (
-              <label key={r.key} className="field">{r.title}
+              <label key={r.key} id={`reasoning-${r.key}`} className="field">{r.title}
                 <textarea rows={5} placeholder={r.hint} value={d.reasoning?.[r.key] ?? ''}
                   onChange={e => setAttempt({ ...d, reasoning: { ...d.reasoning, [r.key]: e.target.value } }, `reasoning:${r.key}`)} />
               </label>

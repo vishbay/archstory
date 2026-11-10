@@ -629,3 +629,35 @@ select.scenario-pick:hover { border-bottom-style: solid; }
 .ai-send p { margin: 0; }
 .ai-note { margin: 8px 0; }
 h4.by-hand { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
+
+/* ---------- timed interview ---------- */
+.timer-banner { position: absolute; top: 10px; left: calc(50% + (var(--pl) - var(--pr)) / 2); transform: translateX(-50%); z-index: 7;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: calc(100% - var(--pl) - var(--pr) - 24px);
+  padding: 6px 8px 6px 6px; border-radius: 12px; font-size: 12.5px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow); }
+.timer-banner.over { border-color: var(--medium); }
+.timer-banner.paused { opacity: .85; }
+.timer-banner button { height: 28px; padding: 0 10px; }
+.timer-main { display: inline-flex; gap: 8px; align-items: baseline; border: 0; background: transparent; }
+.timer-phase { font-weight: 600; color: var(--accent-text); }
+.timer-time { font-variant-numeric: tabular-nums; font-weight: 600; }
+.timer-banner.over .timer-time, .timer-nudge { color: var(--medium); }
+.timer-nudge { font-weight: 600; }
+.timer-total { font-variant-numeric: tabular-nums; }
+.timer-bar { width: 80px; height: 5px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.timer-bar i { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }
+.timer-banner.over .timer-bar i { background: var(--medium); }
+.timed-plan, .timed-phases { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
+.timed-plan li { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.timed-plan li p { grid-column: 1 / -1; margin: 2px 0 0; }
+.timed-phases li { border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; }
+.timed-phases li.cur { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.timed-phases li.done summary b { color: var(--muted); }
+.timed-phases summary { display: flex; justify-content: space-between; gap: 8px; cursor: pointer; }
+.timed-phases summary .over, .timed-report .over { color: var(--medium); }
+.timed-report .under { color: var(--muted); }
+.timed-items { list-style: none; padding: 0; margin: 6px 0 2px; display: grid; gap: 4px; }
+.timed-items .check-row { align-items: flex-start; font-size: 12.5px; }
+.auto-tag { margin-left: 6px; font-size: 10.5px; color: var(--easy); white-space: nowrap; }
+.timed-head { display: flex; align-items: baseline; gap: 10px; margin: 4px 0 8px; }
+.timed-clock { font: 600 28px var(--font); font-variant-numeric: tabular-nums; color: var(--accent-text); }
+.timed-clock.over { color: var(--medium); }

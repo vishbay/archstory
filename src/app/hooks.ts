@@ -101,3 +101,15 @@ export function panelInsets(width: number, leftOpen: boolean, rightOpen: boolean
   const compact = width <= COMPACT_BELOW
   return { left: leftOpen ? (compact ? 280 : 300) : 12, right: rightOpen ? (compact ? 340 : 380) : 12 }
 }
+
+/** The current time, refreshed every second while `active`. */
+export function useNow(active: boolean, every = 1000): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    setNow(Date.now())   // eslint-disable-line react-hooks/set-state-in-effect
+    if (!active) return
+    const t = setInterval(() => setNow(Date.now()), every)
+    return () => clearInterval(t)
+  }, [active, every])
+  return now
+}
