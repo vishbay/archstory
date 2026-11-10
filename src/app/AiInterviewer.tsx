@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
 import { nameOf, type Cloud } from '../model/kinds'
 import type { Check } from '../practice/checks'
-import { AiError, isConfigured, providerLabel, sendChat } from '../ai/providers'
+import { AiError, isConfigured, providerLabel, sendChat, forFeature, modelFor } from '../ai/providers'
 import {
   addUsage, apiMessages, candidateTurns, emptyInterview, estimateCost, formatTokens, interviewSystem, MAX_TURNS, mentionParts, nextTurn, plainText,
   type InterviewState,
@@ -55,7 +55,7 @@ export function AiInterviewer({ attempt, reference, checks, cloud, onSelectNode 
   const ask = async (s: InterviewState, finishing = false) => {
     setBusy(true); setError(null); ctl.current = new AbortController()
     try {
-      const r = await sendChat(ai, apiMessages(s.turns), { system: s.system, cache: true, maxTokens: finishing ? 900 : 600, signal: ctl.current.signal, timeoutMs: 120_000 })
+      const r = await sendChat(forFeature(ai, 'interview'), apiMessages(s.turns), { system: s.system, cache: true, maxTokens: finishing ? 900 : 600, signal: ctl.current.signal, timeoutMs: 120_000 })
       const next = { ...s, turns: [...s.turns, { role: 'assistant' as const, text: r.text.trim() || '(no reply)' }], usage: addUsage(s.usage, r.usage), finished: s.finished || finishing }
       save(next); speak(r.text)
     } catch (e) {
@@ -115,7 +115,7 @@ export function AiInterviewer({ attempt, reference, checks, cloud, onSelectNode 
     return (
       <>
         <h3>AI interviewer</h3>
-        <p className="muted small">{providerLabel(ai)} plays the interviewer for {reference.meta.title}. It sees your design every time you change it, asks one question at a time, and ends with feedback. Keep drawing while you talk: the canvas stays live.</p>
+        <p className="muted small">{providerLabel(ai)} ({modelFor(ai, 'interview')}) plays the interviewer for {reference.meta.title}. It sees your design every time you change it, asks one question at a time, and ends with feedback. Keep drawing while you talk: the canvas stays live.</p>
         <label className="check-row"><input type="checkbox" checked={includeRef} onChange={e => setIncludeRef(e.target.checked)} /> Let the interviewer see the reference answer (it is told not to reveal it)</label>
         {(SpeechRec || canSpeak) && <label className="check-row"><input type="checkbox" checked={aloud} onChange={e => setAloud(e.target.checked)} disabled={!canSpeak} /> Read questions aloud</label>}
         <p className="muted small">Cost: each reply re-sends the conversation. A full {MAX_TURNS}-question interview is usually 100k to 200k input tokens; Anthropic's prompt caching, which this uses, makes most of that much cheaper.</p>

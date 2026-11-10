@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AiError, DEFAULT_BASE_URL, hostOf, isConfigured, PROVIDERS, PROVIDER_IDS, sendChat, type AiConfig, type ProviderId } from '../ai/providers'
+import { AiError, DEFAULT_BASE_URL, FEATURES, hostOf, isConfigured, PROVIDERS, PROVIDER_IDS, sendChat, type AiConfig, type Feature, type ProviderId } from '../ai/providers'
 import { forgetAiKeys, getAiConfig, setAiConfig } from './useAiConfig'
 
 /** Connect your own API key. Optional: every AI step also works by copy and paste. */
@@ -15,6 +15,8 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
   const set = (patch: Partial<AiConfig>) => { setDraft(d => ({ ...d, ...patch })); setTest({ state: 'idle', text: '' }) }
   const setKey = (v: string) => set({ keys: { ...draft.keys, [draft.provider]: v } })
   const setModel = (v: string) => set({ models: { ...draft.models, [draft.provider]: v } })
+  const setFeatureModel = (f: Feature, v: string) => set({ featureModels: { ...draft.featureModels, [draft.provider]: { ...draft.featureModels[draft.provider], [f]: v } } })
+  const anyFeature = FEATURES.some(f => draft.featureModels[draft.provider][f.id].trim())
 
   const runTest = async () => {
     ctl.current?.abort(); ctl.current = new AbortController()
@@ -58,8 +60,19 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
 
       <label className="field">Model
         <input type="text" value={draft.models[draft.provider]} spellCheck={false} onChange={e => setModel(e.target.value)} />
-        <span className="muted small">Change this if your account uses a different model. Design reviews and generated designs work best with a strong model.</span>
+        <span className="muted small">Used for everything unless you choose a model per feature below. Change it if your account uses a different model.</span>
       </label>
+
+      <details className="ai-features" open={anyFeature}>
+        <summary>Use a different model for each feature</summary>
+        <p className="muted small">Leave a box empty to use the main model. A common mix: a strong model for reviews and making designs, and a faster, cheaper one for the interviewer.</p>
+        {FEATURES.map(f => (
+          <label key={f.id} className="field ai-feature">{f.label} <span className="muted small">({f.hint})</span>
+            <input type="text" spellCheck={false} value={draft.featureModels[draft.provider][f.id]} placeholder={draft.models[draft.provider] || p.defaultModel}
+              onChange={e => setFeatureModel(f.id, e.target.value)} />
+          </label>
+        ))}
+      </details>
 
       <div className="field">Your prices (optional, per million tokens)
         <div className="ai-prices">

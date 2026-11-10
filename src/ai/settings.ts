@@ -1,6 +1,6 @@
 // Where the user's AI settings live. The key is kept for this tab only unless they choose to remember it on this device.
 // It is never part of an export or a practice backup.
-import { emptyConfig, PROVIDER_IDS, type AiConfig } from './providers'
+import { emptyConfig, FEATURES, PROVIDER_IDS, type AiConfig } from './providers'
 
 export const AI_STORAGE_KEY = 'archstory.ai'
 
@@ -11,7 +11,7 @@ const safe = <T,>(f: () => T, fallback: T): T => { try { return f() } catch { re
 export function normalise(raw: unknown): AiConfig {
   const base = emptyConfig(), r = (raw && typeof raw === 'object' ? raw : {}) as Partial<AiConfig>
   const str = (v: unknown, d: string) => (typeof v === 'string' ? v : d)
-  const out: AiConfig = { ...base, keys: { ...base.keys }, models: { ...base.models } }
+  const out: AiConfig = { ...base, keys: { ...base.keys }, models: { ...base.models }, featureModels: structuredClone(base.featureModels) }
   if (r.provider && PROVIDER_IDS.includes(r.provider)) out.provider = r.provider
   for (const id of PROVIDER_IDS) {
     out.keys[id] = str(r.keys?.[id], '')
@@ -20,6 +20,7 @@ export function normalise(raw: unknown): AiConfig {
   out.baseUrl = str(r.baseUrl, base.baseUrl)
   out.remember = r.remember === true
   out.prices = { input: str(r.prices?.input, ''), output: str(r.prices?.output, '') }
+  for (const id of PROVIDER_IDS) for (const f of FEATURES) out.featureModels[id][f.id] = str(r.featureModels?.[id]?.[f.id], '')
   return out
 }
 

@@ -13,7 +13,24 @@ export interface AiConfig {
   remember: boolean
   /** The user's own price per million tokens, used only to show a cost estimate. Empty when unknown. */
   prices: { input: string; output: string }
+  /** Optional model per feature and provider; empty means the provider's main model. */
+  featureModels: Record<ProviderId, Record<Feature, string>>
 }
+
+export type Feature = 'review' | 'generate' | 'interview'
+export const FEATURES: { id: Feature; label: string; hint: string }[] = [
+  { id: 'review', label: 'Reviews', hint: 'needs judgement: a strong model' },
+  { id: 'generate', label: 'Making designs', hint: 'long, strict JSON: a strong model' },
+  { id: 'interview', label: 'AI interviewer', hint: 'short replies, many turns: a fast, cheaper model is fine' },
+]
+const noFeatureModels = (): Record<Feature, string> => ({ review: '', generate: '', interview: '' })
+
+/** The settings to use for one feature: its own model if one is set, otherwise the provider's main model. */
+export function forFeature(c: AiConfig, f: Feature): AiConfig {
+  const m = c.featureModels[c.provider]?.[f]?.trim()
+  return m ? { ...c, models: { ...c.models, [c.provider]: m } } : c
+}
+export const modelFor = (c: AiConfig, f: Feature) => forFeature(c, f).models[c.provider]
 
 export interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
 export const noUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
@@ -34,6 +51,7 @@ export const emptyConfig = (): AiConfig => ({
   baseUrl: DEFAULT_BASE_URL,
   remember: false,
   prices: { input: '', output: '' },
+  featureModels: { anthropic: noFeatureModels(), openai: noFeatureModels(), gemini: noFeatureModels(), custom: noFeatureModels() },
 })
 
 /** Whether there is enough to send a request: a key (unless the provider does not need one) and a model. */

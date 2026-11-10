@@ -4,7 +4,7 @@ import { nameOf, type Cloud } from '../model/kinds'
 import type { Check } from '../practice/checks'
 import { DIMENSIONS, parseReview, reviewPrompt, signature, type Review } from '../practice/review'
 import { askForJson } from '../ai/ask'
-import { hostOf, isConfigured, providerLabel } from '../ai/providers'
+import { hostOf, isConfigured, providerLabel, forFeature, modelFor } from '../ai/providers'
 import { copyText, extractJson, fixRequest } from './prompts'
 import { openAiSettings, useAiConfig } from './useAiConfig'
 
@@ -41,7 +41,7 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
   const send = async () => {
     const sig = signature(attempt)
     setBusy(true); setErrors([]); setAiErrors([]); ctl.current = new AbortController()
-    const r = await askForJson(ai, reviewPrompt(attempt, reference, checks, includeRef), checkReply, e => fixRequest('review', e), { signal: ctl.current.signal, maxTokens: 6000 })
+    const r = await askForJson(forFeature(ai, 'review'), reviewPrompt(attempt, reference, checks, includeRef), checkReply, e => fixRequest('review', e), { signal: ctl.current.signal, maxTokens: 6000 })
     setBusy(false)
     if (r.ok) { onStore({ review: r.value.review, sig, warnings: r.value.warnings }); setText(''); setPasting(false); return }
     if (r.cancelled) return
@@ -76,7 +76,7 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
                 <button className="primary" onClick={send} disabled={busy}>{busy ? `Waiting for ${providerLabel(ai)}…` : `Send to ${providerLabel(ai)}`}</button>
                 {busy && <button onClick={() => ctl.current?.abort()}>Cancel</button>}
               </div>
-              <p className="muted small">Uses your key and sends your design to {hostOf(ai)}. Model: {ai.models[ai.provider]}. <button className="link" onClick={openAiSettings}>AI settings</button></p>
+              <p className="muted small">Uses your key and sends your design to {hostOf(ai)}. Model: {modelFor(ai, 'review')}. <button className="link" onClick={openAiSettings}>AI settings</button></p>
               {aiErrors.length > 0 && <div className="errors" role="alert">{aiErrors.map(e => <p key={e}>{e}</p>)}</div>}
             </div>
           ) : (

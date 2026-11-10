@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { askForJson } from './ask'
-import { AiError, buildRequest, describeHttpError, emptyConfig, hostOf, isConfigured, parseReply, sendChat, type AiConfig } from './providers'
+import { AiError, buildRequest, describeHttpError, emptyConfig, forFeature, hostOf, isConfigured, modelFor, parseReply, sendChat, type AiConfig } from './providers'
 import { AI_STORAGE_KEY, clearConfig, loadConfig, normalise, saveConfig } from './settings'
 
 const cfg = (over: Partial<AiConfig> = {}, key = 'sk-test-1234567890'): AiConfig => {
@@ -119,6 +119,23 @@ describe('configuration', () => {
   it('ignores stored junk and falls back to defaults', () => {
     const n = normalise({ provider: 'nope', keys: { openai: 5 }, models: { openai: '' }, remember: 'yes' })
     expect(n.provider).toBe('anthropic'); expect(n.keys.openai).toBe(''); expect(n.models.openai).toBe('gpt-6.1-sol'); expect(n.remember).toBe(false)
+  })
+})
+
+describe('model per feature', () => {
+  it('uses a feature model when set, and the main model otherwise', () => {
+    const c = cfg({ provider: 'anthropic' })
+    c.featureModels.anthropic.interview = ' claude-haiku-5-5 '
+    expect(modelFor(c, 'interview')).toBe('claude-haiku-5-5')
+    expect(modelFor(c, 'review')).toBe('claude-sonnet-5-5')
+    expect(JSON.parse(buildRequest(forFeature(c, 'interview'), msg, 10).init.body).model).toBe('claude-haiku-5-5')
+    expect(c.models.anthropic).toBe('claude-sonnet-5-5')   // the main setting is untouched
+  })
+  it('keeps feature models per provider, and survives stored junk', () => {
+    const n = normalise({ provider: 'openai', featureModels: { openai: { review: 'gpt-6.1-sol', interview: 7 }, nope: { review: 'x' } } })
+    expect(n.featureModels.openai).toEqual({ review: 'gpt-6.1-sol', generate: '', interview: '' })
+    expect(n.featureModels.anthropic.review).toBe('')
+    expect(modelFor({ ...n, provider: 'anthropic' }, 'review')).toBe('claude-sonnet-5-5')
   })
 })
 

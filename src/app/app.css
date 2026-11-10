@@ -745,3 +745,8 @@ button.listening { border-color: var(--hard); color: var(--hard); }
   .topbar > .seg { order: 10; }
   .topbar .sep { display: none; }
 }
+
+.ai-features { margin: 6px 0 4px; }
+.ai-features summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.ai-features .ai-feature { margin: 8px 0 0; }
+.ai-features .ai-feature .muted { font-weight: 400; }

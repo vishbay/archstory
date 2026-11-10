@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
 import { askForJson } from '../ai/ask'
-import { hostOf, isConfigured, providerLabel } from '../ai/providers'
+import { hostOf, isConfigured, providerLabel, forFeature, modelFor } from '../ai/providers'
 import { checkImport } from './importCheck'
 import { copyText, fixRequest, generationPrompt } from './prompts'
 import { openAiSettings, useAiConfig } from './useAiConfig'
@@ -33,7 +33,7 @@ export function GenerateDialog({ example, onClose, onPasteAnswer, onGenerated }:
   /** Send the prompt with the user's own key. A valid design opens straight away; otherwise the reply goes to the import box. */
   const send = async () => {
     setBusy(true); setAiErrors([]); ctl.current = new AbortController()
-    const r = await askForJson(ai, prompt, reply => { const c = checkImport(reply); return c.status === 'valid' ? { ok: true as const, value: c.design } : { ok: false as const, errors: c.status === 'invalid' ? c.errors : ['The reply was empty.'] } },
+    const r = await askForJson(forFeature(ai, 'generate'), prompt, reply => { const c = checkImport(reply); return c.status === 'valid' ? { ok: true as const, value: c.design } : { ok: false as const, errors: c.status === 'invalid' ? c.errors : ['The reply was empty.'] } },
       e => fixRequest('design', e), { signal: ctl.current.signal, maxTokens: 16000 })
     setBusy(false)
     if (r.ok) { dialog.current?.close(); onGenerated(r.value); return }
@@ -58,7 +58,7 @@ export function GenerateDialog({ example, onClose, onPasteAnswer, onGenerated }:
       </details>
       {copied === false && <p className="small errors-inline">Could not reach the clipboard. The prompt is selected above: copy it with ⌘C / Ctrl+C.</p>}
       {ready
-        ? <p className="muted small ai-note">Your key is connected: sending uses {providerLabel(ai)} ({ai.models[ai.provider]}) and sends this prompt to {hostOf(ai)}. A reply that does not validate gets one automatic fix request. <button className="link" onClick={openAiSettings}>AI settings</button></p>
+        ? <p className="muted small ai-note">Your key is connected: sending uses {providerLabel(ai)} ({modelFor(ai, 'generate')}) and sends this prompt to {hostOf(ai)}. A reply that does not validate gets one automatic fix request. <button className="link" onClick={openAiSettings}>AI settings</button></p>
         : <p className="muted small ai-note">Have an API key? <button className="link" onClick={openAiSettings}>Connect it</button> to send this without copying.</p>}
       {aiErrors.map(e => <p key={e} className="small errors-inline" role="alert">{e}</p>)}
       <div className="row end">
