@@ -1,30 +1,7 @@
-// Share links and AI prompts. No backend: a shared design travels compressed in the URL hash,
-// which browsers never send to the server.
-import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string'
+// Prompts for the user's own AI, and helpers for reading its answers.
 import { z } from 'zod'
-import { DesignSchema, parseDesign, type Design, type ParseResult } from '../model/schema'
+import { DesignSchema, type Design } from '../model/schema'
 import { KINDS } from '../model/kinds'
-
-const HASH_KEY = 'design'
-
-/** A link that opens this design. Built-in designs only need their id; anything else embeds the whole design. */
-export function shareUrl(d: Design, builtIn: boolean): string {
-  const u = new URL(location.href)
-  u.hash = builtIn ? '' : `${HASH_KEY}=${compressToEncodedURIComponent(JSON.stringify(d))}`
-  return u.toString()
-}
-
-export function readSharedDesign(hash = location.hash): ParseResult | null {
-  const raw = new URLSearchParams(hash.replace(/^#/, '')).get(HASH_KEY)
-  if (!raw) return null
-  try {
-    const json = decompressFromEncodedURIComponent(raw)
-    if (!json) return { ok: false, errors: ['The shared link is damaged or incomplete.'] }
-    return parseDesign(JSON.parse(json))
-  } catch {
-    return { ok: false, errors: ['The shared link is damaged or incomplete.'] }
-  }
-}
 
 /** Pull the JSON object out of an AI answer that may wrap it in a code fence or add prose around it. */
 export function extractJson(text: string): string {

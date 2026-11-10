@@ -19,7 +19,6 @@ import { AiSettings } from './AiSettings'
 import { onOpenAiSettings } from './useAiConfig'
 import { JsonDialog } from './JsonDialog'
 import { DesignPicker } from './DesignPicker'
-import { copyText, readSharedDesign, shareUrl } from './share'
 import { Practice } from './Practice'
 import { Home } from './Home'
 import { Tour } from './Tour'
@@ -33,25 +32,14 @@ const loadMine = (): Design[] =>
 
 const params = new URLSearchParams(location.search)
 
-// A design opened from a share link: shown but not saved until the viewer chooses to.
-const sharedAtLoad = (() => {
-  const r = readSharedDesign()
-  if (!r) return { design: null, error: null }
-  if (!r.ok) return { design: null, error: `Could not open the shared design: ${r.errors[0]}` }
-  const d = r.design
-  return { design: LIBRARY.some(x => x.id === d.id) ? { ...d, id: `${d.id}-shared` } : d, error: null }
-})()
-
 export function App() {
   const theme = useTheme()
   const [mine, setMine] = useState(loadMine)
-  const [shared, setShared] = useState<Design | null>(sharedAtLoad.design)
-  const all = [...LIBRARY, ...(shared ? [shared] : []), ...mine]
-  const [designId, setDesignId] = useState(() => sharedAtLoad.design?.id ?? params.get('d') ?? LIBRARY[0].id)
-  const [toast, setToast] = useState<string | null>(sharedAtLoad.error)
-  // A bare URL opens the home page; links with a design, a practice problem or a shared design open that directly.
+  const all = [...LIBRARY, ...mine]
+  const [designId, setDesignId] = useState(() => params.get('d') ?? LIBRARY[0].id)
+  // A bare URL opens the home page; links with a design or a practice problem open that directly.
   const [mode, setMode] = useState<'home' | 'explore' | 'practice'>(() =>
-    sharedAtLoad.design ? 'explore' : params.get('mode') === 'practice' ? 'practice' : params.get('d') ? 'explore' : 'home')
+    params.get('mode') === 'practice' ? 'practice' : params.get('d') ? 'explore' : 'home')
   const [tour, setTour] = useState<'explore' | 'practice' | null>(null)
   useEffect(() => {
     if (mode === 'home' || store.get(`archstory.tour.${mode}`, false)) return
@@ -109,9 +97,8 @@ export function App() {
     if (network) u.searchParams.set('net', '1'); else u.searchParams.delete('net')
     if (zonesView) u.searchParams.set('zones', '1'); else u.searchParams.delete('zones')
     if (monitoring) u.searchParams.set('mon', '1'); else u.searchParams.delete('mon')
-    if (design.id !== shared?.id) u.hash = ''
     history.replaceState(null, '', u)
-  }, [design.id, flow, view, network, zonesView, monitoring, shared, mode, problemId])
+  }, [design.id, flow, view, network, zonesView, monitoring, mode, problemId])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && mode !== 'home') { e.preventDefault(); setPicking(true) }
@@ -119,11 +106,6 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [mode])
-  useEffect(() => {
-    if (!toast) return
-    const t = setTimeout(() => setToast(null), 3500)
-    return () => clearTimeout(t)
-  }, [toast])
   useEffect(() => { store.set('archstory.cloud', cloud) }, [cloud])
   useEffect(() => { store.set('archstory.left', leftOpen) }, [leftOpen])
   useEffect(() => { store.set('archstory.right', rightOpen) }, [rightOpen])
@@ -140,21 +122,6 @@ export function App() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }))
     const a = Object.assign(document.createElement('a'), { href: url, download: `${d.id}.json` })
     a.click(); URL.revokeObjectURL(url)
-  }
-  const isShared = !!shared && design.id === shared.id
-  const share = async () => {
-    const builtIn = LIBRARY.some(x => x.id === design.id)
-    const url = shareUrl(design, builtIn)
-    const ok = await copyText(url)
-    setToast(!ok ? 'Could not reach the clipboard.'
-      : builtIn ? 'Link copied.'
-      : `Link copied. The whole design is inside it (${Math.round(url.length / 1000)}k characters), so nothing is uploaded anywhere.`)
-  }
-  const saveShared = () => {
-    if (!shared) return
-    setShared(null)
-    importDesign(shared)
-    setToast('Saved to My designs.')
   }
   const themeIcon = theme.pref === 'system' ? '◐' : theme.pref === 'light' ? '☀' : '☾'
 
@@ -173,11 +140,6 @@ export function App() {
             {mode === 'practice' ? (LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title : design.meta.title}<span className="chev-down" aria-hidden>▾</span>
           </button>
         </>}
-        {mode === 'explore' && isShared && (
-          <span className="shared-pill">Shared link · not saved
-            <button className="link" onClick={saveShared}>Save to My designs</button>
-          </span>
-        )}
         {mode !== 'home' && (
           <nav className="seg" aria-label="Mode">
             <button className={mode === 'explore' ? 'on' : ''} onClick={() => setMode('explore')}>Explore</button>
@@ -193,7 +155,6 @@ export function App() {
             ))}
           </div>
         )}
-        {mode === 'explore' && <button onClick={share} title="Copy a link to this design, flow and view">Share</button>}
         <button className="icon ghost" aria-label={`Theme: ${theme.pref}. Click to change`} title={`Theme: ${theme.pref} (click to change)`} onClick={theme.cycle}>{themeIcon}</button>
         {mode !== 'home' && (
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the inspector' : 'Show or hide the flow inspector'} aria-expanded={rightOpen}
@@ -267,7 +228,6 @@ export function App() {
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={reply => { setGenerating(false); setImportText(reply ?? ''); setImporting(true) }}
         onGenerated={d => { setGenerating(false); importDesign(d) }} />}
-      {toast && <div className="toast" role="status">{toast}</div>}
       {tour && <Tour key={tour} steps={tour === 'explore' ? EXPLORE_TOUR : PRACTICE_TOUR} onDone={endTour} />}
     </div>
   )

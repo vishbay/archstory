@@ -5,7 +5,7 @@ import type { Check } from '../practice/checks'
 import { DIMENSIONS, parseReview, reviewPrompt, signature, type Review } from '../practice/review'
 import { askForJson } from '../ai/ask'
 import { hostOf, isConfigured, providerLabel } from '../ai/providers'
-import { copyText, extractJson, fixRequest } from './share'
+import { copyText, extractJson, fixRequest } from './prompts'
 import { openAiSettings, useAiConfig } from './useAiConfig'
 
 export interface StoredReview { review: Review; sig: string; warnings: string[] }

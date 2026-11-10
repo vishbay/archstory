@@ -1,6 +1,6 @@
 // Live check of whatever is in the Import box: valid JSON, matches the format, and a few friendly warnings.
 import { parseDesign, type Design } from '../model/schema'
-import { extractJson } from './share'
+import { extractJson } from './prompts'
 
 export type ImportCheck =
   | { status: 'empty' }

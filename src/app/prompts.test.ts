@@ -1,25 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { compressToEncodedURIComponent } from 'lz-string'
-import { extractJson, generationPrompt, readSharedDesign } from './share'
+import { extractJson, generationPrompt } from './prompts'
 import { parseDesign } from '../model/schema'
 import { LIBRARY } from '../library'
-
-describe('share links', () => {
-  it('round-trips every library design through the URL hash', () => {
-    for (const d of LIBRARY) {
-      const r = readSharedDesign(`#design=${compressToEncodedURIComponent(JSON.stringify(d))}`)
-      expect(r?.ok && r.design).toEqual(d)
-    }
-  })
-  it('keeps links reasonably short', () => {
-    const longest = Math.max(...LIBRARY.map(d => compressToEncodedURIComponent(JSON.stringify(d)).length))
-    expect(longest).toBeLessThan(16000)
-  })
-  it('reports damaged links instead of throwing', () => {
-    expect(readSharedDesign('#design=not-a-real-payload')?.ok).toBe(false)
-    expect(readSharedDesign('#other=1')).toBeNull()
-  })
-})
 
 describe('AI answers', () => {
   it('extracts JSON from a fenced answer with prose around it', () => {

@@ -3,7 +3,7 @@ import type { Design } from '../model/schema'
 import { askForJson } from '../ai/ask'
 import { hostOf, isConfigured, providerLabel } from '../ai/providers'
 import { checkImport } from './importCheck'
-import { copyText, fixRequest, generationPrompt } from './share'
+import { copyText, fixRequest, generationPrompt } from './prompts'
 import { openAiSettings, useAiConfig } from './useAiConfig'
 
 export function GenerateDialog({ example, onClose, onPasteAnswer, onGenerated }: {

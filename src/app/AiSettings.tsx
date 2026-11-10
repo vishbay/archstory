@@ -68,7 +68,7 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
 
       <div className="ai-privacy small">
         <b>What gets sent:</b> the prompt, which includes your design or answer, goes to <b>{hostOf(draft)}</b> and nowhere else.
-        The key stays in this browser, and is never put in share links, exports or backups. Anyone who can use this browser profile can read a remembered key,
+        The key stays in this browser, and is never put in exports or backups. Anyone who can use this browser profile can read a remembered key,
         so skip "remember" on a shared computer.
       </div>
 

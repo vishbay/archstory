@@ -1,5 +1,5 @@
 // Where the user's AI settings live. The key is kept for this tab only unless they choose to remember it on this device.
-// It is never part of a share link, an export or a practice backup.
+// It is never part of an export or a practice backup.
 import { emptyConfig, PROVIDER_IDS, type AiConfig } from './providers'
 
 export const AI_STORAGE_KEY = 'archstory.ai'

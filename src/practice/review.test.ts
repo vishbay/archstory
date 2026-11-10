@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
-import { extractJson } from '../app/share'
+import { extractJson } from '../app/prompts'
 import { addNode, blankAttempt } from './attempt'
 import { runChecks } from './checks'
 import { DIMENSIONS, parseReview, reviewPrompt, signature } from './review'

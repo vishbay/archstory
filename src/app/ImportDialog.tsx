@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
-import { copyText, fixRequest } from './share'
+import { copyText, fixRequest } from './prompts'
 import { checkImport } from './importCheck'
 import { STARTER_DESIGN } from './starterDesign'
 
