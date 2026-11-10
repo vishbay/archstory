@@ -16,6 +16,7 @@ import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { Section } from './Sidebar'
 import { panelInsets, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
+import { EstimateDialog } from './EstimateDialog'
 import { end as endTimed, nextPhase, pause as pauseTimed, resume as resumeTimed, startSession, toggleTick, type TimedSession } from '../practice/timed'
 import { commit, initHistory, redo, undo } from '../practice/history'
 import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
@@ -74,6 +75,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
   const timedKey = `archstory.timed.${ref.id}`
   const [session, setSession] = useState<TimedSession | null>(() => store.get(timedKey, null))
   const [savedAs, setSavedAs] = useState<string | null>(null)
+  const [estimating, setEstimating] = useState(false)
   const running = !!session && session.endedAt === null && !session.pausedAt
   const now = useNow(running)
   const putSession = (next: TimedSession | null) => { setSession(next); store.set(timedKey, next) }
@@ -159,6 +161,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     end: () => session && finishTimed(endTimed(session, Date.now())),
     reset: () => { putSession(null); setSavedAs(null) },
     tick: key => session && putSession(toggleTick(session, key)),
+    calculator: () => setEstimating(true),
     notes: section => {
       setReasoningOn(true); setTab('reasoning')
       requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`#reasoning-${section} textarea`)?.focus())
@@ -214,6 +217,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
               {r.nonFunctional.length > 0 && <details open><summary>Non-functional</summary><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></details>}
               {r.scale.length > 0 && <details open><summary>Scale</summary>
                 <table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table></details>}
+              <button className="small-btn" onClick={() => setEstimating(true)} title="Requests per second, storage, bandwidth and cache size, with the arithmetic">Estimate calculator</button>
             </Section>
             <Section id="p-attempts" title="Attempts" count={snaps.length}>
               <Attempts snaps={snaps} canSave={attempt.nodes.length > 0} suggested={nextName(snaps)} message={attemptMsg}
@@ -310,6 +314,13 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
         </div>
         <PlayerBar flows={shown.flows.filter(f => f.steps.length)} flow={flow?.steps.length ? flow : undefined} onFlow={setFlowId} player={player} picker />
       </main>
+
+      {estimating && <EstimateDialog problem={ref} onClose={() => setEstimating(false)}
+        onAddToNotes={text => {
+          const cur = attempt.reasoning?.estimates?.trim()
+          setAttempt({ ...attempt, reasoning: { ...attempt.reasoning, estimates: cur ? `${cur}\n\n${text}` : text } })
+          setReasoningOn(true)
+        }} />}
 
       {rightOpen && (
         <aside className="right">

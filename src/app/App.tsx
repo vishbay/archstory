@@ -16,6 +16,7 @@ import { Sidebar } from './Sidebar'
 import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
 import { AiSettings } from './AiSettings'
+import { EstimateDialog } from './EstimateDialog'
 import { onOpenAiSettings } from './useAiConfig'
 import { JsonDialog } from './JsonDialog'
 import { DesignPicker } from './DesignPicker'
@@ -69,6 +70,7 @@ export function App() {
   const [importing, setImporting] = useState(false)
   const [importText, setImportText] = useState('')
   const [aiOpen, setAiOpen] = useState(false)
+  const [estimating, setEstimating] = useState(false)
   useEffect(() => onOpenAiSettings(() => setAiOpen(true)), [])
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
   const viewport = useViewportWidth()
@@ -177,7 +179,7 @@ export function App() {
       {leftOpen && (
         <aside className="left">
           <Sidebar current={design} onBrowse={() => setPicking(true)}
-            onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} />
+            onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} onEstimate={() => setEstimating(true)} />
         </aside>
       )}
 
@@ -222,6 +224,7 @@ export function App() {
       {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
       {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
+      {estimating && <EstimateDialog problem={design} onClose={() => setEstimating(false)} />}
       {picking && <DesignPicker library={LIBRARY} mine={mode === 'practice' ? [] : mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
         onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}
         onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }} />}

@@ -10,6 +10,8 @@ export interface TimedControls {
   start: (minutes: number) => void; pause: () => void; resume: () => void
   next: () => void; end: () => void; reset: () => void
   tick: (key: string) => void
+  /** Open the estimate calculator. */
+  calculator: () => void
   /** Open the Reasoning section where this phase's notes belong. */
   notes: (section: string) => void
   /** Name of the attempt saved when the interview ended, if any. */
@@ -77,6 +79,7 @@ export function TimedPanel({ t, attempt, checks }: { t: TimedControls; attempt: 
           )
         })}
         {p.notes && <li><button className="link" onClick={() => t.notes(p.notes!)}>Write notes for this phase</button></li>}
+        {p.id === 'estimates' && <li><button className="link" onClick={t.calculator}>Check your numbers with the calculator</button></li>}
       </ul>
     )
   }

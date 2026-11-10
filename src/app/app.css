@@ -661,3 +661,22 @@ h4.by-hand { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; let
 .timed-head { display: flex; align-items: baseline; gap: 10px; margin: 4px 0 8px; }
 .timed-clock { font: 600 28px var(--font); font-variant-numeric: tabular-nums; color: var(--accent-text); }
 .timed-clock.over { color: var(--medium); }
+
+/* ---------- estimate calculator ---------- */
+.estimate-dialog { width: min(860px, calc(100vw - 32px)); }
+.est-given { font-size: 12.5px; color: var(--muted); padding: 8px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); margin: 8px 0; }
+.est-given b { color: var(--text); }
+.est-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.est-grid .seg { margin-top: 6px; }
+.est-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.est-volume { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.est-field { margin: 8px 0 0; font-size: 12px; gap: 4px; }
+.est-field input, .est-field select { width: 100%; padding: 6px 8px; }
+.est-field input[aria-invalid="true"] { border-color: var(--hard); }
+.est-field .muted { font-weight: 400; font-size: 11px; }
+.est-results { width: 100%; border-collapse: collapse; font-size: 13px; }
+.est-results th { text-align: left; font-weight: 500; color: var(--muted); padding: 7px 10px 7px 0; vertical-align: top; width: 38%; border-bottom: 1px solid var(--border); }
+.est-results td { padding: 7px 0; border-bottom: 1px solid var(--border); }
+.est-results td b { display: block; font-variant-numeric: tabular-nums; }
+.est-results td span { display: block; color: var(--faint); font-size: 11.5px; }
+@media (max-width: 700px) { .est-grid { grid-template-columns: 1fr; } }

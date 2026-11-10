@@ -18,8 +18,9 @@ export function Section({ id, title, count, forceOpen, children }: { id: string;
 }
 
 /** The Explore sidebar: the requirements stay in view; designs are chosen from the picker (⌘K). */
-export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onViewJson }: {
+export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onViewJson, onEstimate }: {
   current: Design
+  onEstimate: () => void
   onBrowse: () => void; onImport: () => void; onExport: () => void; onGenerate: () => void; onViewJson: () => void
 }) {
   const r = current.requirements
@@ -31,7 +32,8 @@ export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onV
         {current.meta.summary && <p className="small req-summary">{current.meta.summary}</p>}
         {r.functional.length > 0 && <><h5>Functional</h5><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></>}
         {r.nonFunctional.length > 0 && <><h5>Non-functional</h5><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></>}
-        {r.scale.length > 0 && <><h5>Scale</h5><table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table></>}
+        {r.scale.length > 0 && <><h5>Scale</h5><table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table>
+          <button className="small-btn" onClick={onEstimate} title="Requests per second, storage, bandwidth and cache size, with the arithmetic">Work out the numbers</button></>}
         {!has && <p className="muted small">This design has no requirements listed.</p>}
       </div>
       <div className="panel-foot side-actions">
