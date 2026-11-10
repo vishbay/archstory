@@ -1,0 +1,773 @@
+{
+  "schema": "archstory/v1",
+  "id": "ticket-booking",
+  "meta": {
+    "title": "Ticket Booking",
+    "summary": "Sell seats for big events without double booking anyone, even when millions arrive at once, like Ticketmaster.",
+    "tags": [
+      "contention",
+      "consistency",
+      "payments"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Browse events and see which seats are available",
+      "Hold seats for a few minutes while paying",
+      "Pay and receive tickets",
+      "Release seats when a hold expires"
+    ],
+    "nonFunctional": [
+      "Never sell the same seat twice",
+      "99.95% availability for holding and paying during an on-sale",
+      "Holding a seat takes under 500 ms",
+      "Fair access when demand far exceeds seats"
+    ],
+    "scale": [
+      {
+        "label": "Big on-sale",
+        "value": "~5M fans for 50,000 seats"
+      },
+      {
+        "label": "Admitted",
+        "value": "~2,000 fans/s from the waiting room"
+      },
+      {
+        "label": "Browsing",
+        "value": "~100,000 page views/s at peak, mostly cached"
+      },
+      {
+        "label": "Bookings",
+        "value": "~50M a year"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "fan",
+      "label": "Fan",
+      "kind": "web_client"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Caches event pages and seat maps for a few seconds",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "room",
+      "label": "Waiting Room",
+      "kind": "rate_limiter",
+      "description": "Admits fans in order at a rate the booking service can take",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "catalog",
+      "label": "Event Catalog",
+      "kind": "service",
+      "description": "Events, venues and approximate seat availability",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "booking",
+      "label": "Booking Service",
+      "kind": "service",
+      "description": "Holds seats, takes payment and confirms bookings",
+      "replicas": 3,
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "holds",
+      "label": "Seat Holds",
+      "kind": "cache",
+      "description": "One key per held seat, with a 10-minute expiry",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "db",
+      "label": "Bookings DB",
+      "kind": "sql_db",
+      "description": "Events, seats and bookings; a unique constraint per sold seat",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "tickets_q",
+      "label": "Ticket Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "issuer",
+      "label": "Ticket Issuer",
+      "kind": "worker",
+      "description": "Creates signed barcodes and sends tickets",
+      "cloud": {
+        "aws": "Lambda",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "psp",
+      "label": "Payment Provider",
+      "kind": "payment_provider"
+    },
+    {
+      "id": "email",
+      "label": "Email Provider",
+      "kind": "notification_provider",
+      "cloud": {
+        "aws": "SES"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "fan",
+      "to": "dns"
+    },
+    {
+      "from": "fan",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "catalog"
+    },
+    {
+      "from": "lb",
+      "to": "room"
+    },
+    {
+      "from": "room",
+      "to": "booking"
+    },
+    {
+      "from": "catalog",
+      "to": "db"
+    },
+    {
+      "from": "booking",
+      "to": "holds"
+    },
+    {
+      "from": "booking",
+      "to": "db"
+    },
+    {
+      "from": "booking",
+      "to": "psp"
+    },
+    {
+      "from": "booking",
+      "to": "tickets_q",
+      "async": true
+    },
+    {
+      "from": "issuer",
+      "to": "tickets_q"
+    },
+    {
+      "from": "issuer",
+      "to": "email",
+      "async": true
+    }
+  ],
+  "flows": [
+    {
+      "id": "browse",
+      "title": "Browse an event",
+      "summary": "Reads are cheap and slightly stale; exact availability is checked only when holding.",
+      "steps": [
+        {
+          "from": "fan",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve tickets.example"
+        },
+        {
+          "from": "dns",
+          "to": "fan",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "CDN edge address"
+        },
+        {
+          "from": "fan",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /events/123/seats"
+        },
+        {
+          "from": "cdn",
+          "to": "cdn",
+          "kind": "local",
+          "phase": "Request in",
+          "label": "cached for 5 s?",
+          "detail": "Seat maps are cached for a few seconds. During an on-sale this absorbs almost all browsing, and a few seconds of staleness is fine because the hold re-checks every seat."
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Read catalog",
+          "label": "cache miss: forward"
+        },
+        {
+          "from": "lb",
+          "to": "catalog",
+          "kind": "req",
+          "phase": "Read catalog",
+          "label": "route to catalog"
+        },
+        {
+          "from": "catalog",
+          "to": "db",
+          "kind": "req",
+          "phase": "Read catalog",
+          "label": "seat availability by section",
+          "payload": "SELECT section, count(*) FILTER (WHERE status = 'free')\nFROM seats WHERE event_id = 123 GROUP BY section"
+        },
+        {
+          "from": "db",
+          "to": "catalog",
+          "kind": "res",
+          "phase": "Read catalog",
+          "label": "free seats per section"
+        },
+        {
+          "from": "catalog",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "seat map JSON"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "cache for 5 s"
+        },
+        {
+          "from": "cdn",
+          "to": "fan",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "seat map"
+        }
+      ]
+    },
+    {
+      "id": "hold",
+      "title": "Hold seats during an on-sale",
+      "summary": "The waiting room meters traffic; an atomic hold stops two fans taking the same seat.",
+      "steps": [
+        {
+          "from": "fan",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /holds (A12, A13)"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "room",
+          "kind": "req",
+          "phase": "Waiting room",
+          "label": "check admission token",
+          "detail": "Only fans the waiting room has admitted get through. It lets them in at a rate the booking service can take, in arrival order, instead of letting 5 million requests hit it at once."
+        },
+        {
+          "from": "room",
+          "to": "room",
+          "kind": "local",
+          "phase": "Waiting room",
+          "label": "token valid: admitted"
+        },
+        {
+          "from": "room",
+          "to": "booking",
+          "kind": "req",
+          "phase": "Hold seats",
+          "label": "hold A12, A13 for fan u9"
+        },
+        {
+          "from": "booking",
+          "to": "holds",
+          "kind": "req",
+          "phase": "Hold seats",
+          "label": "SET NX each seat, expire in 10 min",
+          "detail": "Each hold is a set-if-absent with an expiry, so exactly one fan can hold a seat and an abandoned hold frees itself.",
+          "payload": "SET hold:123:A12 u9 NX EX 600\nSET hold:123:A13 u9 NX EX 600"
+        },
+        {
+          "from": "holds",
+          "to": "booking",
+          "kind": "res",
+          "phase": "Hold seats",
+          "label": "OK, OK"
+        },
+        {
+          "from": "booking",
+          "to": "db",
+          "kind": "req",
+          "phase": "Record",
+          "label": "INSERT booking pending",
+          "detail": "The pending booking records what was held and when it expires, so payment and expiry can find it."
+        },
+        {
+          "from": "db",
+          "to": "booking",
+          "kind": "res",
+          "phase": "Record",
+          "label": "booking b1"
+        },
+        {
+          "from": "booking",
+          "to": "room",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "held until 10:42"
+        },
+        {
+          "from": "room",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "booking b1"
+        },
+        {
+          "from": "cdn",
+          "to": "fan",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "pay within 10 minutes"
+        }
+      ]
+    },
+    {
+      "id": "pay",
+      "title": "Pay and get tickets",
+      "summary": "Charge once, confirm only if the hold is still valid, then issue tickets in the background.",
+      "steps": [
+        {
+          "from": "fan",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /bookings/b1/pay"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "room",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "admitted fan"
+        },
+        {
+          "from": "room",
+          "to": "booking",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "pay for b1"
+        },
+        {
+          "from": "booking",
+          "to": "psp",
+          "kind": "req",
+          "phase": "Charge",
+          "label": "charge, key = b1",
+          "detail": "The booking id is the idempotency key, so a retry after a timeout cannot charge the card twice."
+        },
+        {
+          "from": "psp",
+          "to": "booking",
+          "kind": "res",
+          "phase": "Charge",
+          "label": "succeeded"
+        },
+        {
+          "from": "booking",
+          "to": "db",
+          "kind": "req",
+          "phase": "Confirm",
+          "label": "confirm if still pending",
+          "detail": "Confirmation succeeds only while the booking is pending and unexpired. A unique constraint on (event, seat) for sold seats is the final guard against a double sale.",
+          "payload": "UPDATE bookings SET status = 'confirmed'\nWHERE id = 'b1' AND status = 'pending' AND expires_at > now()"
+        },
+        {
+          "from": "db",
+          "to": "booking",
+          "kind": "res",
+          "phase": "Confirm",
+          "label": "1 row: confirmed"
+        },
+        {
+          "from": "booking",
+          "to": "tickets_q",
+          "kind": "async",
+          "phase": "Confirm",
+          "label": "issue tickets for b1"
+        },
+        {
+          "from": "booking",
+          "to": "room",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "booking confirmed"
+        },
+        {
+          "from": "room",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 OK"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "confirmation"
+        },
+        {
+          "from": "cdn",
+          "to": "fan",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "tickets coming by email"
+        },
+        {
+          "from": "issuer",
+          "to": "tickets_q",
+          "kind": "req",
+          "phase": "Issue tickets",
+          "label": "receive"
+        },
+        {
+          "from": "tickets_q",
+          "to": "issuer",
+          "kind": "res",
+          "phase": "Issue tickets",
+          "label": "b1"
+        },
+        {
+          "from": "issuer",
+          "to": "issuer",
+          "kind": "local",
+          "phase": "Issue tickets",
+          "label": "sign barcodes",
+          "detail": "Each ticket gets a signed barcode so the venue can check it offline."
+        },
+        {
+          "from": "issuer",
+          "to": "email",
+          "kind": "async",
+          "phase": "Issue tickets",
+          "label": "send tickets"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "holds",
+      "kind": "tradeoff",
+      "text": "Holding seats in Redis with SET NX and an expiry makes holds atomic and self-cleaning. The database still checks the seat when confirming, so a lost Redis entry cannot cause a double sale."
+    },
+    {
+      "target": "room",
+      "kind": "scaling",
+      "text": "The waiting room turns a spike of millions into a steady flow the booking service can handle, and gives fans a fair, visible place in line."
+    },
+    {
+      "target": "cdn",
+      "kind": "scaling",
+      "text": "Event pages and seat maps are cached for seconds at the CDN. Exact availability is only checked when a fan tries to hold a seat."
+    },
+    {
+      "target": "psp",
+      "kind": "failure",
+      "text": "Charges carry the booking id as an idempotency key, so a retry after a timeout cannot charge twice."
+    },
+    {
+      "target": "db",
+      "kind": "failure",
+      "text": "A unique constraint on (event, seat) for confirmed bookings is the last line of defence against double booking, whatever happens upstream."
+    }
+  ],
+  "network": {
+    "cidr": "10.0.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.0.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.0.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.0.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "booking-availability",
+        "name": "Hold and pay availability",
+        "kind": "availability",
+        "sli": "Hold and pay requests from admitted fans answered without a 5xx, at the load balancer",
+        "target": 99.95,
+        "window": 30
+      },
+      {
+        "id": "hold-latency",
+        "name": "Fast holds",
+        "kind": "latency",
+        "sli": "Hold requests answered within the threshold, measured at the booking service",
+        "target": 99,
+        "threshold": "< 500 ms",
+        "window": 30
+      },
+      {
+        "id": "no-double-sales",
+        "name": "No seat sold twice",
+        "kind": "correctness",
+        "sli": "Seats with more than one confirmed booking, from a continuous audit query",
+        "target": 100,
+        "window": 30
+      }
+    ],
+    "alerts": [
+      {
+        "id": "booking-burn",
+        "severity": "page",
+        "when": "Hold or pay errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "During an on-sale every minute of errors is lost sales and angry fans.",
+        "target": "room",
+        "slo": "booking-availability"
+      },
+      {
+        "id": "hold-slow",
+        "severity": "page",
+        "when": "p99 hold latency above 500 ms for 5 minutes",
+        "why": "Slow holds make fans retry, which multiplies the load at the worst moment.",
+        "target": "booking",
+        "slo": "hold-latency"
+      },
+      {
+        "id": "double-sale",
+        "severity": "page",
+        "when": "The audit finds any seat with two confirmed bookings",
+        "why": "A correctness bug that hurts real people at the venue door; stop sales for that event.",
+        "target": "db",
+        "slo": "no-double-sales"
+      },
+      {
+        "id": "ticket-backlog",
+        "severity": "ticket",
+        "when": "Oldest message in the Ticket Queue older than 10 minutes",
+        "why": "Paid fans are waiting for tickets; usually the issuer or the email provider is failing.",
+        "target": "tickets_q"
+      },
+      {
+        "id": "psp-errors",
+        "severity": "ticket",
+        "when": "Payment provider errors above 2% for 15 minutes",
+        "why": "A cause worth chasing before it becomes an SLO burn.",
+        "target": "psp"
+      }
+    ],
+    "signals": [
+      {
+        "target": "holds",
+        "name": "Active holds",
+        "metric": "active_holds",
+        "why": "Seats currently held; compare with seats left to see how close an event is to selling out."
+      },
+      {
+        "target": "room",
+        "name": "Fans waiting",
+        "metric": "waiting_room_length",
+        "why": "The queue length and admission rate tell fans how long they will wait."
+      },
+      {
+        "target": "booking",
+        "name": "Hold conflicts",
+        "metric": "hold_conflicts_total",
+        "why": "Fans trying to hold seats someone else holds; high during an on-sale, but a spike at quiet times points at stale seat maps."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Fans keep seeing 'seat no longer available'",
+        "steps": [
+          "Check hold conflicts: is it real demand or stale seat maps?",
+          "Check the CDN cache time on seat maps; too long shows taken seats as free.",
+          "Look for expired holds that were never released (Redis memory and key counts).",
+          "Confirm the catalog reads the same seat status the booking service writes."
+        ]
+      },
+      {
+        "symptom": "Payments succeed but no tickets arrive",
+        "steps": [
+          "Check the age of the oldest message in the Ticket Queue.",
+          "Look at Ticket Issuer errors and retries in its logs.",
+          "Check the email provider's bounce and throttling dashboards.",
+          "Find one booking id and follow its trace from confirm to email."
+        ]
+      }
+    ]
+  },
+  "questions": [
+    {
+      "id": "double-booking",
+      "q": "Two fans click the same seat at the same moment. How do you guarantee only one gets it?",
+      "a": "Make the hold an atomic set-if-absent on the seat, so only one request succeeds and the other is told the seat is taken. Confirmation then re-checks that the booking is still pending, and a unique constraint on (event, seat) in the database is the final guard. No read-then-write in two steps anywhere.",
+      "topic": "consistency",
+      "targets": [
+        "holds",
+        "db",
+        "booking"
+      ]
+    },
+    {
+      "id": "waiting-room",
+      "q": "Five million fans arrive for 50,000 seats. What stops the system from falling over?",
+      "a": "A virtual waiting room in front of booking admits fans in arrival order at a rate the booking service and database can sustain, and shows everyone their place in line. Browsing is served from the CDN. Without it, retries from frustrated fans multiply the load and nobody gets through.",
+      "topic": "scale",
+      "targets": [
+        "room",
+        "cdn"
+      ]
+    },
+    {
+      "id": "hold-expiry",
+      "q": "How do abandoned holds get released, and what if the expiry fires while the fan is paying?",
+      "a": "Holds expire on their own after about ten minutes, so abandoned seats return to sale without a cleanup job. Confirmation only succeeds if the booking is still pending and unexpired; if the expiry won, the charge is refunded and the fan is told. Showing a countdown and extending once during payment reduces this.",
+      "topic": "reliability",
+      "targets": [
+        "holds",
+        "booking"
+      ]
+    },
+    {
+      "id": "payment-timeout",
+      "q": "The payment provider times out. Was the fan charged?",
+      "a": "You do not know, so never blindly charge again. Retry with the booking id as the idempotency key, or ask the provider for the payment status, and keep the booking pending meanwhile. A reconciliation job settles anything still unclear.",
+      "topic": "reliability",
+      "targets": [
+        "booking",
+        "psp"
+      ]
+    },
+    {
+      "id": "hot-event",
+      "q": "One event's seat rows become a hot spot in the database. How do you spread the load?",
+      "a": "Keep contention in the hold store, which is in memory and handles per-seat keys well, and write to the database only for pending and confirmed bookings. Partition seats by event and section so one event does not lock a whole table, and keep transactions short.",
+      "topic": "performance",
+      "targets": [
+        "db",
+        "holds"
+      ]
+    },
+    {
+      "id": "bots",
+      "q": "How do you stop bots from buying all the tickets?",
+      "a": "Combine admission control with friction: verified accounts, per-account and per-card limits, challenges for suspicious traffic at the waiting room, and randomising order among fans who arrive before the sale opens. Monitoring purchase patterns lets you cancel obvious bot bookings later.",
+      "topic": "security",
+      "targets": [
+        "room",
+        "booking"
+      ]
+    }
+  ]
+}

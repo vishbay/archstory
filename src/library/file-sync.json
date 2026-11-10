@@ -1,0 +1,748 @@
+{
+  "schema": "archstory/v1",
+  "id": "file-sync",
+  "meta": {
+    "title": "File Storage and Sync",
+    "summary": "Store files in the cloud and keep them in sync across a person's devices, like Dropbox or Google Drive.",
+    "tags": [
+      "storage",
+      "sync",
+      "deduplication"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Upload, download and delete files and folders",
+      "Sync changes to every device signed in to the account",
+      "Keep earlier versions of a file",
+      "Handle edits made offline on two devices"
+    ],
+    "nonFunctional": [
+      "Never lose a committed file (11 nines durability)",
+      "99.9% availability for the sync API",
+      "Changes reach other online devices within 5 seconds",
+      "Upload only what changed, not the whole file"
+    ],
+    "scale": [
+      {
+        "label": "Users",
+        "value": "100M, 20M daily active"
+      },
+      {
+        "label": "Files",
+        "value": "~1,000 per user, 100B in total"
+      },
+      {
+        "label": "Storage",
+        "value": "~500 PB of blocks before deduplication"
+      },
+      {
+        "label": "Commits",
+        "value": "~50,000 file changes/s at peak"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "laptop",
+      "label": "Laptop",
+      "kind": "client",
+      "description": "Desktop app watching a synced folder"
+    },
+    {
+      "id": "phone",
+      "label": "Phone",
+      "kind": "mobile_client",
+      "description": "Another device on the same account"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "notify",
+      "label": "Change Notifier",
+      "kind": "websocket_gateway",
+      "description": "Holds a long-poll from every online device and answers it when something changes",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "api",
+      "label": "Metadata API",
+      "kind": "service",
+      "description": "Files, versions, block lists and sharing; signs upload and download URLs",
+      "replicas": 3,
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "meta_db",
+      "label": "Metadata DB",
+      "kind": "sql_db",
+      "description": "Sharded by account, so one account's changes are ordered on one shard",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "blocks",
+      "label": "Block Storage",
+      "kind": "object_store",
+      "description": "4 MB blocks named by their SHA-256 hash, so identical blocks are stored once",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "changes",
+      "label": "Change Log",
+      "kind": "stream",
+      "description": "Ordered stream of changes per account",
+      "cloud": {
+        "aws": "Kinesis Data Streams",
+        "gcp": "Pub/Sub"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "laptop",
+      "to": "dns"
+    },
+    {
+      "from": "phone",
+      "to": "dns"
+    },
+    {
+      "from": "laptop",
+      "to": "lb"
+    },
+    {
+      "from": "phone",
+      "to": "lb"
+    },
+    {
+      "from": "laptop",
+      "to": "blocks"
+    },
+    {
+      "from": "phone",
+      "to": "blocks"
+    },
+    {
+      "from": "lb",
+      "to": "api"
+    },
+    {
+      "from": "lb",
+      "to": "notify"
+    },
+    {
+      "from": "api",
+      "to": "meta_db"
+    },
+    {
+      "from": "api",
+      "to": "changes",
+      "async": true
+    },
+    {
+      "from": "notify",
+      "to": "changes"
+    }
+  ],
+  "flows": [
+    {
+      "id": "upload",
+      "title": "Upload a changed file",
+      "summary": "Only the blocks that changed travel; the commit is a small metadata write.",
+      "steps": [
+        {
+          "from": "laptop",
+          "to": "laptop",
+          "kind": "local",
+          "phase": "Chunk",
+          "label": "split into 4 MB blocks, hash each",
+          "detail": "The client cuts the file into fixed-size blocks and hashes each one. An edit in the middle of a large file usually changes one or two blocks, so only those need to travel."
+        },
+        {
+          "from": "laptop",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve api.drive.example"
+        },
+        {
+          "from": "dns",
+          "to": "laptop",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "load balancer address"
+        },
+        {
+          "from": "laptop",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Find missing blocks",
+          "label": "POST /commit (block hashes)",
+          "detail": "The client first proposes the new version as a list of block hashes, without sending any file data.",
+          "payload": "POST /commit\n{ \"path\": \"/docs/plan.md\", \"parent\": 7,\n  \"blocks\": [\"a41f…\", \"9be0…\", \"c9e1…\"] }"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Find missing blocks",
+          "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Find missing blocks",
+          "label": "which hashes are stored?",
+          "detail": "The block index says which hashes already exist, for this user or anyone else. Shared content, such as a common installer, is stored once.",
+          "payload": "SELECT hash FROM blocks WHERE hash IN ('a41f…','9be0…','c9e1…')"
+        },
+        {
+          "from": "meta_db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Find missing blocks",
+          "label": "2 of 3 present"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Find missing blocks",
+          "label": "upload c9e1 to signed URL",
+          "detail": "The API signs a short-lived URL for each missing block. Bytes never pass through the API servers."
+        },
+        {
+          "from": "lb",
+          "to": "laptop",
+          "kind": "res",
+          "phase": "Find missing blocks",
+          "label": "missing: [c9e1] + URL"
+        },
+        {
+          "from": "laptop",
+          "to": "blocks",
+          "kind": "req",
+          "phase": "Upload blocks",
+          "label": "PUT block c9e1",
+          "detail": "The client uploads straight to object storage. A large upload is many independent blocks, so a dropped connection only retries one block."
+        },
+        {
+          "from": "blocks",
+          "to": "laptop",
+          "kind": "res",
+          "phase": "Upload blocks",
+          "label": "200 OK"
+        },
+        {
+          "from": "laptop",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Commit",
+          "label": "POST /commit (retry)"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Commit",
+          "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Commit",
+          "label": "INSERT v8 if parent is v7",
+          "detail": "The new version is recorded only if the file is still at the version the client edited. This compare-and-set is what detects conflicting edits.",
+          "payload": "INSERT INTO versions (file_id, version, parent, blocks)\nSELECT 42, 8, 7, '{a41f…,9be0…,c9e1…}'\nWHERE (SELECT head FROM files WHERE id = 42) = 7"
+        },
+        {
+          "from": "meta_db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Commit",
+          "label": "committed v8"
+        },
+        {
+          "from": "api",
+          "to": "changes",
+          "kind": "async",
+          "phase": "Commit",
+          "label": "changed /docs/plan.md v8",
+          "detail": "The change goes on the account's ordered log, which is how every other device finds out."
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 committed v8"
+        },
+        {
+          "from": "lb",
+          "to": "laptop",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "done"
+        }
+      ]
+    },
+    {
+      "id": "sync",
+      "title": "Another device picks up the change",
+      "summary": "A waiting long-poll is answered, then the device fetches only the blocks it lacks.",
+      "steps": [
+        {
+          "from": "phone",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve notify.drive.example"
+        },
+        {
+          "from": "dns",
+          "to": "phone",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "load balancer address"
+        },
+        {
+          "from": "phone",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Wait for changes",
+          "label": "GET /changes?cursor=1041 (held open)",
+          "detail": "The phone keeps one request open and remembers a cursor: the last change it has seen. If the connection drops it reconnects with the same cursor and misses nothing."
+        },
+        {
+          "from": "lb",
+          "to": "notify",
+          "kind": "req",
+          "phase": "Wait for changes",
+          "label": "hold until something changes"
+        },
+        {
+          "from": "notify",
+          "to": "changes",
+          "kind": "req",
+          "phase": "Wait for changes",
+          "label": "read after 1041"
+        },
+        {
+          "from": "changes",
+          "to": "notify",
+          "kind": "res",
+          "phase": "Wait for changes",
+          "label": "1042: /docs/plan.md v8"
+        },
+        {
+          "from": "notify",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Wait for changes",
+          "label": "changes available"
+        },
+        {
+          "from": "lb",
+          "to": "phone",
+          "kind": "res",
+          "phase": "Wait for changes",
+          "label": "cursor 1042"
+        },
+        {
+          "from": "phone",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Fetch the new version",
+          "label": "GET /files/42?version=8"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Fetch the new version",
+          "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Fetch the new version",
+          "label": "block list for v8"
+        },
+        {
+          "from": "meta_db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Fetch the new version",
+          "label": "[a41f, 9be0, c9e1]"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Fetch the new version",
+          "label": "block list + signed URLs"
+        },
+        {
+          "from": "lb",
+          "to": "phone",
+          "kind": "res",
+          "phase": "Fetch the new version",
+          "label": "3 blocks, has 2"
+        },
+        {
+          "from": "phone",
+          "to": "blocks",
+          "kind": "req",
+          "phase": "Download blocks",
+          "label": "GET block c9e1",
+          "detail": "The phone already has two of the blocks from the previous version, so it downloads only the new one."
+        },
+        {
+          "from": "blocks",
+          "to": "phone",
+          "kind": "res",
+          "phase": "Download blocks",
+          "label": "4 MB"
+        },
+        {
+          "from": "phone",
+          "to": "phone",
+          "kind": "local",
+          "phase": "Rebuild",
+          "label": "assemble v8 from blocks",
+          "detail": "The file is rebuilt from blocks it had plus the new one, then swapped into place atomically."
+        }
+      ]
+    },
+    {
+      "id": "conflict",
+      "title": "Conflicting offline edit",
+      "summary": "Two devices edited the same version; nothing is lost and the user decides.",
+      "steps": [
+        {
+          "from": "phone",
+          "to": "phone",
+          "kind": "local",
+          "phase": "Offline edit",
+          "label": "edited v7 while offline",
+          "detail": "The phone edited the file without a connection, starting from version 7. Meanwhile the laptop committed version 8."
+        },
+        {
+          "from": "phone",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Commit attempt",
+          "label": "POST /commit parent=7"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Commit attempt",
+          "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Commit attempt",
+          "label": "INSERT v9 if parent is v7"
+        },
+        {
+          "from": "meta_db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Commit attempt",
+          "label": "rejected: head is v8",
+          "detail": "The compare-and-set fails because the file moved on. Silently overwriting would lose the laptop's work."
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Commit attempt",
+          "label": "409 Conflict"
+        },
+        {
+          "from": "lb",
+          "to": "phone",
+          "kind": "res",
+          "phase": "Commit attempt",
+          "label": "conflict on v8"
+        },
+        {
+          "from": "phone",
+          "to": "phone",
+          "kind": "local",
+          "phase": "Keep both",
+          "label": "save as conflicted copy",
+          "detail": "The client keeps both: version 8 under the original name and its own edit as a conflicted copy, which it uploads as a new file. Text editors could merge instead; a general file store cannot."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "blocks",
+      "kind": "tradeoff",
+      "text": "Content-addressed blocks give deduplication for free: identical blocks across versions and users are stored once. The cost is reference counting or a garbage collector before any block can be deleted."
+    },
+    {
+      "target": "api",
+      "kind": "scaling",
+      "text": "File bytes never pass through the API servers. Signed URLs send uploads and downloads straight to object storage, so the API only handles small metadata requests."
+    },
+    {
+      "target": "meta_db",
+      "kind": "scaling",
+      "text": "Shard metadata by account (or by shared folder) so one account's changes live on one shard and can be ordered by a single sequence."
+    },
+    {
+      "target": "notify",
+      "kind": "failure",
+      "text": "Notifications can be lost without losing changes: a device that missed one simply asks for everything after its saved cursor."
+    },
+    {
+      "target": "blocks",
+      "kind": "security",
+      "text": "Signed URLs expire in minutes and cover one block. Blocks are encrypted at rest and the bucket is never public."
+    }
+  ],
+  "network": {
+    "cidr": "10.0.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.0.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.0.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.0.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "sync-availability",
+        "name": "Sync API availability",
+        "kind": "availability",
+        "sli": "Metadata requests answered without a 5xx, divided by all metadata requests, at the load balancer",
+        "target": 99.9,
+        "window": 30
+      },
+      {
+        "id": "change-propagation",
+        "name": "Changes reach other devices",
+        "kind": "freshness",
+        "sli": "Commits whose notification reaches waiting devices within the threshold, measured from commit to long-poll answer",
+        "target": 99,
+        "threshold": "< 5 s",
+        "window": 30
+      },
+      {
+        "id": "block-durability",
+        "name": "Committed files stay complete",
+        "kind": "durability",
+        "sli": "Committed versions whose blocks are all present in storage, checked by a daily audit sample",
+        "target": 99.999999999,
+        "window": 30
+      }
+    ],
+    "alerts": [
+      {
+        "id": "sync-burn",
+        "severity": "page",
+        "when": "Metadata API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Devices cannot commit or fetch changes right now.",
+        "target": "lb",
+        "slo": "sync-availability"
+      },
+      {
+        "id": "propagation-slow",
+        "severity": "page",
+        "when": "p99 commit-to-notification above 5 s for 15 minutes",
+        "why": "Users see stale files on their other devices and start editing old versions, which creates conflicts.",
+        "target": "notify",
+        "slo": "change-propagation"
+      },
+      {
+        "id": "missing-blocks",
+        "severity": "page",
+        "when": "The audit finds any committed version with a missing block",
+        "why": "Data loss is the one failure users never forgive; stop garbage collection and investigate at once.",
+        "target": "blocks",
+        "slo": "block-durability"
+      },
+      {
+        "id": "changelog-lag",
+        "severity": "ticket",
+        "when": "Change Log consumer lag above 30 s for 10 minutes",
+        "why": "A cause, not yet a symptom: notifications will slow down if it keeps growing.",
+        "target": "changes"
+      },
+      {
+        "id": "conflict-rate",
+        "severity": "ticket",
+        "when": "Commit conflicts above 1% of commits for a day",
+        "why": "Usually a client bug or slow notifications making devices edit stale versions.",
+        "target": "api"
+      }
+    ],
+    "signals": [
+      {
+        "target": "api",
+        "name": "Blocks already stored on commit",
+        "metric": "dedup_hit_ratio",
+        "why": "How much upload traffic deduplication saves; a sudden drop points at a client hashing bug."
+      },
+      {
+        "target": "notify",
+        "name": "Open long-polls",
+        "metric": "open_connections",
+        "why": "Should track online devices; a drop means devices are not reconnecting."
+      },
+      {
+        "target": "meta_db",
+        "name": "Commit conflicts",
+        "metric": "commit_conflicts_total",
+        "why": "Every conflict is a user who has to sort out two copies."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Changes take minutes to reach my other devices",
+        "steps": [
+          "Check the propagation SLO: is it every account or a few?",
+          "Look at Change Log consumer lag; a backlog delays every notification.",
+          "Check open long-polls on the notifier: did devices drop their connections?",
+          "Follow one commit's trace from the API to the notifier answer."
+        ]
+      },
+      {
+        "symptom": "Uploads fail or stall",
+        "steps": [
+          "Split by client version and region to rule out a bad release.",
+          "Check signed URL errors: expired or rejected signatures point at clock skew or key rotation.",
+          "Check object storage error rates and throttling.",
+          "Confirm the commit retry finds the uploaded blocks (dedup hit ratio)."
+        ]
+      }
+    ]
+  },
+  "questions": [
+    {
+      "id": "chunking",
+      "q": "Why split files into blocks instead of uploading whole files?",
+      "a": "Only changed blocks travel, so a small edit to a large file uploads a few megabytes instead of the whole file. Content-addressed blocks are also deduplicated across versions and users. Uploads become many small retryable pieces, which handles flaky networks.",
+      "topic": "performance",
+      "targets": [
+        "laptop",
+        "blocks"
+      ]
+    },
+    {
+      "id": "conflicts",
+      "q": "Two devices edit the same file offline. What happens when both come back online?",
+      "a": "The first commit wins because it matches the parent version; the second fails the compare-and-set. The second device keeps both versions by saving its edit as a conflicted copy, so nothing is lost. Automatic merging only works for formats the system understands, like text or documents.",
+      "topic": "consistency",
+      "targets": [
+        "api",
+        "meta_db"
+      ]
+    },
+    {
+      "id": "notify-scale",
+      "q": "Millions of devices are online. How do they learn about changes without constant polling?",
+      "a": "Each device holds one long-poll or WebSocket open to the notifier, which answers it when the account's change log moves. A device that reconnects asks for everything after its cursor, so a dropped notification is never a lost change. The notifier only says that something changed; the details come from the metadata API.",
+      "topic": "scale",
+      "targets": [
+        "notify",
+        "changes"
+      ]
+    },
+    {
+      "id": "gc",
+      "q": "A user deletes a file. When can its blocks be deleted from storage?",
+      "a": "Only when no version of any file references them, since blocks are shared across versions and users. Keep a reference count or run a mark-and-sweep garbage collector, and delay deletion by days so a bug or an undo cannot cause data loss. Old versions are kept for a retention period first.",
+      "topic": "data",
+      "targets": [
+        "blocks",
+        "meta_db"
+      ]
+    },
+    {
+      "id": "sharding",
+      "q": "How would you shard the metadata database?",
+      "a": "By account or by shared folder namespace, so all changes for one namespace sit on one shard and can be ordered with a single sequence. Shared folders that span accounts are their own namespace. Very large namespaces may need splitting, which is the hard case.",
+      "topic": "scale",
+      "targets": [
+        "meta_db"
+      ]
+    },
+    {
+      "id": "large-upload",
+      "q": "A user uploads a 50 GB video over a weak connection. How do you make that reliable?",
+      "a": "Each 4 MB block is uploaded independently with its own signed URL and retried on its own, so a dropped connection resumes from the last finished block. The commit happens only when all blocks are present, so a half-finished upload is never visible. Upload several blocks in parallel to use the bandwidth.",
+      "topic": "reliability",
+      "targets": [
+        "laptop",
+        "blocks",
+        "api"
+      ]
+    }
+  ]
+}
