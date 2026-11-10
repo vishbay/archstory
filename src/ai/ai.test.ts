@@ -39,13 +39,39 @@ describe('buildRequest', () => {
   })
 })
 
+describe('system prompts and caching', () => {
+  const two = [{ role: 'user' as const, content: 'a' }, { role: 'assistant' as const, content: 'b' }, { role: 'user' as const, content: 'c' }]
+  it('puts the system prompt where each provider expects it', () => {
+    expect(JSON.parse(buildRequest(cfg({ provider: 'anthropic' }), two, 10, { system: 'be brief' }).init.body).system).toBe('be brief')
+    expect(JSON.parse(buildRequest(cfg({ provider: 'openai' }), two, 10, { system: 'be brief' }).init.body).messages[0]).toEqual({ role: 'system', content: 'be brief' })
+    expect(JSON.parse(buildRequest(cfg({ provider: 'gemini' }), two, 10, { system: 'be brief' }).init.body).systemInstruction).toEqual({ parts: [{ text: 'be brief' }] })
+  })
+  it('marks the system prompt and the newest message for caching on Anthropic only', () => {
+    const body = JSON.parse(buildRequest(cfg({ provider: 'anthropic' }), two, 10, { system: 's', cache: true }).init.body)
+    expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' })
+    expect(body.messages[2].content[0]).toMatchObject({ type: 'text', text: 'c', cache_control: { type: 'ephemeral' } })
+    expect(body.messages[0]).toEqual({ role: 'user', content: 'a' })
+    expect(buildRequest(cfg({ provider: 'openai' }), two, 10, { cache: true }).init.body).not.toContain('cache_control')
+  })
+})
+
 describe('parseReply', () => {
+  it('reports tokens used, separating cached input', () => {
+    expect(parseReply('anthropic', { content: [], usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } })?.usage)
+      .toEqual({ input: 10, output: 5, cacheRead: 100, cacheWrite: 20 })
+    expect(parseReply('openai', { choices: [{ message: { content: '' } }], usage: { prompt_tokens: 120, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 100 } } })?.usage)
+      .toEqual({ input: 20, output: 7, cacheRead: 100, cacheWrite: 0 })
+    expect(parseReply('gemini', { candidates: [{ content: { parts: [] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 4, thoughtsTokenCount: 6 } })?.usage)
+      .toEqual({ input: 50, output: 10, cacheRead: 0, cacheWrite: 0 })
+    expect(parseReply('openai', { choices: [{ message: { content: 'x' } }] })?.usage).toBeNull()
+  })
+
   it('reads each provider shape and flags a length cutoff', () => {
-    expect(parseReply('anthropic', { content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }], stop_reason: 'end_turn' })).toEqual({ text: 'ab', truncated: false })
+    expect(parseReply('anthropic', { content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }], stop_reason: 'end_turn' })).toMatchObject({ text: 'ab', truncated: false })
     expect(parseReply('anthropic', { content: [{ type: 'text', text: '{' }], stop_reason: 'max_tokens' })?.truncated).toBe(true)
-    expect(parseReply('openai', { choices: [{ message: { content: 'x' }, finish_reason: 'length' }] })).toEqual({ text: 'x', truncated: true })
+    expect(parseReply('openai', { choices: [{ message: { content: 'x' }, finish_reason: 'length' }] })).toMatchObject({ text: 'x', truncated: true })
     expect(parseReply('custom', { choices: [{ message: { content: 'y' }, finish_reason: 'stop' }] })?.text).toBe('y')
-    expect(parseReply('gemini', { candidates: [{ content: { parts: [{ text: 'g' }] }, finishReason: 'STOP' }] })).toEqual({ text: 'g', truncated: false })
+    expect(parseReply('gemini', { candidates: [{ content: { parts: [{ text: 'g' }] }, finishReason: 'STOP' }] })).toMatchObject({ text: 'g', truncated: false })
   })
   it('returns null for shapes it does not know', () => {
     expect(parseReply('anthropic', { nope: 1 })).toBeNull()

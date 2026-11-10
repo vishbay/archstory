@@ -11,7 +11,12 @@ export interface AiConfig {
   baseUrl: string
   /** Keep the key on this device (localStorage) instead of for this tab only (sessionStorage). */
   remember: boolean
+  /** The user's own price per million tokens, used only to show a cost estimate. Empty when unknown. */
+  prices: { input: string; output: string }
 }
+
+export interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
+export const noUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
 export const PROVIDERS: Record<ProviderId, { label: string; defaultModel: string; keyHint: string; keyUrl?: string; needsKey: boolean }> = {
   anthropic: { label: 'Anthropic (Claude)', defaultModel: 'claude-sonnet-5-5', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys', needsKey: true },
@@ -28,6 +33,7 @@ export const emptyConfig = (): AiConfig => ({
   models: { anthropic: PROVIDERS.anthropic.defaultModel, openai: PROVIDERS.openai.defaultModel, gemini: PROVIDERS.gemini.defaultModel, custom: PROVIDERS.custom.defaultModel },
   baseUrl: DEFAULT_BASE_URL,
   remember: false,
+  prices: { input: '', output: '' },
 })
 
 /** Whether there is enough to send a request: a key (unless the provider does not need one) and a model. */
@@ -50,43 +56,75 @@ export function hostOf(c: AiConfig): string {
 
 export interface HttpRequest { url: string; init: { method: 'POST'; headers: Record<string, string>; body: string } }
 
-export function buildRequest(c: AiConfig, messages: Message[], maxTokens: number): HttpRequest {
+export interface RequestExtras {
+  /** Instructions that frame the whole conversation. */
+  system?: string
+  /** Ask the provider to cache the conversation so far (Anthropic only), which makes a long chat much cheaper. */
+  cache?: boolean
+}
+
+export function buildRequest(c: AiConfig, messages: Message[], maxTokens: number, extras: RequestExtras = {}): HttpRequest {
   const key = c.keys[c.provider].trim(), model = c.models[c.provider].trim()
   const post = (url: string, headers: Record<string, string>, body: unknown): HttpRequest =>
     ({ url, init: { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) } })
 
   if (c.provider === 'anthropic') {
+    const mark = { cache_control: { type: 'ephemeral' } }
+    const last = messages.length - 1
+    const wire = extras.cache
+      ? messages.map((m, i) => (i === last ? { role: m.role, content: [{ type: 'text', text: m.content, ...mark }] } : m))
+      : messages
     return post('https://api.anthropic.com/v1/messages', {
       'x-api-key': key, 'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true',   // required for calls made from a web page
-    }, { model, max_tokens: maxTokens, messages })
+    }, {
+      model, max_tokens: maxTokens, messages: wire,
+      ...(extras.system ? { system: extras.cache ? [{ type: 'text', text: extras.system, ...mark }] : extras.system } : {}),
+    })
   }
   if (c.provider === 'gemini') {
     return post(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key': key }, {
       contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
       generationConfig: { maxOutputTokens: maxTokens },
+      ...(extras.system ? { systemInstruction: { parts: [{ text: extras.system }] } } : {}),
     })
   }
   const base = c.provider === 'openai' ? 'https://api.openai.com/v1' : c.baseUrl.trim().replace(/\/+$/, '')
-  return post(`${base}/chat/completions`, key ? { authorization: `Bearer ${key}` } : {}, { model, messages })
+  return post(`${base}/chat/completions`, key ? { authorization: `Bearer ${key}` } : {},
+    { model, messages: extras.system ? [{ role: 'system', content: extras.system }, ...messages] : messages })
 }
 
-/** The reply text, and whether the provider stopped because it hit the length limit (the JSON would be cut off). */
-export function parseReply(provider: ProviderId, json: unknown): { text: string; truncated: boolean } | null {
+export interface Reply { text: string; truncated: boolean; usage: Usage | null }
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/** The reply text, whether the provider stopped because it hit the length limit (the answer would be cut off), and tokens used. */
+export function parseReply(provider: ProviderId, json: unknown): Reply | null {
   const j = json as Record<string, any> | null
   if (!j || typeof j !== 'object') return null
   if (provider === 'anthropic') {
     if (!Array.isArray(j.content)) return null
-    return { text: j.content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join(''), truncated: j.stop_reason === 'max_tokens' }
+    const u = j.usage
+    return {
+      text: j.content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join(''), truncated: j.stop_reason === 'max_tokens',
+      usage: u ? { input: num(u.input_tokens), output: num(u.output_tokens), cacheRead: num(u.cache_read_input_tokens), cacheWrite: num(u.cache_creation_input_tokens) } : null,
+    }
   }
   if (provider === 'gemini') {
     const cand = j.candidates?.[0]
     if (!cand) return null
-    return { text: (cand.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''), truncated: cand.finishReason === 'MAX_TOKENS' }
+    const u = j.usageMetadata
+    return {
+      text: (cand.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''), truncated: cand.finishReason === 'MAX_TOKENS',
+      usage: u ? { input: Math.max(0, num(u.promptTokenCount) - num(u.cachedContentTokenCount)), output: num(u.candidatesTokenCount) + num(u.thoughtsTokenCount), cacheRead: num(u.cachedContentTokenCount), cacheWrite: 0 } : null,
+    }
   }
   const choice = j.choices?.[0]
   if (!choice) return null
-  return { text: choice.message?.content ?? '', truncated: choice.finish_reason === 'length' }
+  const u = j.usage, cached = num(u?.prompt_tokens_details?.cached_tokens)
+  return {
+    text: choice.message?.content ?? '', truncated: choice.finish_reason === 'length',
+    usage: u ? { input: Math.max(0, num(u.prompt_tokens) - cached), output: num(u.completion_tokens), cacheRead: cached, cacheWrite: 0 } : null,
+  }
 }
 
 export class AiError extends Error {
@@ -118,11 +156,11 @@ export function describeNetworkError(c: AiConfig): AiError {
   return new AiError(`Could not reach ${host}.${hint}`, 'network')
 }
 
-export interface SendOptions { maxTokens?: number; signal?: AbortSignal; timeoutMs?: number; fetchImpl?: typeof fetch }
+export interface SendOptions extends RequestExtras { maxTokens?: number; signal?: AbortSignal; timeoutMs?: number; fetchImpl?: typeof fetch }
 
 /** Send a conversation and return the reply text. Throws AiError with a message that is safe to show. */
-export async function sendChat(c: AiConfig, messages: Message[], opts: SendOptions = {}): Promise<{ text: string; truncated: boolean }> {
-  const { url, init } = buildRequest(c, messages, opts.maxTokens ?? 8000)
+export async function sendChat(c: AiConfig, messages: Message[], opts: SendOptions = {}): Promise<Reply> {
+  const { url, init } = buildRequest(c, messages, opts.maxTokens ?? 8000, { system: opts.system, cache: opts.cache })
   const ctl = new AbortController()
   const onAbort = () => ctl.abort()
   opts.signal?.addEventListener('abort', onAbort)

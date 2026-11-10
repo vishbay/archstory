@@ -19,6 +19,7 @@ export function normalise(raw: unknown): AiConfig {
   }
   out.baseUrl = str(r.baseUrl, base.baseUrl)
   out.remember = r.remember === true
+  out.prices = { input: str(r.prices?.input, ''), output: str(r.prices?.output, '') }
   return out
 }
 
