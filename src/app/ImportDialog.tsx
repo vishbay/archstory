@@ -1,11 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
-import { copyText } from './share'
+import { copyText, fixRequest } from './share'
 import { checkImport } from './importCheck'
 import { STARTER_DESIGN } from './starterDesign'
 
-export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImport: (d: Design) => void }) {
-  const [text, setText] = useState('')
+export function ImportDialog({ onClose, onImport, initialText = '' }: { onClose: () => void; onImport: (d: Design) => void; initialText?: string }) {
+  const [text, setText] = useState(initialText)
   const [fixCopied, setFixCopied] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
@@ -15,7 +15,7 @@ export function ImportDialog({ onClose, onImport }: { onClose: () => void; onImp
   const check = useMemo(() => checkImport(deferred), [deferred])
   const ready = check.status === 'valid' && deferred === text
   const errors = check.status === 'invalid' ? check.errors : []
-  const fixPrompt = () => `The design JSON you returned was rejected by the validator with these problems:\n${errors.map(e => `- ${e}`).join('\n')}\n\nFix them and return the complete corrected JSON in a single \`\`\`json code block, with no other text.`
+  const fixPrompt = () => fixRequest('design', errors)
 
   const useExample = () => {
     if (text.trim() && !confirm('Replace what you pasted with the example?')) return

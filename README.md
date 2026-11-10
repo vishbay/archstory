@@ -15,8 +15,8 @@ Explore real architectures and watch each request travel through them hop by hop
 - **Network and zones**: VPCs, subnets and availability-zone failure drills.
 - **Monitoring**: SLOs with error budgets, alerts (page or ticket), what to watch on each component and how to debug it, plus a telemetry layer you can switch on.
 - **Practice**: draw your own design, record its flows and get automatic checks against a reference.
-- **Review with your own AI**: ArchStory writes the prompt, you paste it into any assistant, and its findings appear on your design.
-- **Bring your own**: import JSON, build designs with your own AI, share by link. No built-in AI, no backend, no account.
+- **Review with your own AI**: ArchStory writes the prompt and its findings appear on your design. Paste it into any assistant, or optionally connect your own API key (Anthropic, OpenAI, Gemini, or a local server such as Ollama) to send it from the app.
+- **Bring your own**: import JSON, build designs with your own AI, share by link. No AI or server of its own, no account. An API key stays in your browser and goes only to the provider you pick.
 
 ## Quick start
 

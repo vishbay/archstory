@@ -6,6 +6,7 @@ import { layoutBands, NODE_H, NODE_W } from '../layout/bands'
 import { runChecks } from '../practice/checks'
 import { percent, practised, progressOf, type Progress } from '../practice/progress'
 import { storeKv } from './hooks'
+import { openAiSettings } from './useAiConfig'
 
 /** A miniature of the tier-band canvas: bands, connections and coloured component blocks. */
 function MiniMap({ design }: { design: Design }) {
@@ -127,7 +128,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
       )}
 
       <section className="home-foot">
-        <p>Bring your own design: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>.</p>
+        <p>Bring your own design: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>. Optional: <button className="link" onClick={openAiSettings}>connect your own API key</button> to send reviews and prompts from here.</p>
         <p className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</p>
       </section>
     </div>

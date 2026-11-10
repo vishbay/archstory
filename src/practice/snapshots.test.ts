@@ -62,6 +62,12 @@ describe('practice backup', () => {
     expect((fresh.get(attemptKey(ref.id)) as { nodes: unknown[] }).nodes).toHaveLength(2)
   })
 
+  it('never includes the AI key in a backup', () => {
+    const { kv } = seed()
+    kv.set('archstory.ai', { provider: 'anthropic', keys: { anthropic: 'sk-ant-secret-1234567890' } })
+    expect(JSON.stringify(collectBackup(ids, kv, at(5)))).not.toContain('sk-ant-secret')
+  })
+
   it('omits problems with no work', () => {
     expect(Object.keys(collectBackup(ids, memory(), at(1)).attempts)).toEqual([])
   })

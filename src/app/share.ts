@@ -34,6 +34,11 @@ export function extractJson(text: string): string {
   return start >= 0 && end > start ? body.slice(start, end + 1) : body.trim()
 }
 
+/** What to say back to an AI whose JSON the validator rejected. */
+export function fixRequest(what: 'design' | 'review', errors: string[]): string {
+  return `The ${what} JSON you returned was rejected by the validator with these problems:\n${errors.map(e => `- ${e}`).join('\n')}\n\nFix them and return the complete corrected JSON in a single \`\`\`json code block, with no other text.`
+}
+
 export async function copyText(text: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); return true } catch { return false }
 }

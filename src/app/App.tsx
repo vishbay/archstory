@@ -15,6 +15,8 @@ import { Inspector, type InspectorTab } from './Inspector'
 import { Sidebar } from './Sidebar'
 import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
+import { AiSettings } from './AiSettings'
+import { onOpenAiSettings } from './useAiConfig'
 import { JsonDialog } from './JsonDialog'
 import { DesignPicker } from './DesignPicker'
 import { copyText, readSharedDesign, shareUrl } from './share'
@@ -77,6 +79,9 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(() => store.get('archstory.left', window.innerWidth > COMPACT_BELOW))
   const [rightOpen, setRightOpen] = useState(() => store.get('archstory.right', true))
   const [importing, setImporting] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [aiOpen, setAiOpen] = useState(false)
+  useEffect(() => onOpenAiSettings(() => setAiOpen(true)), [])
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
   const viewport = useViewportWidth()
   const insets = panelInsets(viewport, leftOpen, rightOpen)
@@ -201,7 +206,7 @@ export function App() {
           <Home library={LIBRARY} mine={mine}
             onExplore={id => { open(id); setMode('explore') }}
             onPractice={id => { setProblemId(id); setMode('practice') }}
-            onImport={() => setImporting(true)} onGenerate={() => setGenerating(true)}
+            onImport={() => { setImportText(''); setImporting(true) }} onGenerate={() => setGenerating(true)}
             onTour={() => { store.set('archstory.tour.explore', false); open(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setLeftOpen(true); setRightOpen(true); setMode('explore'); setTour('explore') }} />
         </main>
       ) : mode === 'practice' ? (
@@ -254,12 +259,14 @@ export function App() {
       </>)}
 
       {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
-      {importing && <ImportDialog onClose={() => setImporting(false)} onImport={importDesign} />}
+      {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
+      {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
       {picking && <DesignPicker library={LIBRARY} mine={mode === 'practice' ? [] : mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
         onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}
         onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }} />}
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
-        onClose={() => setGenerating(false)} onPasteAnswer={() => { setGenerating(false); setImporting(true) }} />}
+        onClose={() => setGenerating(false)} onPasteAnswer={reply => { setGenerating(false); setImportText(reply ?? ''); setImporting(true) }}
+        onGenerated={d => { setGenerating(false); importDesign(d) }} />}
       {toast && <div className="toast" role="status">{toast}</div>}
       {tour && <Tour key={tour} steps={tour === 'explore' ? EXPLORE_TOUR : PRACTICE_TOUR} onDone={endTour} />}
     </div>

@@ -623,3 +623,13 @@ select.scenario-pick:hover { border-bottom-style: solid; }
 .lib-head .lib-progress { margin-right: auto; }
 .lib-note { margin: -4px 0 16px; font-size: 13px; max-width: 70ch; }
 .attempt-list { max-height: 240px; overflow-y: auto; }
+
+/* ---------- bring your own AI key ---------- */
+.ai-dialog { width: min(560px, calc(100vw - 32px)); }
+.ai-dialog .field input, .ai-dialog .field select { width: 100%; }
+.ai-privacy { padding: 10px 12px; margin: 10px 0; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+.ai-test.ok { color: var(--easy); } .ai-test.fail { color: var(--hard); } .ai-test.running { color: var(--muted); }
+.ai-send { display: grid; gap: 4px; margin: 6px 0 10px; }
+.ai-send p { margin: 0; }
+.ai-note { margin: 8px 0; }
+h4.by-hand { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
