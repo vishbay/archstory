@@ -6,7 +6,7 @@ Explore real architectures and watch each request travel through them hop by hop
 
 **[Try the live demo →](https://vishbay.github.io/archstory/)**
 
-![A request moving through the URL shortener design in AWS view](docs/screenshot.png)
+![A redirect in the URL shortener design: the response travels back from the read replica, with the step explained in the Flow panel](docs/screenshot.png)
 
 ## Features
 

@@ -24,6 +24,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # stop the deploy if a shipped (non-dev) dependency has a known high or critical vulnerability
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm test
       # prebuild downloads the official AWS / Google Cloud icons (see THIRD_PARTY_NOTICES.md)
       - run: npm run build

@@ -90,7 +90,7 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
       <div className="ai-privacy small">
         <b>What gets sent:</b> the prompt, which includes your design or answer, goes to <b>{hostOf(draft)}</b> and nowhere else.
         The key stays in this browser, and is never put in exports or backups. Anyone who can use this browser profile can read a remembered key,
-        so skip "remember" on a shared computer.
+        so skip "remember" on a shared computer. Safest: make a key just for ArchStory, give it a low spending limit, and delete it when you stop using the app.
       </div>
 
       {test.state !== 'idle' && (
