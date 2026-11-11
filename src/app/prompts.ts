@@ -44,7 +44,8 @@ Rules the schema cannot express (the tool rejects designs that break them):
 10. Set "meta.difficulty" to "easy", "medium" or "hard". Fill in requirements (functional, nonFunctional, and scale with real numbers) and 4 to 6 notes of kinds tradeoff, scaling, failure or security.
 11. Include an "observability" section: 2 to 4 SLOs taken from the requirements (target is a percent, e.g. 99.9), 4 to 6 alerts (use severity "page" for symptoms users feel such as SLO burn, "ticket" for causes), signals specific to this design on the component ids, and 1 or 2 "debug" paths. Alerts and signals must reference real node ids and SLO ids. Do NOT add telemetry components (metrics store, log store, collector) as nodes: standard signals per component type are built in.
 12. Add 4 to 6 "questions": follow-ups an interviewer would ask about this design (failures, scale, consistency, trade-offs), each with a model answer of 2 to 4 sentences and "targets" listing the component ids it is about.
-13. Do not use em dashes anywhere in the text.
+13. Include a "regions" section only when the task asks for multi-region, disaster recovery or global users: the regions with their roles, the DR strategy, RTO, RPO and how traffic fails over. Then set "regions" on nodes and "replication" on data stores only where the defaults are wrong.
+14. Do not use em dashes anywhere in the text.
 
 JSON Schema:
 ${schema}

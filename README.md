@@ -13,6 +13,7 @@ Explore real architectures and watch each request travel through them hop by hop
 - **Explore** 16 built-in designs with step-by-step request flows: URL shortener, news feed, ride hailing, chat, video streaming, checkout, ticket booking, file storage and sync, multi-tenant SaaS, autocomplete, rate limiter, notifications, web crawler, distributed key-value store, payment ledger and job scheduler.
 - **Any cloud**: switch between cloud-neutral names, AWS and GCP, with official icons.
 - **Network and zones**: VPCs, subnets and availability-zone failure drills.
+- **Regions and disaster recovery**: for designs with a `regions` section, a Regions view and a region failure drill with RTO, RPO, cross-region replication and the gaps in the plan.
 - **Monitoring**: SLOs with error budgets, alerts (page or ticket), what to watch on each component and how to debug it, plus a telemetry layer you can switch on.
 - **Practice**: draw your own design (type `/` to add components, start from a skeleton), record its flows and get automatic checks against a reference. Save attempts and track your progress.
 - **Timed interviews**: the usual phases on a 30, 45 or 60 minute clock, with a checklist for each.
@@ -70,6 +71,32 @@ The built-in designs are a starting set. You can add any other question, in the 
 **In the app** (nothing to install): use Import in the left panel or on the home page, or Prompt for your AI to have an assistant write one. Imported designs are saved in your browser under My designs, and you can practise them exactly like the library.
 
 **In the repo**, to contribute one to the library: Designs are JSON files in the [`archstory/v1`](public/schema/archstory-v1.json) format: components, connections and request flows. Layout is automatic. Add a file to `src/library/` and run `npm test` to validate it.
+
+### Multi-region designs
+
+Add a top-level `regions` section only when the question is about more than one region (disaster recovery, global users). It lists the regions and how the design survives losing one:
+
+- `regions`: two or more `{ id, name, role }`. `role` is `primary` or `secondary` for `backup-restore`, `pilot-light` and `warm-standby`; every region is `active` for `active-active`.
+- `strategy`: `backup-restore` (hours to recover), `pilot-light` (tens of minutes), `warm-standby` (minutes) or `active-active` (near zero).
+- `rto` and `rpo`: the targets as text, for example `"15 min"` and `"1 min"`.
+- `failover`: how traffic moves, for example `"DNS failover on health checks"`. `dnsTtl` (seconds, optional) is checked against the RTO.
+
+Two optional fields on components say where they run. `regions` is `all` (a copy in every region, run as the strategy says), `primary` (only in the primary region) or `global` (DNS, CDN, a global load balancer or a globally replicated store); edge components (DNS, CDN, WAF) default to `global`, everything else to `all`, and clients and third parties always sit outside the regions. `replication` on a data store is `sync` (nothing lost, every write waits for a cross-region round trip), `async` (loses the replication lag), `backup` (loses everything since the last backup) or `none`; it defaults to `backup` for backup and restore, `none` for caches and `async` otherwise.
+
+```json
+"regions": {
+  "regions": [
+    { "id": "use1", "name": "us-east-1", "role": "primary" },
+    { "id": "usw2", "name": "us-west-2", "role": "secondary" }
+  ],
+  "strategy": "warm-standby", "rto": "15 min", "rpo": "1 min",
+  "failover": "DNS failover on health checks", "dnsTtl": 60
+},
+"nodes": [
+  { "id": "db", "label": "Orders DB", "kind": "sql_db", "replication": "async" },
+  { "id": "fraud", "label": "Fraud Check", "kind": "service", "regions": "primary" }
+]
+```
 
 ## License
 

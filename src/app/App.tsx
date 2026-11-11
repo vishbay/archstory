@@ -7,8 +7,10 @@ import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
 import { COMPACT_BELOW, panelInsets, store, usePlayer, useTheme, useViewportWidth } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
-import { AvailabilityMenu, ExportImageButton, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
+import { AvailabilityMenu, ExportImageButton, RegionsMenu, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
+import { layoutRegions } from '../layout/regions'
+import { homeRegion } from '../model/regions'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
@@ -61,7 +63,9 @@ export function App() {
   const [network, setNetwork] = useState(() => params.get('net') === '1')
   const [zonesView, setZonesView] = useState(() => params.get('zones') === '1')
   const [monitoring, setMonitoring] = useState(() => params.get('mon') === '1')
+  const [regionsView, setRegionsView] = useState(() => params.get('regions') === '1')
   const [failed, setFailed] = useState<number | null>(null)
+  const [failedRegion, setFailedRegion] = useState<number | null>(null)
   const [home, setHome] = useState(1)
   const [cloud, setCloud] = useState<Cloud>(() => store.get('archstory.cloud', 'neutral'))
   const [selected, setSelected] = useState<string | null>(null)
@@ -85,7 +89,14 @@ export function App() {
   const homeZone = Math.min(home, zoneCount - 1)
   const zl = useMemo(() => (net && zoneCount > 1 ? layoutZones(design, failedZone) : null), [design, net, zoneCount, failedZone])
   const hops = useMemo(() => (zl && flow ? resolveFlow(zl, flow, homeZone, failedZone) : null), [zl, flow, homeZone, failedZone])
-  const zone: ZoneState = { failed: failedZone, home: homeZone, zl, hops }
+  const zoneState: ZoneState = { failed: failedZone, home: homeZone, zl, hops }
+  // The regions view reuses the zones machinery with one column group per region.
+  const regionCount = design.regions?.regions.length ?? 0
+  const regionDown = failedRegion !== null && failedRegion < regionCount ? failedRegion : null
+  const regionsOn = regionsView && regionCount > 0
+  const rl = useMemo(() => (regionsOn ? layoutRegions(design, regionDown) : null), [design, regionsOn, regionDown])
+  const rhops = useMemo(() => (rl && flow ? resolveFlow(rl, flow, homeRegion(design), regionDown) : null), [rl, flow, design, regionDown])
+  const zone: ZoneState = rl ? { failed: regionDown, home: homeRegion(design), zl: rl, hops: rhops } : zoneState
 
   useEffect(() => {
     const u = new URL(location.href)
@@ -102,9 +113,10 @@ export function App() {
     u.searchParams.set('view', view)
     if (network) u.searchParams.set('net', '1'); else u.searchParams.delete('net')
     if (zonesView) u.searchParams.set('zones', '1'); else u.searchParams.delete('zones')
+    if (regionsView) u.searchParams.set('regions', '1'); else u.searchParams.delete('regions')
     if (monitoring) u.searchParams.set('mon', '1'); else u.searchParams.delete('mon')
     history.replaceState(null, '', u)
-  }, [design.id, flow, view, network, zonesView, monitoring, mode, problemId])
+  }, [design.id, flow, view, network, zonesView, regionsView, monitoring, mode, problemId])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && mode !== 'home') { e.preventDefault(); setPicking(true) }
@@ -201,8 +213,13 @@ export function App() {
               onClick={() => { setMonitoring(v => !v); if (!monitoring) { setTab('monitoring'); setRightOpen(true) } }}
               title={design.observability ? 'Show where telemetry comes from, SLOs, alerts and what to watch' : 'This design has no monitoring section'}>Monitoring</Toggle>
             {net && zoneCount > 1 && (
-              <AvailabilityMenu zoneCount={zoneCount} cloud={cloud} zonesView={zonesView} onZonesView={setZonesView}
+              <AvailabilityMenu zoneCount={zoneCount} cloud={cloud} zonesView={zonesView && !regionsOn} onZonesView={v => { setZonesView(v); if (v) setRegionsView(false) }}
                 failed={failedZone} onFailed={setFailed} home={homeZone} onHome={setHome} />
+            )}
+            {design.regions && (
+              <RegionsMenu names={design.regions.regions.map(r => r.name)} regionsView={regionsOn}
+                onRegionsView={v => { setRegionsView(v); if (v) { setZonesView(false); setTab('regions'); setRightOpen(true) } }}
+                failed={regionDown} onFailed={r => { setFailedRegion(r); if (r !== null) { setTab('regions'); setRightOpen(true) } }} />
             )}
           </>}
           <ToolbarSpacer />
@@ -212,7 +229,7 @@ export function App() {
           {view === 'timeline' && flow
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
-                  zonesView={zonesView} zone={zone} insets={insets} captionDetail={!rightOpen || viewport <= 900}
+                  zonesView={zonesView} zone={zone} regionFailed={regionDown} insets={insets} captionDetail={!rightOpen || viewport <= 900}
                   onSelect={select} colorMode={theme.resolved} />}
         </div>
         <PlayerBar flows={design.flows} flow={flow} onFlow={setFlowId} player={player} />
@@ -221,7 +238,7 @@ export function App() {
 
       {rightOpen && (
         <aside className="right">
-          <Inspector design={design} flow={flow} player={player} cloud={cloud} network={net} monitoring={monitoring} zone={zonesView ? zone : { ...zone, hops: null }} selected={selected}
+          <Inspector design={design} flow={flow} player={player} cloud={cloud} network={net} monitoring={monitoring} zone={zonesView || rl ? zone : { ...zone, hops: null }} regionFailed={regionDown} selected={selected}
             tab={tab} onTab={setTab} onFlow={setFlowId} onSelect={select} />
         </aside>
       )}

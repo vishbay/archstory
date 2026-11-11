@@ -35,13 +35,8 @@ export function Toggle({ on, onClick, disabled, title, children }: { on: boolean
   )
 }
 
-/** Zone layout, zone failure and entry zone, folded into one small menu so the toolbar stays one row. */
-export function AvailabilityMenu({ zoneCount, cloud, zonesView, onZonesView, failed, onFailed, home, onHome }: {
-  zoneCount: number; cloud: Cloud
-  zonesView: boolean; onZonesView: (v: boolean) => void
-  failed: number | null; onFailed: (z: number | null) => void
-  home: number; onHome: (z: number) => void
-}) {
+/** A toolbar button that opens a small panel; closes on Escape or a click outside. */
+function TbMenu({ label, on, alert, title, dialog, children }: { label: string; on: boolean; alert: boolean; title: string; dialog: string; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -52,30 +47,11 @@ export function AvailabilityMenu({ zoneCount, cloud, zonesView, onZonesView, fai
     document.addEventListener('mousedown', close); document.addEventListener('keydown', close)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
   }, [open])
-  const zones = Array.from({ length: zoneCount }, (_, i) => i)
-  const summary = [zonesView ? 'Zones view' : 'Zones', failed !== null && `${zoneName(failed, cloud)} down`].filter(Boolean).join(' · ')
-
   return (
     <div className="tb-menu" ref={box}>
-      <button className={`tb-toggle${zonesView || failed !== null ? ' on' : ''}${failed !== null ? ' alert' : ''}`} aria-expanded={open}
-        aria-haspopup="dialog" onClick={() => setOpen(o => !o)} title="Availability zones: layout, failure, entry zone">{summary} ▾</button>
-      {open && (
-        <div className="tb-panel" role="dialog" aria-label="Availability zones">
-          <span className="tb-label">Layout</span>
-          <Seg label="Layout" value={zonesView ? 'zones' : 'tiers'} onChange={k => onZonesView(k === 'zones')}
-            options={[{ key: 'tiers', label: 'Tiers', title: 'One box per component' }, { key: 'zones', label: 'Zones', title: 'One column per availability zone' }]} />
-          <span className="tb-label">Fail a zone</span>
-          <Seg label="Fail a zone" value={failed === null ? 'none' : String(failed)} onChange={k => onFailed(k === 'none' ? null : Number(k))}
-            options={[{ key: 'none', label: 'Nothing' }, ...zones.map(z => ({ key: String(z), label: zoneName(z, cloud) }))]} />
-          {zonesView && (
-            <>
-              <span className="tb-label">Request enters</span>
-              <Seg label="Request enters" value={String(home)} onChange={k => onHome(Number(k))}
-                options={zones.map(z => ({ key: String(z), label: zoneName(z, cloud) }))} />
-            </>
-          )}
-        </div>
-      )}
+      <button className={`tb-toggle${on || alert ? ' on' : ''}${alert ? ' alert' : ''}`} aria-expanded={open}
+        aria-haspopup="dialog" onClick={() => setOpen(o => !o)} title={title}>{label} ▾</button>
+      {open && <div className="tb-panel" role="dialog" aria-label={dialog}>{children}</div>}
     </div>
   )
 }
@@ -91,4 +67,51 @@ export function ExportImageButton({ title, disabled }: { title: string; disabled
     setBusy(false)
   }
   return <button className="tb-btn" disabled={disabled || busy} title="Save the canvas as a PNG to paste into notes or docs" onClick={run}>Export image</button>
+}
+
+/** Zone layout, zone failure and entry zone, folded into one small menu so the toolbar stays one row. */
+export function AvailabilityMenu({ zoneCount, cloud, zonesView, onZonesView, failed, onFailed, home, onHome }: {
+  zoneCount: number; cloud: Cloud
+  zonesView: boolean; onZonesView: (v: boolean) => void
+  failed: number | null; onFailed: (z: number | null) => void
+  home: number; onHome: (z: number) => void
+}) {
+  const zones = Array.from({ length: zoneCount }, (_, i) => i)
+  const summary = [zonesView ? 'Zones view' : 'Zones', failed !== null && `${zoneName(failed, cloud)} down`].filter(Boolean).join(' · ')
+  return (
+    <TbMenu label={summary} on={zonesView} alert={failed !== null} title="Availability zones: layout, failure, entry zone" dialog="Availability zones">
+      <span className="tb-label">Layout</span>
+      <Seg label="Layout" value={zonesView ? 'zones' : 'tiers'} onChange={k => onZonesView(k === 'zones')}
+        options={[{ key: 'tiers', label: 'Tiers', title: 'One box per component' }, { key: 'zones', label: 'Zones', title: 'One column per availability zone' }]} />
+      <span className="tb-label">Fail a zone</span>
+      <Seg label="Fail a zone" value={failed === null ? 'none' : String(failed)} onChange={k => onFailed(k === 'none' ? null : Number(k))}
+        options={[{ key: 'none', label: 'Nothing' }, ...zones.map(z => ({ key: String(z), label: zoneName(z, cloud) }))]} />
+      {zonesView && (
+        <>
+          <span className="tb-label">Request enters</span>
+          <Seg label="Request enters" value={String(home)} onChange={k => onHome(Number(k))}
+            options={zones.map(z => ({ key: String(z), label: zoneName(z, cloud) }))} />
+        </>
+      )}
+    </TbMenu>
+  )
+}
+
+/** Regions layout and region failure, for designs with a regions section. */
+export function RegionsMenu({ names, regionsView, onRegionsView, failed, onFailed }: {
+  names: string[]
+  regionsView: boolean; onRegionsView: (v: boolean) => void
+  failed: number | null; onFailed: (r: number | null) => void
+}) {
+  const summary = [regionsView ? 'Regions view' : 'Regions', failed !== null && `${names[failed]} down`].filter(Boolean).join(' · ')
+  return (
+    <TbMenu label={summary} on={regionsView} alert={failed !== null} title="Regions: layout and region failure" dialog="Regions">
+      <span className="tb-label">Layout</span>
+      <Seg label="Layout" value={regionsView ? 'regions' : 'tiers'} onChange={k => onRegionsView(k === 'regions')}
+        options={[{ key: 'tiers', label: 'Tiers', title: 'One box per component' }, { key: 'regions', label: 'Regions', title: 'One box per region, global services outside' }]} />
+      <span className="tb-label">Fail a region</span>
+      <Seg label="Fail a region" value={failed === null ? 'none' : String(failed)} onChange={k => onFailed(k === 'none' ? null : Number(k))}
+        options={[{ key: 'none', label: 'Nothing' }, ...names.map((n, i) => ({ key: String(i), label: n }))]} />
+    </TbMenu>
+  )
 }

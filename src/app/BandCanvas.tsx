@@ -7,6 +7,7 @@ import { edgeId, findEdge, type Design, type DNode, type Flow, type StepKind, ty
 import { kindInfo, nameOf, TIER_INFO, type Cloud } from '../model/kinds'
 import { subnetLabel, vpcLabel } from '../model/network'
 import { impactOf, zoneBadge, zoneName, type Level } from '../model/availability'
+import { regionImpactOf } from '../model/regions'
 import { layoutBands, NODE_H, NODE_W, OBS_NODE_W, type Layout, type Side } from '../layout/bands'
 import { midpoint, roundedPolyline, routeEdges, type Pt, type Rect } from '../layout/route'
 import { ZNODE_W, type Hop, type ZoneLayout } from '../layout/zones'
@@ -19,7 +20,7 @@ import { KIND_TEXT } from './stepKinds'
 
 type State = 'active' | 'visited' | 'flow' | 'off'
 
-/** Availability settings shared by the canvas and the inspector. */
+/** Availability settings shared by the canvas and the inspector. With a region layout (zl.unit 'region') the columns are regions. */
 export interface ZoneState { failed: number | null; home: number; zl: ZoneLayout | null; hops: Hop[] | null }
 
 // ---------- background nodes ----------
@@ -184,10 +185,12 @@ export interface EditProps {
   mode?: 'record' | 'connect' | null
 }
 
-export function BandCanvas({ id, design, flow, player, cloud, network, monitoring = false, zonesView, zone, selected, onSelect, colorMode, edit, gaps, insets = { left: 12, right: 12 }, captionDetail = true }: {
+export function BandCanvas({ id, design, flow, player, cloud, network, monitoring = false, zonesView, zone, regionFailed = null, selected, onSelect, colorMode, edit, gaps, insets = { left: 12, right: 12 }, captionDetail = true }: {
   /** Needed when two canvases share the page, so their SVG ids do not clash. */
   id?: string
   design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zonesView: boolean; zone: ZoneState
+  /** A failed region, tagged on the tier view (the regions view gets it through `zone`). */
+  regionFailed?: number | null
   selected: string | null; onSelect: (id: string | null) => void; colorMode: 'light' | 'dark'; edit?: EditProps
   gaps?: { ids: Set<string>; gap: Gap }
   /** Pixels at the left and right edge covered by floating panels. */
@@ -208,7 +211,9 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
     // refit the editor when components are added or removed
     [count]) // eslint-disable-line react-hooks/exhaustive-deps
   const net = network && !!design.network
-  const zoned = net && zonesView && !!zone.zl
+  const regional = zone.zl?.unit === 'region'
+  const zoned = !!zone.zl && (regional || (net && zonesView))
+  const unit = regional ? 'region' : 'zone'
   const mon = monitoring && !!design.observability && !zoned   // the zones view has no telemetry band
   const [obsOpen, setObsOpen] = useState(false)               // the monitoring lane starts as a one-line strip
   const L = useMemo(() => layoutBands(design, { network: net, observability: mon, obsOpen }), [design, net, mon, obsOpen])
@@ -258,7 +263,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
       const nodes: Node[] = [
         ...backdrop(design, cloud, zl),
         ...zl.zoneBoxes.map(z => ({ id: `zone:${z.zone}`, type: 'zone', position: { x: z.x, y: z.y }, ...fixed, zIndex: -2,
-          data: { label: zoneName(z.zone, cloud), failed: z.zone === failed, w: z.w, h: z.h } })),
+          data: { label: z.label ?? zoneName(z.zone, cloud), failed: z.zone === failed, w: z.w, h: z.h } })),
         ...zl.insts.map(i => {
           const node = design.nodes.find(n => n.id === i.node)!
           const state: State = !flow ? 'visited' : hop && (hop.from === i.id || hop.to === i.id) ? 'active'
@@ -269,7 +274,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
           return {
             id: i.id, type: 'component', position: zl.pos[i.id], draggable: false,
             data: { node, cloud, state, selected: selected === i.node, failed: i.failed, compact: i.zone !== null,
-              tag: i.failed ? { text: 'zone down', level: 'down' as const } : role,
+              tag: i.failed ? { text: `${unit} down`, level: 'down' as const } : i.tag ?? role,
               note: cur?.kind === 'local' && hop?.from === i.id ? cur.label : undefined } satisfies NodeData,
           }
         }),
@@ -279,8 +284,8 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
         const data: EdgeData = {
           state: !flow ? 'visited' : active ? 'active' : seenE.has(e.id) ? 'visited' : flowE.has(e.id) ? 'flow' : 'off',
           async: e.async || e.replication, kind: cur?.kind,
-          label: cur && `${cur.label}${hop?.cross ? ' · cross-zone' : ''}`,
-          note: e.replication ? (e.async ? 'async replica' : 'sync standby') : undefined,
+          label: cur && `${cur.label}${hop?.cross ? ` · cross-${unit}` : ''}`,
+          note: e.replication ? e.note ?? (e.async ? 'async replica' : 'sync standby') : undefined,
           packet: active ? { key: packetKey, ms: packetMs, reverse: hop!.reverse } : undefined,
         }
         const rt = zoneRoutes[e.id]
@@ -301,6 +306,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
     const nodeState = (id: string): State =>
       !flow ? 'visited' : cur && (cur.from === id || cur.to === id) ? 'active' : seen.has(id) ? 'visited' : inFlow.has(id) ? 'flow' : 'off'
     const tagFor = (n: DNode): NodeData['tag'] => {
+      if (regionFailed !== null && design.regions) { const im = regionImpactOf(design, n, regionFailed); return im ? { text: im.tag, level: im.level } : undefined }
       if (!net) return undefined
       if (failed !== null) { const im = impactOf(design, n, failed, cloud); return im ? { text: im.tag, level: im.level } : undefined }
       const b = zoneBadge(design, n, cloud)
@@ -343,10 +349,10 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
       edges.push({ id: `${a}->${b}`, source: a, target: b, sourceHandle: 's-right', targetHandle: 't-left', type: 'flow', data, markerEnd: marker(data) })
     }
     return { nodes, edges }
-  }, [L, tierRoutes, zoneRoutes, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit, gaps])
+  }, [L, tierRoutes, zoneRoutes, zoned, unit, zone, regionFailed, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit, gaps])
 
   return (
-    <ReactFlow id={id} key={`${design.id}:${net}:${zoned}:${mon}:${obsOpen}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+    <ReactFlow id={id} key={`${design.id}:${net}:${zoned && unit}:${mon}:${obsOpen}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={!!edit} elementsSelectable={false} colorMode={colorMode}
       connectionMode={ConnectionMode.Loose}
       onConnectStart={(_, h) => { dragFrom.current = h.nodeId }}
@@ -365,14 +371,14 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
           className={follow ? 'follow-on' : ''} aria-pressed={follow}>◎</ControlButton>
       </Controls>
       {flow?.steps[step] && <Caption design={design} step={flow.steps[step]} index={step} total={flow.steps.length} cloud={cloud}
-        cross={zoned && !!zone.hops?.[step]?.cross} monitoring={mon} flowId={flow.id} detail={captionDetail} />}
+        cross={zoned && !!zone.hops?.[step]?.cross ? unit : null} monitoring={mon} flowId={flow.id} detail={captionDetail} />}
     </ReactFlow>
   )
 }
 
 /** Short on-canvas caption for the current hop, so the explanation sits next to the action. */
 function Caption({ design, step, index, total, cloud, cross, monitoring, flowId, detail }: {
-  design: Design; step: Flow['steps'][number]; index: number; total: number; cloud: Cloud; cross: boolean; monitoring: boolean; flowId: string; detail: boolean
+  design: Design; step: Flow['steps'][number]; index: number; total: number; cloud: Cloud; cross: 'zone' | 'region' | null; monitoring: boolean; flowId: string; detail: boolean
 }) {
   const name = (id: string) => { const n = design.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
   // Whoever answers records the request's latency and errors: the callee for a request, the sender for a response.
@@ -385,7 +391,7 @@ function Caption({ design, step, index, total, cloud, cross, monitoring, flowId,
         <span className="muted">{index + 1}/{total}</span>
         <b>{name(step.from)}{step.from !== step.to && <> → {name(step.to)}</>}</b>
         <span className="mono" style={{ color: KIND_VAR[step.kind] }}>{step.label}</span>
-        {cross && <span className="muted">· cross-zone</span>}
+        {cross && <span className="muted">· cross-{cross}</span>}
       </div>
       {detail && step.detail && <p>{step.detail}</p>}
       {monitoring && (

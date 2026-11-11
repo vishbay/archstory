@@ -1,0 +1,60 @@
+{
+  "schema": "archstory/v1",
+  "id": "payments-two-regions",
+  "meta": { "title": "Payments API in two regions", "summary": "Test fixture: a warm standby in a second region, with some deliberate gaps." },
+  "requirements": { "functional": ["Take a payment"], "nonFunctional": ["Survive the loss of a region"] },
+  "regions": {
+    "regions": [
+      { "id": "use1", "name": "us-east-1", "role": "primary" },
+      { "id": "usw2", "name": "us-west-2", "role": "secondary" }
+    ],
+    "strategy": "warm-standby",
+    "rto": "2 min",
+    "rpo": "1 min",
+    "failover": "DNS failover on health checks",
+    "dnsTtl": 300
+  },
+  "nodes": [
+    { "id": "client", "label": "Client", "kind": "web_client" },
+    { "id": "dns", "label": "DNS", "kind": "dns" },
+    { "id": "lb", "label": "Load Balancer", "kind": "load_balancer" },
+    { "id": "api", "label": "Payments API", "kind": "service" },
+    { "id": "fraud", "label": "Fraud Check", "kind": "service", "regions": "primary" },
+    { "id": "cache", "label": "Session Cache", "kind": "cache" },
+    { "id": "db", "label": "Orders DB", "kind": "sql_db", "replication": "async" },
+    { "id": "payments", "label": "Payments DB", "kind": "sql_db", "replication": "none" },
+    { "id": "archive", "label": "Receipt Archive", "kind": "object_store", "replication": "backup" }
+  ],
+  "edges": [
+    { "from": "client", "to": "dns" },
+    { "from": "client", "to": "lb" },
+    { "from": "lb", "to": "api" },
+    { "from": "api", "to": "fraud" },
+    { "from": "api", "to": "cache" },
+    { "from": "api", "to": "db" },
+    { "from": "api", "to": "payments" },
+    { "from": "api", "to": "archive", "async": true }
+  ],
+  "flows": [
+    {
+      "id": "pay", "title": "Take a payment",
+      "steps": [
+        { "from": "client", "to": "dns", "kind": "req", "label": "resolve pay.example.com" },
+        { "from": "dns", "to": "client", "kind": "res", "label": "IP of the healthy region" },
+        { "from": "client", "to": "lb", "kind": "req", "label": "POST /payments" },
+        { "from": "lb", "to": "api", "kind": "req", "label": "POST /payments" },
+        { "from": "api", "to": "cache", "kind": "req", "label": "GET session" },
+        { "from": "cache", "to": "api", "kind": "res", "label": "session" },
+        { "from": "api", "to": "fraud", "kind": "req", "label": "score" },
+        { "from": "fraud", "to": "api", "kind": "res", "label": "ok" },
+        { "from": "api", "to": "payments", "kind": "req", "label": "INSERT payment" },
+        { "from": "payments", "to": "api", "kind": "res", "label": "ok" },
+        { "from": "api", "to": "db", "kind": "req", "label": "UPDATE order" },
+        { "from": "db", "to": "api", "kind": "res", "label": "ok" },
+        { "from": "api", "to": "archive", "kind": "async", "label": "PUT receipt" },
+        { "from": "api", "to": "lb", "kind": "res", "label": "201 Created" },
+        { "from": "lb", "to": "client", "kind": "res", "label": "201 Created" }
+      ]
+    }
+  ]
+}

@@ -9,6 +9,10 @@ export const HA_MODES = ['active-active', 'primary-standby', 'quorum', 'regional
 export const NOTE_KINDS = ['tradeoff', 'scaling', 'failure', 'security', 'note'] as const
 export const SLO_KINDS = ['availability', 'latency', 'freshness', 'durability', 'correctness'] as const
 export const ALERT_SEVERITIES = ['page', 'ticket'] as const
+export const REGION_ROLES = ['primary', 'secondary', 'active'] as const
+export const DR_STRATEGIES = ['backup-restore', 'pilot-light', 'warm-standby', 'active-active'] as const
+export const FOOTPRINTS = ['all', 'primary', 'global'] as const
+export const REPLICATION_MODES = ['sync', 'async', 'backup', 'none'] as const
 
 const Id = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'ids are lowercase letters, digits, "-" or "_"')
 
@@ -24,6 +28,10 @@ export const NodeSchema = z.object({
   ha: z.enum(HA_MODES).optional()
     .describe('How it survives a zone failure. Defaults by kind: services active-active, SQL/cache primary-standby, managed services regional'),
   replicas: z.number().int().positive().optional(),
+  regions: z.enum(FOOTPRINTS).optional()
+    .describe('Where it runs when the design has a regions section: "all" (a copy in every region, run as the DR strategy says), "primary" (only in the primary region, so it is lost with it), "global" (one global service outside any region: DNS, CDN, global load balancer, or a globally replicated store). Defaults: edge tier (DNS, CDN, WAF) global, everything else all; clients and external services always sit outside the regions'),
+  replication: z.enum(REPLICATION_MODES).optional()
+    .describe('Data stores only: how its data reaches other regions. "sync" (a write commits in two regions: nothing lost, every write pays a cross-region round trip), "async" (replicated after commit: a region loss loses the replication lag), "backup" (snapshots copied across: loses everything since the last one), "none". Defaults to "backup" for the backup-restore strategy, "none" for caches, otherwise "async"'),
   icon: z.string().optional().describe('Emoji override'),
   cloud: z.object({ aws: z.string().optional(), gcp: z.string().optional(), azure: z.string().optional() }).optional()
     .describe('Provider-specific product names, e.g. { "aws": "ALB", "gcp": "Cloud Load Balancing" }'),
@@ -42,6 +50,21 @@ export const NetworkSchema = z.object({
   subnets: z.array(SubnetSchema).min(1),
   egress: z.enum(['nat', 'none']).default('nat').describe('How private subnets reach the internet'),
 }).describe('Optional network layer: VPC, subnets and availability zones')
+
+export const RegionSchema = z.object({
+  id: Id, name: z.string().min(1).describe('Display name, e.g. "us-east-1" or "Europe (Frankfurt)"'),
+  role: z.enum(REGION_ROLES).describe('primary serves traffic and secondary waits as the DR site (backup-restore, pilot-light, warm-standby); every region is active in active-active'),
+})
+
+export const RegionsSchema = z.object({
+  regions: z.array(RegionSchema).min(2),
+  strategy: z.enum(DR_STRATEGIES)
+    .describe('Disaster recovery strategy, cheapest and slowest first: backup-restore (restore data and redeploy: hours), pilot-light (data replicated, compute off: tens of minutes), warm-standby (a scaled-down copy running: minutes), active-active (every region serves: near zero)'),
+  rto: z.string().describe('Recovery time objective: how long the system may be down after losing a region, e.g. "15 min"'),
+  rpo: z.string().describe('Recovery point objective: how much recent data may be lost, e.g. "1 min" or "0"'),
+  failover: z.string().describe('How traffic moves to the surviving region, e.g. "DNS failover on health checks" or "global load balancer with anycast IPs"'),
+  dnsTtl: z.number().int().positive().optional().describe('TTL in seconds of the DNS records failover changes; resolvers keep sending users to the failed region until it expires'),
+}).describe('Optional multi-region layer: regions, disaster recovery strategy, RTO and RPO, and how traffic fails over')
 
 export const GroupSchema = z.object({ id: Id, label: z.string(), kind: z.enum(GROUP_KINDS).default('boundary') })
 
@@ -130,6 +153,7 @@ export const DesignSchema = z.object({
   flows: z.array(FlowSchema).default([]),
   notes: z.array(NoteSchema).default([]),
   network: NetworkSchema.optional(),
+  regions: RegionsSchema.optional(),
   observability: ObservabilitySchema.optional(),
   questions: z.array(QuestionSchema).default([]).describe('Follow-up questions with model answers, for drilling'),
   reasoning: z.record(z.string(), z.string()).optional()
@@ -151,6 +175,10 @@ export type Observability = z.infer<typeof ObservabilitySchema>
 export type Slo = z.infer<typeof SloSchema>
 export type Alert = z.infer<typeof AlertSchema>
 export type Subnet = z.infer<typeof SubnetSchema>
+export type Regions = z.infer<typeof RegionsSchema>
+export type Region = z.infer<typeof RegionSchema>
+export type Footprint = typeof FOOTPRINTS[number]
+export type Replication = typeof REPLICATION_MODES[number]
 
 export type ParseResult = { ok: true; design: Design } | { ok: false; errors: string[] }
 
@@ -203,6 +231,17 @@ export function parseDesign(input: unknown): ParseResult {
       errors.push(`node "${n.id}": unknown subnet "${n.subnet}"`)
   } else {
     for (const n of d.nodes) if (n.subnet) errors.push(`node "${n.id}": has a subnet but the design has no network section`)
+  }
+  if (d.regions) {
+    const r = d.regions, ids = new Set<string>()
+    for (const g of r.regions) { if (ids.has(g.id)) errors.push(`regions.regions: duplicate id "${g.id}"`); ids.add(g.id) }
+    const roles = r.regions.map(g => g.role)
+    if (r.strategy === 'active-active') {
+      if (roles.some(x => x !== 'active')) errors.push('regions: active-active needs every region to have role "active"')
+    } else if (roles.filter(x => x === 'primary').length !== 1 || roles.includes('active'))
+      errors.push(`regions: ${r.strategy} needs exactly one "primary" region, the others "secondary"`)
+  } else {
+    for (const n of d.nodes) if (n.regions || n.replication) errors.push(`node "${n.id}": has regions or replication but the design has no regions section`)
   }
   if (d.observability) {
     const o = d.observability, sloIds = new Set<string>(), alertIds = new Set<string>()

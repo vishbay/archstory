@@ -54,7 +54,7 @@ export function parseReview(json: unknown, attempt: Design): ReviewParse {
 
 /** Cheap fingerprint of an answer, to tell when a stored review no longer matches it. */
 export function signature(d: Design): string {
-  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning])
+  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : [])])   // old answers keep their signature
   let h = 5381
   for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i)
   return (h >>> 0).toString(36)
@@ -80,7 +80,8 @@ const EXAMPLE: Review = {
 export function reviewPrompt(attempt: Design, ref: Design, checks: Check[], includeReference: boolean): string {
   const r = ref.requirements
   const list = (xs: string[]) => xs.map(x => `- ${x}`).join('\n')
-  const answer = { nodes: attempt.nodes, edges: attempt.edges, flows: attempt.flows, notes: attempt.notes }
+  const answer = { nodes: attempt.nodes, edges: attempt.edges, flows: attempt.flows, notes: attempt.notes, ...(attempt.regions && { regions: attempt.regions }) }
+  const multiRegion = !!(ref.regions || attempt.regions)
   const reasoning = Object.entries(attempt.reasoning ?? {}).filter(([, v]) => v.trim())
   const found = checks.filter(c => c.level === 'fail' || c.level === 'warn')
   const refShort = {
@@ -93,6 +94,7 @@ export function reviewPrompt(attempt: Design, ref: Design, checks: Check[], incl
       pages: ref.observability.alerts.filter(a => a.severity === 'page').map(a => a.when),
       tickets: ref.observability.alerts.filter(a => a.severity === 'ticket').map(a => a.when),
     },
+    regions: ref.regions,
   }
   const ids = attempt.nodes.map(n => `"${n.id}"`).join(', ') || '(none)'
 
@@ -133,7 +135,9 @@ ${JSON.stringify(refShort)}
 # How to grade
 Score each dimension from 1 (poor) to 5 (excellent):
 ${DIMENSIONS.map(d => `- ${d.id}: ${d.rubric}`).join('\n')}
-
+${multiRegion ? `
+This problem is about more than one region, so "reliability" also covers losing a whole region: whether the disaster recovery strategy (backup and restore, pilot light, warm standby or active-active) meets the RTO and RPO, how each data store reaches another region (synchronous replication loses nothing but adds a cross-region round trip to every write, asynchronous loses the replication lag, backups lose everything since the last one), and how traffic fails over (DNS TTL and health checks, or a global load balancer). If the candidate does not address it, say so.
+` : ''}
 Respond with only a JSON object in a single \`\`\`json code block, in exactly this shape:
 \`\`\`json
 ${JSON.stringify(EXAMPLE, null, 2)}

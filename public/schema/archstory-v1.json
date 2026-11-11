@@ -157,6 +157,25 @@
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
           },
+          "regions": {
+            "description": "Where it runs when the design has a regions section: \"all\" (a copy in every region, run as the DR strategy says), \"primary\" (only in the primary region, so it is lost with it), \"global\" (one global service outside any region: DNS, CDN, global load balancer, or a globally replicated store). Defaults: edge tier (DNS, CDN, WAF) global, everything else all; clients and external services always sit outside the regions",
+            "type": "string",
+            "enum": [
+              "all",
+              "primary",
+              "global"
+            ]
+          },
+          "replication": {
+            "description": "Data stores only: how its data reaches other regions. \"sync\" (a write commits in two regions: nothing lost, every write pays a cross-region round trip), \"async\" (replicated after commit: a region loss loses the replication lag), \"backup\" (snapshots copied across: loses everything since the last one), \"none\". Defaults to \"backup\" for the backup-restore strategy, \"none\" for caches, otherwise \"async\"",
+            "type": "string",
+            "enum": [
+              "sync",
+              "async",
+              "backup",
+              "none"
+            ]
+          },
           "icon": {
             "description": "Emoji override",
             "type": "string"
@@ -424,6 +443,79 @@
         "subnets"
       ],
       "description": "Optional network layer: VPC, subnets and availability zones"
+    },
+    "regions": {
+      "type": "object",
+      "properties": {
+        "regions": {
+          "minItems": 2,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Display name, e.g. \"us-east-1\" or \"Europe (Frankfurt)\""
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "active"
+                ],
+                "description": "primary serves traffic and secondary waits as the DR site (backup-restore, pilot-light, warm-standby); every region is active in active-active"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "role"
+            ]
+          }
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "backup-restore",
+            "pilot-light",
+            "warm-standby",
+            "active-active"
+          ],
+          "description": "Disaster recovery strategy, cheapest and slowest first: backup-restore (restore data and redeploy: hours), pilot-light (data replicated, compute off: tens of minutes), warm-standby (a scaled-down copy running: minutes), active-active (every region serves: near zero)"
+        },
+        "rto": {
+          "type": "string",
+          "description": "Recovery time objective: how long the system may be down after losing a region, e.g. \"15 min\""
+        },
+        "rpo": {
+          "type": "string",
+          "description": "Recovery point objective: how much recent data may be lost, e.g. \"1 min\" or \"0\""
+        },
+        "failover": {
+          "type": "string",
+          "description": "How traffic moves to the surviving region, e.g. \"DNS failover on health checks\" or \"global load balancer with anycast IPs\""
+        },
+        "dnsTtl": {
+          "description": "TTL in seconds of the DNS records failover changes; resolvers keep sending users to the failed region until it expires",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "regions",
+        "strategy",
+        "rto",
+        "rpo",
+        "failover"
+      ],
+      "description": "Optional multi-region layer: regions, disaster recovery strategy, RTO and RPO, and how traffic fails over"
     },
     "observability": {
       "type": "object",

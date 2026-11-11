@@ -8,13 +8,14 @@ import { Legend } from './Legend'
 import { resolvePhases } from '../model/phases'
 import { cloudIconUrl } from '../model/cloudIcons'
 import { crossing, placement } from '../model/network'
-import { haOf, impactOf, placementsOf, resilience, zoneName } from '../model/availability'
+import { haOf, impactOf, placementsOf, resilience, zoneName, type Impact } from '../model/availability'
+import { footprintOf, homeRegion, regionDrill, regionImpactOf, replicationOf, STRATEGY_TEXT } from '../model/regions'
 import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 import { useTabStrip } from './hooks'
 
-export type InspectorTab = 'step' | 'component' | 'zones' | 'monitoring' | 'notes' | 'questions'
+export type InspectorTab = 'step' | 'component' | 'zones' | 'regions' | 'monitoring' | 'notes' | 'questions'
 
 const HA_TEXT = {
   'active-active': 'Active in every zone behind the load balancer',
@@ -24,10 +25,34 @@ const HA_TEXT = {
   'single': 'Single zone only',
 } as const
 
+const FOOTPRINT_TEXT = {
+  all: 'Runs in every region',
+  primary: 'Runs only in the primary region',
+  global: 'Global service outside any one region',
+} as const
+const REPLICATION_TEXT = {
+  sync: 'synchronous cross-region replication', async: 'asynchronous cross-region replication',
+  backup: 'cross-region backups only', none: 'no cross-region replication',
+} as const
+
+function ImpactList({ impacts, cloud }: { impacts: { node: Design['nodes'][number]; impact: Impact }[]; cloud: Cloud }) {
+  return (
+    <ul className="impacts">
+      {impacts.map(({ node: n, impact }) => (
+        <li key={n.id}>
+          <span className={`node-tag inline tag-${impact.level}`}>{impact.tag}</span>
+          <b>{nameOf(n, cloud)}</b>
+          <p>{impact.text}</p>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 const NOTE_ICON = { tradeoff: '⚖️', scaling: '📈', failure: '💥', security: '🔐', note: '📝' } as const
 
-export function Inspector({ design, flow, player, cloud, network, monitoring = false, zone, selected, tab, onTab, onFlow, onSelect }: {
-  design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zone: ZoneState
+export function Inspector({ design, flow, player, cloud, network, monitoring = false, zone, regionFailed = null, selected, tab, onTab, onFlow, onSelect }: {
+  design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zone: ZoneState; regionFailed?: number | null
   selected: string | null; tab: InspectorTab; onTab: (t: InspectorTab) => void; onFlow: (id: string) => void; onSelect?: (id: string) => void
 }) {
   const byId = Object.fromEntries(design.nodes.map(n => [n.id, n]))
@@ -37,22 +62,30 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const node = selected ? byId[selected] : undefined
   const zones = network && (design.network?.zones ?? 1) > 1
   const mon = monitoring && !!design.observability
-  const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), ...(mon ? ['monitoring'] as const : []), 'notes', ...(design.questions.length ? ['questions'] as const : [])] as const)
-  const shown = (tab === 'zones' && !zones) || (tab === 'monitoring' && !mon) || (tab === 'questions' && !design.questions.length) ? 'step' : tab
+  const regions = !!design.regions
+  const tabs = (['step', 'component', ...(zones ? ['zones'] as const : []), ...(regions ? ['regions'] as const : []), ...(mon ? ['monitoring'] as const : []), 'notes', ...(design.questions.length ? ['questions'] as const : [])] as const)
+  const shown = (tab === 'zones' && !zones) || (tab === 'regions' && !regions) || (tab === 'monitoring' && !mon) || (tab === 'questions' && !design.questions.length) ? 'step' : tab
   const tabStrip = useTabStrip(shown)
+  // In the regions view the canvas columns are regions, so instance labels and failures are regions too.
+  const byRegion = zone.zl?.unit === 'region'
+  const zoneFailed = byRegion ? null : zone.failed
+  const colName = (z: number) => (byRegion ? design.regions!.regions[z].name : zoneName(z, cloud))
   const zoneOfInst = (id: string | null) => (id ? zone.zl?.insts.find(i => i.id === id)?.zone ?? null : null)
-  const instLabel = (id: string | null) => { const z = zoneOfInst(id); return z === null ? '' : ` (${zoneName(z, cloud)})` }
+  const instLabel = (id: string | null) => { const z = zoneOfInst(id); return z === null ? '' : ` (${colName(z)})` }
   const hop = zone.hops?.[step]
-  const downHere = cur && zone.failed !== null && !zone.hops
-    ? [cur.from, cur.to].map(id => byId[id]).find(n => impactOf(design, n, zone.failed!, cloud)?.level === 'down') : undefined
-  const res = zones ? resilience(design, zone.failed ?? 0, cloud) : null
+  const downHere = cur && zoneFailed !== null && !zone.hops
+    ? [cur.from, cur.to].map(id => byId[id]).find(n => impactOf(design, n, zoneFailed, cloud)?.level === 'down') : undefined
+  const regionDownHere = cur && regionFailed !== null && regions && !byRegion
+    ? [cur.from, cur.to].map(id => byId[id]).find(n => regionImpactOf(design, n, regionFailed)?.level === 'down') : undefined
+  const res = zones ? resilience(design, zoneFailed ?? 0, cloud) : null
+  const drill = regions ? regionDrill(design, regionFailed ?? homeRegion(design)) : null
 
   return (
     <>
       <div className="tabs" role="tablist" ref={tabStrip}>
         {tabs.map(t => (
           <button key={t} role="tab" aria-selected={shown === t} className={shown === t ? 'on' : ''} onClick={() => onTab(t)}>
-            {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : t === 'monitoring' ? 'Monitoring' : t === 'questions' ? `Questions (${design.questions.length})` : `Notes (${design.notes.length})`}
+            {t === 'step' ? 'Flow' : t === 'component' ? 'Component' : t === 'zones' ? 'Resilience' : t === 'regions' ? 'Regions' : t === 'monitoring' ? 'Monitoring' : t === 'questions' ? `Questions (${design.questions.length})` : `Notes (${design.notes.length})`}
           </button>
         ))}
       </div>
@@ -82,9 +115,12 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
                 <div className="mono" style={{ color: KIND_VAR[cur.kind] }}>{cur.label}</div>
                 {cur.detail && <p>{cur.detail}</p>}
                 {network && crossing(design, cur, cloud) && <p className="net-note">🔒 {crossing(design, cur, cloud)}</p>}
-                {hop?.cross && <p className="net-note">↔ Crosses from {zoneName(zoneOfInst(hop.from)!, cloud)} to {zoneName(zoneOfInst(hop.to)!, cloud)}: about 1 ms extra and billed per GB. Writes always go to the primary's zone.</p>}
+                {hop?.cross && (byRegion
+                  ? <p className="net-note">↔ Crosses from {colName(zoneOfInst(hop.from)!)} to {colName(zoneOfInst(hop.to)!)}: tens of milliseconds between distant regions, and inter-region transfer is billed per GB.</p>
+                  : <p className="net-note">↔ Crosses from {zoneName(zoneOfInst(hop.from)!, cloud)} to {zoneName(zoneOfInst(hop.to)!, cloud)}: about 1 ms extra and billed per GB. Writes always go to the primary's zone.</p>)}
                 {hop && cur.from !== cur.to && (!hop.from || !hop.to) && <p className="net-note bad">✕ This hop fails: {name(!hop.from ? cur.from : cur.to)} has no healthy instance.</p>}
-                {downHere && <p className="net-note bad">✕ This hop fails: {downHere.label} is down while {zoneName(zone.failed!, cloud)} is out.</p>}
+                {downHere && <p className="net-note bad">✕ This hop fails: {downHere.label} is down while {zoneName(zoneFailed!, cloud)} is out.</p>}
+                {regionDownHere && <p className="net-note bad">✕ This hop fails: {regionDownHere.label} is down while {design.regions!.regions[regionFailed!].name} is out.</p>}
                 {cur.payload && <pre>{cur.payload}</pre>}
               </div>
             ) : (
@@ -104,7 +140,11 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             {placement(design, node, cloud, placementsOf(design, node).length) && <p className="net-note">🔒 {placement(design, node, cloud, placementsOf(design, node).length)}</p>}
             {network && haOf(design, node) && (
               <p className="net-note">🛟 {HA_TEXT[haOf(design, node)!]}.
-                {zone.failed !== null && <> If {zoneName(zone.failed, cloud)} fails: {impactOf(design, node, zone.failed, cloud)!.text}</>}</p>
+                {zoneFailed !== null && <> If {zoneName(zoneFailed, cloud)} fails: {impactOf(design, node, zoneFailed, cloud)!.text}</>}</p>
+            )}
+            {footprintOf(design, node) && (
+              <p className="net-note">🌍 {FOOTPRINT_TEXT[footprintOf(design, node)!]}{replicationOf(design, node) ? `, with ${REPLICATION_TEXT[replicationOf(design, node)!]}` : ''}.
+                {regionFailed !== null && <> If {design.regions!.regions[regionFailed].name} fails: {regionImpactOf(design, node, regionFailed)!.text}</>}</p>
             )}
             <table className="kv">
               <tbody>
@@ -128,8 +168,8 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
 
         {shown === 'zones' && res && (
           <>
-            <h3>If {zoneName(zone.failed ?? 0, cloud)} fails</h3>
-            {zone.failed === null && <p className="muted small">Pick a zone in "Fail" on the canvas to see it live. Showing {zoneName(0, cloud)}.</p>}
+            <h3>If {zoneName(zoneFailed ?? 0, cloud)} fails</h3>
+            {zoneFailed === null && <p className="muted small">Pick a zone in "Fail" on the canvas to see it live. Showing {zoneName(0, cloud)}.</p>}
             <table className="kv">
               <tbody>
                 <tr><th>Recovery time</th><td>{res.rto}</td></tr>
@@ -142,15 +182,31 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
                 <ul className="reqs">{res.spofs.map(n => <li key={n.id}>{n.label}</li>)}</ul></div>
             )}
             <h4>Per component</h4>
-            <ul className="impacts">
-              {res.impacts.map(({ node: n, impact }) => (
-                <li key={n.id}>
-                  <span className={`node-tag inline tag-${impact.level}`}>{impact.tag}</span>
-                  <b>{nameOf(n, cloud)}</b>
-                  <p>{impact.text}</p>
-                </li>
-              ))}
-            </ul>
+            <ImpactList impacts={res.impacts} cloud={cloud} />
+          </>
+        )}
+
+        {shown === 'regions' && drill && design.regions && (
+          <>
+            <h3>If {drill.region.name} fails</h3>
+            {regionFailed === null && <p className="muted small">Pick a region in "Fail a region" on the canvas to see it live. Showing {drill.region.name}.</p>}
+            <table className="kv">
+              <tbody>
+                <tr><th>Strategy</th><td>{STRATEGY_TEXT[design.regions.strategy]} across {design.regions.regions.map(r => `${r.name} (${r.role})`).join(', ')}</td></tr>
+                <tr><th>Targets</th><td>RTO {design.regions.rto}, RPO {design.regions.rpo}</td></tr>
+                <tr><th>Failover</th><td>{design.regions.failover}{design.regions.dnsTtl ? ` (DNS TTL ${design.regions.dnsTtl} s)` : ''}</td></tr>
+                <tr><th>Serving after</th><td>{drill.survivors.map(r => r.name).join(', ')}{drill.promoted ? ' (promoted)' : ''}</td></tr>
+                <tr><th>Recovery time</th><td>{drill.rto}</td></tr>
+                <tr><th>Data loss</th><td>{drill.rpo}</td></tr>
+                <tr><th>Capacity</th><td>{drill.capacity}</td></tr>
+              </tbody>
+            </table>
+            {drill.warnings.length > 0 && (
+              <div className="card bad"><b>Gaps in the plan</b>
+                <ul className="reqs">{drill.warnings.map(w => <li key={w}>{w}</li>)}</ul></div>
+            )}
+            <h4>Per component</h4>
+            <ImpactList impacts={drill.impacts} cloud={cloud} />
           </>
         )}
 

@@ -2,6 +2,7 @@
 // Kinds are grouped into families so equivalent choices (SQL vs NoSQL, queue vs stream) count the same.
 import type { Design, DNode } from '../model/schema'
 import { onRequestPath, resilience } from '../model/availability'
+import { footprintOf, holdsData, replicationOf, STRATEGY_TEXT } from '../model/regions'
 import { stepProblem } from './attempt'
 
 export type Level = 'pass' | 'fail' | 'warn' | 'info'
@@ -110,6 +111,24 @@ export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: 
     add(said
       ? { id: 'monitoring', level: 'pass', title: 'Says how it would be monitored' }
       : { id: 'monitoring', level: 'warn', title: 'No monitoring yet', detail: `Say how you would know it is healthy: SLIs and SLOs, what pages someone, how you would trace a slow request. The reference tracks: ${ref.observability.slos.map(s => s.name).join(', ')}. Add a monitoring component or write it under Reasoning.` })
+  }
+
+  // 7c. Regions: asked for when the reference is multi-region. A regions section or written reasoning both count.
+  if (ref.regions) {
+    const R = ref.regions
+    const said = !!att.regions || /\b(regions?|disaster|failover|rto|rpo)\b/i.test(Object.values(att.reasoning ?? {}).join(' '))
+    add(said
+      ? { id: 'regions', level: 'pass', title: 'Says how it survives losing a region' }
+      : { id: 'regions', level: 'warn', title: 'Nothing about losing a whole region', detail: `The reference runs ${STRATEGY_TEXT[R.strategy].toLowerCase()} across ${R.regions.length} regions (RTO ${R.rto}, RPO ${R.rpo}). Say which disaster recovery strategy you would use, how data reaches the other region (sync or async, and what each costs) and how traffic fails over. Add a regions section or write it under Reasoning.` })
+    if (att.regions && att.regions.strategy !== R.strategy)
+      add({ id: 'regions-strategy', level: 'info', title: `You chose ${STRATEGY_TEXT[att.regions.strategy].toLowerCase()}; the reference uses ${STRATEGY_TEXT[R.strategy].toLowerCase()}`, detail: `Check it meets the RTO (${R.rto}) and RPO (${R.rpo}) at a cost you can defend.` })
+  }
+  if (att.regions) {
+    const bare = att.nodes.filter(n => holdsData(n) && (footprintOf(att, n) === 'primary' || replicationOf(att, n) === 'none'))
+    add(bare.length
+      ? { id: 'region-data', level: 'warn', title: `${bare.length} data store${bare.length > 1 ? 's have' : ' has'} no cross-region replication`, nodes: bare.map(n => n.id),
+        detail: `${bare.map(n => n.label).join(', ')}: losing the region loses this data. Replicate asynchronously (loses the replication lag), synchronously (loses nothing, slower writes), or at least copy backups to another region.` }
+      : { id: 'region-data', level: 'pass', title: 'Every data store reaches another region' })
   }
 
   // 8. Extras are fine, but worth defending

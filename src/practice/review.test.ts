@@ -97,3 +97,20 @@ describe('monitoring in reviews', () => {
     expect(p).toContain('- operations:')
   })
 })
+
+describe('regions in reviews', () => {
+  const regions = { regions: [{ id: 'a', name: 'eu-west-1', role: 'primary' as const }, { id: 'b', name: 'eu-central-1', role: 'secondary' as const }],
+    strategy: 'pilot-light' as const, rto: '30 min', rpo: '5 min', failover: 'DNS failover' }
+  it('asks about losing a region only when the problem or the answer has regions', () => {
+    expect(reviewPrompt(attempt, url, [], true)).not.toContain('losing a whole region')
+    const p = reviewPrompt(attempt, { ...url, regions }, [], true)
+    expect(p).toContain('"reliability" also covers losing a whole region')
+    expect(p).toContain('"strategy":"pilot-light"')
+    expect(p).not.toMatch(/[—–]/)
+    expect(reviewPrompt({ ...attempt, regions }, url, [], false)).toContain('losing a whole region')
+  })
+  it('signature covers regions without changing it for answers that have none', () => {
+    expect(signature({ ...attempt, regions })).not.toBe(signature(attempt))
+    expect(signature({ ...attempt, regions: undefined })).toBe(signature(attempt))
+  })
+})

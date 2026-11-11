@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
-import { addFlow, addNode, appendStep, blankAttempt, connect, removeNode, stepKindFor, stepProblem } from './attempt'
+import { addFlow, addNode, appendStep, blankAttempt, connect, removeNode, stepKindFor, stepProblem, updateNode } from './attempt'
 import { runChecks } from './checks'
-import type { Design } from '../model/schema'
+import { parseDesign, type Design } from '../model/schema'
+import multiRegion from '../model/fixtures/multi-region.json'
 
 const url = LIBRARY.find(d => d.id === 'url-shortener')!
 
@@ -110,5 +111,32 @@ describe('practice checks', () => {
     expect(titles).toContain('warn: Clients reach services without a load balancer or gateway')
     expect(titles).toContain('pass: Uses a database')
     expect(titles.some(t => t.startsWith('fail: "Flow 1" cannot run'))).toBe(true)
+  })
+})
+
+describe('region checks', () => {
+  const ref = (() => { const r = parseDesign(multiRegion); if (!r.ok) throw new Error(r.errors.join('\n')); return r.design })()
+  const base = () => { const { d, ids: [c, lb, svc, db] } = build(['web_client', 'load_balancer', 'service', 'sql_db']); return connect(connect(connect(d, c, lb), lb, svc), svc, db) }
+  const find = (d: Design, id: string) => runChecks(d, ref).checks.find(c => c.id === id)
+  it('warns when a multi-region reference meets an answer that says nothing about regions', () => {
+    const c = find(base(), 'regions')!
+    expect(c.level).toBe('warn')
+    expect(c.detail).toMatch(/warm standby across 2 regions \(RTO 2 min, RPO 1 min\)/)
+    expect(find(base(), 'region-data')).toBeUndefined()
+  })
+  it('passes with a regions section or written reasoning about failover', () => {
+    expect(find({ ...base(), reasoning: { tradeoffs: 'Warm standby in a second region; RPO of a minute.' } }, 'regions')!.level).toBe('pass')
+    expect(find({ ...base(), regions: ref.regions }, 'regions')!.level).toBe('pass')
+  })
+  it('warns about data stores with no cross-region replication, and notes a different strategy', () => {
+    const d = { ...base(), regions: { ...ref.regions!, strategy: 'pilot-light' as const } }
+    expect(find(d, 'region-data')!.level).toBe('pass')
+    const bare = updateNode(d, 'sql_db', { replication: 'none' })
+    expect(find(bare, 'region-data')).toMatchObject({ level: 'warn', title: '1 data store has no cross-region replication', nodes: ['sql_db'] })
+    expect(find(d, 'regions-strategy')).toMatchObject({ level: 'info', title: 'You chose pilot light; the reference uses warm standby' })
+  })
+  it('flags the gaps the fixture has on purpose', () => {
+    const titles = runChecks({ ...ref, id: 'attempt' }, ref).checks.filter(c => c.id.startsWith('region')).map(c => `${c.level}: ${c.title}`)
+    expect(titles).toEqual(['pass: Says how it survives losing a region', 'warn: 1 data store has no cross-region replication'])
   })
 })
