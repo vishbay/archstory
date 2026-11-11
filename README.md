@@ -16,7 +16,7 @@ Explore real architectures and watch each request travel through them hop by hop
 - **Monitoring**: SLOs with error budgets, alerts (page or ticket), what to watch on each component and how to debug it, plus a telemetry layer you can switch on.
 - **Practice**: draw your own design (type `/` to add components, start from a skeleton), record its flows and get automatic checks against a reference. Save attempts and track your progress.
 - **Timed interviews**: the usual phases on a 30, 45 or 60 minute clock, with a checklist for each.
-- **Estimate calculator**: requests per second, storage, bandwidth and cache size, with the arithmetic shown.
+- **Estimate calculator**: requests per second, storage, bandwidth and cache size, with the arithmetic shown, plus a rough monthly cloud cost with editable prices and the usual ways to cut it.
 - **Follow-up questions**: 96 questions interviewers ask next, with model answers and a daily spaced-repetition drill.
 - **AI interviewer** (optional, your own API key): a mock interview that asks one question at a time about your design, by text or voice.
 - **Review with your own AI**: ArchStory writes the prompt and its findings appear on your design. Paste it into any assistant, or optionally connect your own API key (Anthropic, OpenAI, Gemini, or a local server such as Ollama) to send it from the app.

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
+import { cleanCost, cost, costText, money, type CostInputs } from '../practice/cost'
 import { bytes, cleanInputs, count, estimate, estimateText, parseAmount, type EstimateInputs } from '../practice/estimate'
 import { store } from './hooks'
 import { copyText } from './prompts'
 
-type Field = { key: keyof EstimateInputs; label: string; kind: 'count' | 'bytes'; hint?: string }
+type Field = { key: keyof EstimateInputs | keyof CostInputs; label: string; kind: 'count' | 'bytes'; hint?: string }
 const TRAFFIC_USERS: Field[] = [
   { key: 'dau', label: 'Daily active users', kind: 'count' },
   { key: 'writesPerUser', label: 'Writes per user per day', kind: 'count' },
@@ -19,6 +20,25 @@ const SHAPE: Field[] = [
   { key: 'cachePercent', label: 'Cache share of daily reads (%)', kind: 'count', hint: '80/20 rule: 20' },
   { key: 'perInstance', label: 'Requests/s one instance serves', kind: 'count' },
 ]
+const COST_PRICES: Field[] = [
+  { key: 'computePrice', label: 'Instance $/hour', kind: 'count', hint: '2 vCPU, 8 GB' },
+  { key: 'dbPrice', label: 'Database node $/hour', kind: 'count', hint: '4 vCPU, 32 GB' },
+  { key: 'dbStoragePrice', label: 'Database storage $/GB-month', kind: 'count' },
+  { key: 'objectPrice', label: 'Object storage $/GB-month', kind: 'count' },
+  { key: 'cachePrice', label: 'Cache $/GB-hour', kind: 'count' },
+  { key: 'egressPrice', label: 'Internet egress $/GB', kind: 'count' },
+  { key: 'cdnPrice', label: 'CDN egress $/GB', kind: 'count' },
+  { key: 'tierPrice', label: 'Infrequent access $/GB-month', kind: 'count' },
+]
+const COST_CHOICES: Field[] = [
+  { key: 'objectPercent', label: 'Data in object storage (%)', kind: 'count', hint: 'bulk blobs, not rows' },
+  { key: 'cdnPercent', label: 'Egress served by a CDN (%)', kind: 'count' },
+  { key: 'cdnPotential', label: 'Egress a CDN could serve (%)', kind: 'count', hint: 'cacheable content' },
+  { key: 'commitDiscount', label: 'Commitment discount (%)', kind: 'count', hint: 'about 30 to 40' },
+  { key: 'spotPercent', label: 'Compute that is spot-safe workers (%)', kind: 'count' },
+  { key: 'spotDiscount', label: 'Spot discount (%)', kind: 'count' },
+  { key: 'tierDays', label: 'Tier data older than (days)', kind: 'count' },
+]
 const show = (f: Field, v: number) => (f.kind === 'bytes' ? bytes(v).replace(' ', '') : count(v))
 
 /** Back-of-the-envelope numbers with the arithmetic shown. In Practice the working can go straight into your notes. */
@@ -26,14 +46,19 @@ export function EstimateDialog({ problem, onClose, onAddToNotes }: { problem: De
   const dialog = useRef<HTMLDialogElement>(null)
   const key = `archstory.estimate.${problem.id}`
   const [inputs, setInputs] = useState<EstimateInputs>(() => cleanInputs(store.get(key, null)))
-  const [raw, setRaw] = useState<Partial<Record<keyof EstimateInputs, string>>>({})
+  const costKey = `archstory.cost.${problem.id}`
+  const [prices, setPrices] = useState<CostInputs>(() => cleanCost(store.get(costKey, null)))
+  const [raw, setRaw] = useState<Partial<Record<string, string>>>({})
   const [done, setDone] = useState('')
   useEffect(() => { dialog.current?.showModal() }, [])
   useEffect(() => { store.set(key, inputs) }, [key, inputs])
+  useEffect(() => { store.set(costKey, prices) }, [costKey, prices])
   const lines = useMemo(() => estimate(inputs), [inputs])
+  const bill = useMemo(() => cost(inputs, prices), [inputs, prices])
 
-  const field = (f: Field) => {
-    const text = raw[f.key] ?? show(f, inputs[f.key] as number)
+  const fieldOf = (f: Field, isCost: boolean) => {
+    const current = (isCost ? prices : inputs) as unknown as Record<string, number>
+    const text = raw[f.key] ?? show(f, current[f.key])
     const bad = raw[f.key] !== undefined && parseAmount(raw[f.key]!, f.kind) === null
     return (
       <label key={f.key} className="field est-field">{f.label}
@@ -42,14 +67,15 @@ export function EstimateDialog({ problem, onClose, onAddToNotes }: { problem: De
             const v = e.target.value
             setRaw(r => ({ ...r, [f.key]: v })); setDone('')
             const n = parseAmount(v, f.kind)
-            if (n !== null) setInputs(i => ({ ...i, [f.key]: n }))
+            if (n !== null) { if (isCost) setPrices(i => ({ ...i, [f.key]: n })); else setInputs(i => ({ ...i, [f.key]: n })) }
           }}
           onBlur={() => setRaw(r => { const { [f.key]: _, ...rest } = r; void _; return rest })} />
         {f.hint && <span className="muted small">{f.hint}</span>}
       </label>
     )
   }
-  const text = `Estimates (from the calculator):\n${estimateText(lines)}`
+  const field = (f: Field) => fieldOf(f, false), costField = (f: Field) => fieldOf(f, true)
+  const text = `Estimates (from the calculator):\n${estimateText(lines)}\n\nMonthly cost (approximate list prices):\n${costText(bill)}`
 
   return (
     <dialog ref={dialog} className="dialog estimate-dialog" onClose={onClose} aria-label="Estimate calculator">
@@ -82,6 +108,30 @@ export function EstimateDialog({ problem, onClose, onAddToNotes }: { problem: De
           </tbody>
         </table>
       </div>
+      <details className="est-cost">
+        <summary>Monthly cost: about {money(bill.total)}</summary>
+        <p className="muted small">Approximate on-demand list prices, US regions, late 2026. Check your provider's pricing page. Every price is editable.</p>
+        <div className="est-grid">
+          <div>
+            <div className="est-fields">{COST_PRICES.map(costField)}</div>
+            <div className="est-fields">{COST_CHOICES.map(costField)}</div>
+          </div>
+          <div>
+            <table className="est-results">
+              <tbody>
+                {bill.lines.map(l => <tr key={l.id}><th>{l.label}</th><td><b>{l.value}</b><span>{l.formula}</span></td></tr>)}
+              </tbody>
+            </table>
+            <h4>Ways to cut it</h4>
+            <table className="est-results">
+              <tbody>
+                {bill.levers.map(l => <tr key={l.id}><th>{l.label}</th><td><b>saves {money(l.saving)}/month</b><span>{l.why}</span></td></tr>)}
+              </tbody>
+            </table>
+            <p className="muted small">Savings overlap, so do not add them up.</p>
+          </div>
+        </div>
+      </details>
       {done && <p className="small ai-test ok" role="status">{done}</p>}
       <div className="row end">
         <span className="spacer" />

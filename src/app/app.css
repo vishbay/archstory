@@ -779,3 +779,7 @@ button.listening { border-color: var(--hard); color: var(--hard); }
   .phone-note { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; font-size: 12.5px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); }
   .phone-note span { flex: 1; }
 }
+
+.est-cost { margin: 12px 0; }
+.est-cost summary { cursor: pointer; font-weight: 600; }
+.est-cost h4 { margin: 14px 0 4px; }

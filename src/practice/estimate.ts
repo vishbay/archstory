@@ -38,15 +38,21 @@ export const count = (n: number) => scaled(n, [[1e12, 'T'], [1e9, 'B'], [1e6, 'M
 /** Decimal units: 1 KB = 1,000 bytes. */
 export const bytes = (n: number) => scaled(n, [[1e18, 'EB'], [1e15, 'PB'], [1e12, 'TB'], [1e9, 'GB'], [1e6, 'MB'], [1e3, 'KB']], ' ', ' B')
 
-export function estimate(i: EstimateInputs): EstimateLine[] {
+/** The raw numbers behind the lines, for anything built on top of them (see cost.ts). */
+export function capacity(i: EstimateInputs) {
   const perDay = i.source === 'users' ? i.dau * i.writesPerUser
     : i.volumeUnit === 'second' ? i.volume * DAY : i.volumeUnit === 'month' ? i.volume / 30 : i.volume
   const wQps = perDay / DAY, rQps = wQps * i.readsPerWrite
-  const storeDay = perDay * i.writeBytes, storeYear = storeDay * 365, storeAll = storeYear * i.years * i.replicas
+  const storeDay = perDay * i.writeBytes, storeYear = storeDay * 365, storeOne = storeYear * i.years, storeAll = storeOne * i.replicas
   const readsDay = perDay * i.readsPerWrite
   const cache = readsDay * i.readBytes * (i.cachePercent / 100)
   const peakTotal = (wQps + rQps) * i.peakFactor
   const instances = i.perInstance > 0 ? Math.ceil(peakTotal / i.perInstance) : NaN
+  return { perDay, wQps, rQps, storeDay, storeYear, storeOne, storeAll, readsDay, cache, peakTotal, instances, egressMonth: readsDay * i.readBytes * 30 }
+}
+
+export function estimate(i: EstimateInputs): EstimateLine[] {
+  const { perDay, wQps, rQps, storeDay, storeYear, storeAll, readsDay, cache, peakTotal, instances } = capacity(i)
 
   const source = i.source === 'users'
     ? `${count(i.dau)} daily users × ${plural(i.writesPerUser, 'write')} each`
