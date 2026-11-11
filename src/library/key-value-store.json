@@ -1,0 +1,971 @@
+{
+  "schema": "archstory/v1",
+  "id": "key-value-store",
+  "meta": {
+    "title": "Distributed Key-Value Store",
+    "summary": "A Dynamo-style store: consistent hashing with virtual nodes, three replicas per key, tunable quorums, and repair paths that let replicas drift apart and converge again.",
+    "tags": [
+      "consistent-hashing",
+      "replication",
+      "quorum",
+      "eventual-consistency",
+      "lsm-tree"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "get(key) returns the value and a version context; put(key, value, context) and delete(key, context) write a new version",
+      "Each request picks its consistency: ONE, QUORUM or ALL for reads and writes",
+      "Concurrent writes to one key are detected and returned to the client as siblings, never silently dropped",
+      "Add or remove storage nodes without downtime; data moves in the background"
+    ],
+    "nonFunctional": [
+      "Always writable: survives the loss of any one node or one whole zone at QUORUM",
+      "p99 get < 10 ms and p99 put < 20 ms inside the region",
+      "An acknowledged put is fsynced on at least W = 2 replicas in two different zones",
+      "Replicas converge within seconds normally, and within one repair cycle after a long outage",
+      "Capacity and throughput grow linearly with the number of storage nodes"
+    ],
+    "scale": [
+      {
+        "label": "Data",
+        "value": "~100B keys × ~1 KB avg ≈ 100 TB logical, 300 TB stored with N = 3"
+      },
+      {
+        "label": "Traffic",
+        "value": "1M gets/s and 250k puts/s at peak"
+      },
+      {
+        "label": "Cluster",
+        "value": "150 storage nodes × 4 TB NVMe, kept about 50% full for compaction headroom"
+      },
+      {
+        "label": "Per node",
+        "value": "~20k replica reads/s (each get asks all 3 replicas) and ~5k replica writes/s"
+      },
+      {
+        "label": "Ring",
+        "value": "128 virtual nodes per server ≈ 19,200 token ranges"
+      },
+      {
+        "label": "Limits",
+        "value": "Keys up to 256 B, values up to 1 MB"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.20.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.20.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.20.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.20.32.0/19"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "put-availability",
+        "name": "Put availability",
+        "kind": "availability",
+        "sli": "Puts acknowledged at the requested consistency level divided by all puts, measured at the routers",
+        "target": 99.99
+      },
+      {
+        "id": "get-latency",
+        "name": "Get latency",
+        "kind": "latency",
+        "sli": "Gets answered within the threshold divided by all gets, measured at the routers",
+        "target": 99,
+        "threshold": "< 10 ms"
+      },
+      {
+        "id": "durability",
+        "name": "Acknowledged writes kept",
+        "kind": "durability",
+        "sli": "Sampled acknowledged writes that a later ALL read still returns, divided by all sampled writes (a canary writes and reads back known keys)",
+        "target": 99.999999
+      }
+    ],
+    "alerts": [
+      {
+        "id": "put-burn",
+        "severity": "page",
+        "when": "Put errors or quorum timeouts burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Callers are failing writes; with N = 3 this usually means two replicas of some ranges are unreachable.",
+        "target": "router",
+        "slo": "put-availability"
+      },
+      {
+        "id": "get-slow",
+        "severity": "page",
+        "when": "More than 1% of gets slower than 10 ms for 15 minutes",
+        "why": "Every caller waits on the second-fastest replica, so a sick node or a compaction backlog shows up here first.",
+        "target": "router",
+        "slo": "get-latency"
+      },
+      {
+        "id": "canary-lost",
+        "severity": "page",
+        "when": "Any canary write acknowledged at QUORUM is missing from an ALL read",
+        "why": "An acknowledged write disappeared: data loss is happening now, not just slowness.",
+        "target": "storage-a",
+        "slo": "durability"
+      },
+      {
+        "id": "hints-piling",
+        "severity": "ticket",
+        "when": "Stored hints above 20 GB on any node, or oldest hint older than 2 hours (the window is 3 hours)",
+        "why": "Hints past the window are dropped, so that data then depends on the next Merkle repair.",
+        "target": "storage-d",
+        "slo": "durability"
+      },
+      {
+        "id": "repair-overdue",
+        "severity": "ticket",
+        "when": "Any token range not repaired for 7 days (tombstone grace period is 10 days)",
+        "why": "A replica that misses a delete and is not repaired in time can bring the deleted value back.",
+        "target": "repair",
+        "slo": "durability"
+      },
+      {
+        "id": "compaction-backlog",
+        "severity": "ticket",
+        "when": "Pending compactions above 100, or p99 SSTables read per get above 6, for 30 minutes",
+        "why": "Reads touch more files and get latency rises before users notice.",
+        "target": "storage-a",
+        "slo": "get-latency"
+      }
+    ],
+    "signals": [
+      {
+        "target": "router",
+        "name": "Quorum failures by consistency level",
+        "metric": "kv_quorum_unavailable_total{op,cl}",
+        "why": "Separates real unavailability from clients asking for ALL during a node outage."
+      },
+      {
+        "target": "storage-a",
+        "name": "SSTables read per get",
+        "metric": "kv_sstables_per_read",
+        "why": "The main health measure of the storage engine; it climbs when compaction falls behind."
+      },
+      {
+        "target": "storage-a",
+        "name": "Read repairs and siblings",
+        "metric": "kv_read_repair_total, kv_siblings_per_read",
+        "why": "Read repairs show how often replicas drift; siblings show how often clients really write concurrently."
+      },
+      {
+        "target": "storage-d",
+        "name": "Hints stored and replayed",
+        "metric": "kv_hints_stored_bytes, kv_hints_replayed_total",
+        "why": "Grows while a node is down and should drain to zero after it returns."
+      },
+      {
+        "target": "repair",
+        "name": "Ranges past repair deadline",
+        "metric": "kv_ranges_unrepaired_seconds",
+        "why": "The guard against deleted data coming back."
+      },
+      {
+        "target": "storage-c",
+        "name": "Phi score seen by peers",
+        "metric": "kv_gossip_phi{peer}",
+        "why": "Shows a node flapping between up and down before it is marked down for good."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Get p99 above 10 ms",
+        "steps": [
+          "Break latency down by replica: is one storage node slow, or all of them?",
+          "On the slow node, check SSTables per read and pending compactions: a backlog means reads open many files.",
+          "Check GC pauses and disk latency on that node; a sick disk slows every range it holds.",
+          "Check the read repair rate: many repairs mean replicas are drifting and each get does extra work.",
+          "Look for a hot key: one key's token lands on three nodes, which no amount of virtual nodes spreads."
+        ]
+      },
+      {
+        "symptom": "A client reads an old value right after a successful write",
+        "steps": [
+          "Check the consistency levels used: R + W must exceed N (QUORUM plus QUORUM), not ONE plus QUORUM.",
+          "Check whether the write landed on fallback nodes as hints (sloppy quorum), which a strict read quorum may not include.",
+          "Check whether the write and the read went through different ring views during a node join or move.",
+          "If the store runs last-write-wins, compare node clocks: a skewed clock can make an older write look newer."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "app",
+      "label": "App Server (KV client)",
+      "kind": "client",
+      "description": "Calls the store through a client library that pools TCP connections and passes version contexts back on writes"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Resolves the store's hostname to the load balancer's static IPs",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "nlb",
+      "label": "Network Load Balancer",
+      "kind": "network_load_balancer",
+      "description": "Layer 4: spreads long-lived client connections across routers without parsing the protocol",
+      "cloud": {
+        "aws": "NLB",
+        "gcp": "External passthrough Network Load Balancer"
+      }
+    },
+    {
+      "id": "router",
+      "label": "Request Router",
+      "kind": "service",
+      "replicas": 12,
+      "description": "Stateless. Holds the ring (learned by gossip), hashes each key and forwards to the first healthy replica",
+      "cloud": {
+        "aws": "EKS",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "storage-a",
+      "label": "Storage Node A",
+      "kind": "nosql_db",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "First replica for this key's range, so it coordinates the request. Commit log, memtable and SSTables on local NVMe",
+      "cloud": {
+        "aws": "EC2",
+        "gcp": "Compute Engine"
+      }
+    },
+    {
+      "id": "storage-b",
+      "label": "Storage Node B",
+      "kind": "nosql_db",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "Second replica for this key's range, in a different zone from A",
+      "cloud": {
+        "aws": "EC2",
+        "gcp": "Compute Engine"
+      }
+    },
+    {
+      "id": "storage-c",
+      "label": "Storage Node C",
+      "kind": "nosql_db",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "Third replica for this key's range, in the third zone",
+      "cloud": {
+        "aws": "EC2",
+        "gcp": "Compute Engine"
+      }
+    },
+    {
+      "id": "storage-d",
+      "label": "Storage Node D (next on ring)",
+      "kind": "nosql_db",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "Not a replica for this range. It is the next node clockwise, so it holds hinted writes when a replica is down",
+      "cloud": {
+        "aws": "EC2",
+        "gcp": "Compute Engine"
+      }
+    },
+    {
+      "id": "repair",
+      "label": "Repair Scheduler",
+      "kind": "scheduler",
+      "description": "Walks every token range on a cycle and starts a Merkle tree repair for it, one range at a time",
+      "cloud": {
+        "aws": "EKS",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "backups",
+      "label": "Snapshot Backups",
+      "kind": "object_store",
+      "description": "SSTable snapshots and commit log segments for point in time restore",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "app",
+      "to": "dns"
+    },
+    {
+      "from": "app",
+      "to": "nlb",
+      "protocol": "TCP + TLS"
+    },
+    {
+      "from": "nlb",
+      "to": "router"
+    },
+    {
+      "from": "router",
+      "to": "storage-a",
+      "label": "coordinate"
+    },
+    {
+      "from": "storage-a",
+      "to": "storage-b",
+      "label": "replicate, gossip, repair"
+    },
+    {
+      "from": "storage-a",
+      "to": "storage-c",
+      "label": "replicate"
+    },
+    {
+      "from": "storage-a",
+      "to": "storage-d",
+      "label": "hinted write"
+    },
+    {
+      "from": "storage-d",
+      "to": "storage-c",
+      "label": "replay hints",
+      "async": true
+    },
+    {
+      "from": "repair",
+      "to": "storage-a",
+      "label": "repair range",
+      "async": true
+    },
+    {
+      "from": "storage-a",
+      "to": "backups",
+      "label": "snapshots",
+      "async": true
+    }
+  ],
+  "flows": [
+    {
+      "id": "quorum-write",
+      "title": "Quorum write (put, W = 2)",
+      "summary": "The router finds the key's three replicas on the ring; the first one coordinates, writes locally, replicates to the other two and answers once two copies are durable.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve kv.example.com",
+          "detail": "The client library needs an address for the routing tier. It caches the answer and keeps pooled connections open, so this lookup is rare."
+        },
+        {
+          "from": "dns",
+          "to": "app",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "NLB static IPs",
+          "payload": "kv.example.com.  60  IN A  203.0.113.20"
+        },
+        {
+          "from": "app",
+          "to": "nlb",
+          "kind": "req",
+          "phase": "Route to the key",
+          "label": "PUT cart:user-42 (W=2)",
+          "detail": "The put carries the context (vector clock) the app got when it last read this key, which tells the store which version this write replaces.",
+          "payload": "PUT key=cart:user-42\nconsistency=QUORUM (W=2)\ncontext={A:3}\nvalue=<1.2 KB JSON>"
+        },
+        {
+          "from": "nlb",
+          "to": "router",
+          "kind": "req",
+          "phase": "Route to the key",
+          "label": "any router",
+          "detail": "Routers are stateless and identical, so a layer 4 balancer just spreads connections; losing a router only moves its connections."
+        },
+        {
+          "from": "router",
+          "to": "router",
+          "kind": "local",
+          "phase": "Route to the key",
+          "label": "hash key, find preference list",
+          "detail": "Murmur3 of the key gives a 64 bit token. Walking the ring clockwise from it, the router takes the first three virtual nodes that belong to different physical nodes in different zones. The ring comes from gossip, so no metadata lookup sits on the request path.",
+          "payload": "token(cart:user-42) = 0x3f9a71c2e04b8d15\npreference list = [A (zone a), B (zone b), C (zone c)]\nnext healthy fallback = D"
+        },
+        {
+          "from": "router",
+          "to": "storage-a",
+          "kind": "req",
+          "phase": "Route to the key",
+          "label": "forward to first replica",
+          "detail": "The first healthy replica in the preference list coordinates. Keeping coordination on a replica means version counters for this key advance on one node, so two concurrent puts cannot get the same version stamp."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Version and persist",
+          "label": "stamp {A:4}",
+          "detail": "A's stored version is {A:3} and the client's context covers it, so the new value supersedes it and gets clock {A:4}. Had the context not covered what A holds, A would keep both values as siblings instead of overwriting."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Version and persist",
+          "label": "commit log append + memtable",
+          "detail": "The write is appended to the commit log, fsynced with group commit every 2 ms, then inserted into the memtable, a sorted in-memory map. No random disk write happens on the write path, which keeps put latency flat."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-b",
+          "kind": "req",
+          "phase": "Replicate",
+          "label": "replicate {A:4}",
+          "detail": "A sends the write to the other two replicas in parallel. With one replica per zone, a whole zone can go down and two copies remain.",
+          "payload": "{ \"op\": \"put\", \"key\": \"cart:user-42\", \"clock\": {\"A\": 4}, \"value\": \"<1.2 KB>\" }"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-c",
+          "kind": "req",
+          "phase": "Replicate",
+          "label": "replicate {A:4}",
+          "detail": "Sent at the same moment as to B. A does not wait for both answers."
+        },
+        {
+          "from": "storage-b",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Quorum",
+          "label": "ack (logged)",
+          "detail": "B acks after its own commit log append, so this is a second durable copy in a second zone."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Quorum",
+          "label": "W=2 reached (A + B)",
+          "detail": "The coordinator's own write counts toward W. It answers now instead of waiting for C, so the slowest replica does not set the client's latency."
+        },
+        {
+          "from": "storage-a",
+          "to": "router",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "OK, context {A:4}",
+          "detail": "The new context goes back so the app's next write to this key can say which version it saw."
+        },
+        {
+          "from": "router",
+          "to": "nlb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "OK"
+        },
+        {
+          "from": "nlb",
+          "to": "app",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "OK, context {A:4}",
+          "payload": "OK version={A:4} acks=2/3"
+        },
+        {
+          "from": "storage-c",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Late ack",
+          "label": "ack (12 ms later)",
+          "detail": "C's ack arrives after the client already has its answer. If it never arrived, read repair or anti-entropy would bring C up to date later."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Flush and compact",
+          "label": "memtable to SSTable, compact",
+          "detail": "When the memtable reaches about 128 MB it is written out as an immutable sorted SSTable and its commit log segment is freed. Compaction later merges SSTables so reads open few files, and drops overwritten versions and expired tombstones."
+        }
+      ]
+    },
+    {
+      "id": "quorum-read",
+      "title": "Quorum read with read repair (get, R = 2)",
+      "summary": "Replica C missed the last write. The coordinator answers as soon as two replicas agree, then fixes C in the background.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "nlb",
+          "kind": "req",
+          "phase": "Route to the key",
+          "label": "GET cart:user-42 (R=2)",
+          "detail": "The connection is already open from earlier requests, so there is no DNS lookup or TLS handshake on this get.",
+          "payload": "GET key=cart:user-42\nconsistency=QUORUM (R=2)"
+        },
+        {
+          "from": "nlb",
+          "to": "router",
+          "kind": "req",
+          "phase": "Route to the key",
+          "label": "any router"
+        },
+        {
+          "from": "router",
+          "to": "router",
+          "kind": "local",
+          "phase": "Route to the key",
+          "label": "preference list [A, B, C]",
+          "detail": "Same hash, same ring, same three replicas as the write. Any replica may coordinate a read; the router prefers one in the caller's zone with low recent latency, here A."
+        },
+        {
+          "from": "router",
+          "to": "storage-a",
+          "kind": "req",
+          "phase": "Route to the key",
+          "label": "forward to A"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Read locally",
+          "label": "memtable, bloom filters, SSTables",
+          "detail": "A checks the memtable, then only the SSTables whose bloom filter says the key may be there, and merges the pieces it finds. Compaction keeps this to one to three files for most reads."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-b",
+          "kind": "req",
+          "phase": "Ask the replicas",
+          "label": "read cart:user-42",
+          "detail": "A needs one answer besides its own for R=2. It asks both other replicas so one slow node cannot hold up the read, and so it gets to check every copy."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-c",
+          "kind": "req",
+          "phase": "Ask the replicas",
+          "label": "read cart:user-42"
+        },
+        {
+          "from": "storage-b",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Quorum",
+          "label": "value {A:4}"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Quorum",
+          "label": "R=2 reached: A and B agree",
+          "detail": "Because R + W = 4 is greater than N = 3, every read quorum shares at least one replica with the last write quorum, so a completed write is visible here as long as both quorums were strict. That is read-your-writes, not linearizability."
+        },
+        {
+          "from": "storage-a",
+          "to": "router",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "value + context {A:4}"
+        },
+        {
+          "from": "router",
+          "to": "nlb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "value"
+        },
+        {
+          "from": "nlb",
+          "to": "app",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "value + context {A:4}",
+          "payload": "OK version={A:4}\nvalue=<1.2 KB JSON>"
+        },
+        {
+          "from": "storage-c",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Read repair",
+          "label": "value {A:3} (stale)",
+          "detail": "C answers late with an older version. {A:4} descends from {A:3}, so C is simply behind, not in conflict. Had the clocks been concurrent, A would have returned both values as siblings for the client to merge."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-c",
+          "kind": "async",
+          "phase": "Read repair",
+          "label": "repair: write {A:4}",
+          "detail": "A pushes the newest version to C in the background. Read repair only fixes keys that get read; anti-entropy covers the rest."
+        },
+        {
+          "from": "storage-c",
+          "to": "storage-c",
+          "kind": "local",
+          "phase": "Read repair",
+          "label": "apply {A:4}",
+          "detail": "C writes it through its normal commit log and memtable path, so the repair is as durable as any put."
+        }
+      ]
+    },
+    {
+      "id": "hinted-handoff",
+      "title": "Replica down: sloppy quorum and hinted handoff",
+      "summary": "Node C stops responding. Gossip marks it down, its copy of each write goes to D with a hint, and D hands the writes back when C returns.",
+      "steps": [
+        {
+          "from": "storage-a",
+          "to": "storage-b",
+          "kind": "req",
+          "phase": "Failure detection",
+          "label": "gossip digest",
+          "detail": "Every second each node swaps heartbeat counters and ring state with a few random peers. Information about any node reaches the whole cluster in O(log n) rounds with no central monitor.",
+          "payload": "{ \"from\": \"A\", \"heartbeats\": {\"A\": 88213, \"B\": 90127, \"C\": 71455, \"D\": 85002}, \"ring_version\": 412 }"
+        },
+        {
+          "from": "storage-b",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Failure detection",
+          "label": "C's heartbeat not advancing"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Failure detection",
+          "label": "phi(C) > 8: mark C down",
+          "detail": "A phi accrual detector turns the gap since C's last heartbeat into a suspicion level instead of using a fixed timeout, so a briefly slow network does not flap nodes. Down only means \"do not send to it for now\"; C keeps its ranges."
+        },
+        {
+          "from": "app",
+          "to": "nlb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "PUT cart:user-42 (W=2)",
+          "payload": "PUT key=cart:user-42\nconsistency=QUORUM (W=2)\ncontext={A:4}"
+        },
+        {
+          "from": "nlb",
+          "to": "router",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "any router"
+        },
+        {
+          "from": "router",
+          "to": "storage-a",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to A",
+          "detail": "The router's ring view also comes from gossip. A is healthy, so it coordinates as usual."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Persist",
+          "label": "stamp {A:5}, commit log + memtable"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-b",
+          "kind": "req",
+          "phase": "Replicate with a stand-in",
+          "label": "replicate {A:5}"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-d",
+          "kind": "req",
+          "phase": "Replicate with a stand-in",
+          "label": "hinted write for C",
+          "detail": "C is down, so A sends C's copy to D, the next healthy node clockwise that is not already a replica (in C's zone when possible). The write keeps three copies even though one intended replica is missing.",
+          "payload": "{ \"op\": \"put\", \"key\": \"cart:user-42\", \"clock\": {\"A\": 5}, \"hint_for\": \"C\", \"expires_in\": \"3h\" }"
+        },
+        {
+          "from": "storage-d",
+          "to": "storage-d",
+          "kind": "local",
+          "phase": "Replicate with a stand-in",
+          "label": "store hint for C",
+          "detail": "D keeps hinted writes apart from its own data, grouped by the node they belong to, so they can be replayed and deleted in bulk."
+        },
+        {
+          "from": "storage-b",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Quorum",
+          "label": "ack"
+        },
+        {
+          "from": "storage-d",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Quorum",
+          "label": "ack (hint stored)"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Quorum",
+          "label": "W=2 reached (A + B)",
+          "detail": "A and B are real replicas, so this quorum is strict. Had B been down too, D's hinted copy would count toward W and the put would still succeed: that is the sloppy quorum. The price is that a later R=2 read of A and B might not see the write, because the copy sits on D, outside the preference list."
+        },
+        {
+          "from": "storage-a",
+          "to": "router",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "OK, context {A:5}"
+        },
+        {
+          "from": "router",
+          "to": "nlb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "OK"
+        },
+        {
+          "from": "nlb",
+          "to": "app",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "OK, context {A:5}"
+        },
+        {
+          "from": "storage-d",
+          "to": "storage-c",
+          "kind": "async",
+          "phase": "Hint replay",
+          "label": "replay hints for C",
+          "detail": "Gossip shows C's heartbeat advancing again. D streams C's hinted writes to it, throttled so a node that just came back is not flooded."
+        },
+        {
+          "from": "storage-c",
+          "to": "storage-c",
+          "kind": "local",
+          "phase": "Hint replay",
+          "label": "apply {A:5}",
+          "detail": "C applies each write by vector clock, so a replayed write never overwrites something newer."
+        },
+        {
+          "from": "storage-d",
+          "to": "storage-d",
+          "kind": "local",
+          "phase": "Hint replay",
+          "label": "delete delivered hints",
+          "detail": "Hints older than the 3 hour window are dropped instead of replayed. A longer outage is closed by Merkle tree repair, which compares everything rather than trusting a log of what was missed."
+        }
+      ]
+    },
+    {
+      "id": "anti-entropy",
+      "title": "Anti-entropy repair with Merkle trees",
+      "summary": "Replicas compare hash trees of a token range and exchange only the rows that differ, which catches what read repair and hints missed.",
+      "steps": [
+        {
+          "from": "repair",
+          "to": "storage-a",
+          "kind": "async",
+          "phase": "Trigger",
+          "label": "repair range (t1, t2]",
+          "detail": "The scheduler walks every token range on a 5 day cycle, well inside the 10 day tombstone grace period, one range at a time so repair never takes over the disks."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Build trees",
+          "label": "Merkle tree for the range",
+          "detail": "A hashes each row of the range into one of 32,768 leaves, then hashes children pairwise up to a single root. Building it is one sequential read of the range."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-b",
+          "kind": "req",
+          "phase": "Build trees",
+          "label": "send your tree for (t1, t2]",
+          "detail": "B builds a tree over the same range and the same leaf boundaries from its own data. Only the trees, about 2 MB, cross the network instead of the roughly 5 GB of rows in the range."
+        },
+        {
+          "from": "storage-b",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Build trees",
+          "label": "tree, root 9c1e…"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Compare",
+          "label": "roots differ: 3 leaves differ",
+          "detail": "Equal roots would end the repair here. The roots differ, so A descends only into children whose hashes differ; after 15 levels it has found the 3 mismatched leaves, doing work proportional to the differences rather than the data."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-b",
+          "kind": "async",
+          "phase": "Exchange differences",
+          "label": "rows in 3 leaves",
+          "detail": "Only rows hashed into the mismatched leaves are streamed, in both directions."
+        },
+        {
+          "from": "storage-b",
+          "to": "storage-a",
+          "kind": "async",
+          "phase": "Exchange differences",
+          "label": "B's rows in 3 leaves"
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Exchange differences",
+          "label": "merge by vector clock",
+          "detail": "Each side keeps the version that descends from the other, and keeps both as siblings when the clocks are concurrent. The same pass runs between A and C and between B and C."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "tradeoff",
+      "text": "N = 3, R = 2, W = 2 is the default because R + W > N makes every read quorum overlap every write quorum. That gives read-your-writes for completed writes, not linearizability: a read racing an in-flight write can see the new value and the next read the old one, a put that failed after reaching one replica may surface later, and a sloppy quorum breaks the overlap. Callers choose per request: W = 1 for fast, loss-tolerant writes, R = 1 for cache-like reads, ALL when they must see every replica."
+    },
+    {
+      "target": "storage-a",
+      "kind": "tradeoff",
+      "text": "Vector clocks against last-write-wins: LWW stamps each write with a timestamp and keeps the highest, so one of two concurrent writes is silently lost, and clock skew can let an older write win. Vector clocks detect concurrency and keep siblings for the client to merge, at the cost of merge logic in every client and clocks that grow with the number of coordinators (trimmed after about 10 entries). LWW fits overwrite-only data such as sessions; clocks fit data that is edited concurrently, such as carts."
+    },
+    {
+      "target": "router",
+      "kind": "scaling",
+      "text": "Each server owns 128 virtual nodes scattered over the ring, so its load is the sum of many small ranges and evens out. A new server takes a small slice from nearly every existing server instead of half of one neighbour's range, and a failed server's load spreads over many peers. Bigger machines get more virtual nodes. The cost is more ranges to repair and more ring metadata to gossip."
+    },
+    {
+      "target": "storage-d",
+      "kind": "failure",
+      "text": "Hints are kept for 3 hours; after that the returning node is fixed by Merkle repair. Deletes are tombstones kept for a 10 day grace period, and every range must be repaired within it: a replica that missed a delete, once the tombstone is compacted away elsewhere, would hand the deleted value back as if it were new."
+    },
+    {
+      "target": "backups",
+      "kind": "failure",
+      "text": "Replication is not a backup: a bad delete or a buggy client write reaches all three replicas in milliseconds. Each node hard-links its immutable SSTables into a snapshot every few hours, uploads only new files, and ships commit log segments, so a keyspace can be restored to a point in time."
+    },
+    {
+      "target": "nlb",
+      "kind": "security",
+      "text": "Clients connect with mutual TLS and the load balancer only admits the callers' network ranges; in practice the store is exposed privately (PrivateLink or Private Service Connect) rather than to the internet. Node-to-node traffic also uses mTLS, data is encrypted at rest on the NVMe drives, and the router checks each client's credentials and per-keyspace permissions."
+    }
+  ],
+  "questions": [
+    {
+      "id": "quorum-consistency",
+      "q": "With N = 3, R = 2 and W = 2, is the store strongly consistent?",
+      "a": "Not by itself. R + W > N means any read quorum overlaps the replicas that acknowledged a completed write, so the read sees it if both quorums were strict and the coordinator returns the newest version. It is still not linearizable: a read during an in-flight write can see the new value and a later read the old one, a failed put can survive on one replica, and a sloppy quorum on fallback nodes breaks the overlap. Linearizable operations need consensus per range, such as Raft or Paxos, at a cost in latency and availability.",
+      "topic": "consistency",
+      "targets": [
+        "storage-a",
+        "storage-b",
+        "storage-c"
+      ]
+    },
+    {
+      "id": "virtual-nodes",
+      "q": "Why give each server many virtual nodes instead of one position on the ring?",
+      "a": "With one token per server, range sizes are uneven, a new server relieves only its clockwise neighbour, and a failed server's whole load lands on the next one. With 128 virtual nodes per server, each server owns many small scattered ranges, so load averages out, a new server takes a little from everyone, and a failure spreads over many peers. Bigger machines can take more virtual nodes. The costs are more ranges to repair and more ring state to gossip.",
+      "topic": "scale",
+      "targets": [
+        "router",
+        "storage-a"
+      ]
+    },
+    {
+      "id": "concurrent-writes",
+      "q": "Two clients update the same key at the same moment. What happens with last-write-wins, and what happens with vector clocks?",
+      "a": "With last-write-wins each write carries a timestamp and the higher one replaces the other, so one update is silently lost, and clock skew can even let the older write win. With vector clocks, replicas see that neither version descends from the other and keep both as siblings; the next read returns both and the client merges them, for example by taking the union of two carts. Vector clocks avoid silent loss but push merge logic into every client, so many systems use LWW for overwrite-only data and clocks or CRDTs where concurrent edits matter.",
+      "topic": "tradeoffs",
+      "targets": [
+        "storage-a",
+        "app"
+      ]
+    },
+    {
+      "id": "replica-down",
+      "q": "A storage node is down for 30 minutes during peak writes. How does the store stay writable, and how does the node catch up?",
+      "a": "Gossip and the phi accrual detector mark it down, and coordinators send its copy of each write to the next healthy node on the ring with a hint, so W = 2 keeps succeeding (sloppy quorum and hinted handoff). When gossip sees it alive again, the hint holders replay the writes to it, throttled. Anything hints did not cover, such as an outage longer than the hint window or a hint holder that also failed, is fixed by read repair for keys that get read and Merkle tree anti-entropy for the rest.",
+      "topic": "reliability",
+      "targets": [
+        "storage-c",
+        "storage-d",
+        "storage-a"
+      ]
+    },
+    {
+      "id": "merkle",
+      "q": "Two replicas each hold about 2 TB. How do they find which keys differ without shipping all the data?",
+      "a": "Each replica builds a Merkle tree per token range: rows hash into leaves and every parent is the hash of its children. They exchange trees of a few MB, compare roots, and descend only into subtrees whose hashes differ, so the work grows with the number of differences rather than the data size. Only rows in mismatched leaves are streamed. Building a tree still reads the whole range, so a scheduler repairs one range at a time and throttles it.",
+      "topic": "data",
+      "targets": [
+        "storage-a",
+        "storage-b",
+        "repair"
+      ]
+    },
+    {
+      "id": "lsm",
+      "q": "Why use a log-structured engine (commit log, memtable, SSTables) for the storage nodes, and what does it cost?",
+      "a": "A put becomes a sequential commit log append plus an in-memory insert, which keeps write latency low and steady at high write rates. The cost moves to reads and background work: one key can be spread over several SSTables, so reads rely on bloom filters and compaction to keep the file count low, and compaction rewrites data, so disks need free headroom. Deletes are tombstones that must outlive the repair cycle before compaction can drop them.",
+      "topic": "performance",
+      "targets": [
+        "storage-a"
+      ]
+    }
+  ]
+}

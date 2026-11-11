@@ -132,7 +132,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
           </div>
           <input className="search" placeholder="Search designs or tags…" value={q} onChange={e => setQ(e.target.value)} />
         </div>
-        <p className="lib-note muted">These 12 are reference designs, not the only right answers, and you can add your own questions below. Interviewers accept other approaches when you can explain the trade-offs, so use them to compare with your own.</p>
+        <p className="lib-note muted">These {library.length} are reference designs, not the only right answers, and you can add your own questions below. Interviewers accept other approaches when you can explain the trade-offs, so use them to compare with your own.</p>
         <div className="card-grid">
           {shown.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}
           {!shown.length && <p className="muted">No designs match.</p>}
@@ -143,11 +143,11 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
         <div className="lib-head"><h2>My designs</h2></div>
         {mine.length > 0
           ? <div className="card-grid">{mine.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}</div>
-          : <p className="muted">The 12 designs above are just a start. Any other interview question works too: <button className="link" onClick={onImport}>import a design</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>, and it appears here with the same Explore, Practice, checks and review as the library.</p>}
+          : <p className="muted">The {library.length} designs above are just a start. Any other interview question works too: <button className="link" onClick={onImport}>import a design</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>, and it appears here with the same Explore, Practice, checks and review as the library.</p>}
       </section>
 
       <section className="home-foot">
-        <p>Not limited to these 12: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button> for any system design question, then explore and practise it like the others. Optional: <button className="link" onClick={openAiSettings}>connect your own API key</button> to send reviews and prompts from here.</p>
+        <p>Not limited to these {library.length}: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button> for any system design question, then explore and practise it like the others. Optional: <button className="link" onClick={openAiSettings}>connect your own API key</button> to send reviews and prompts from here.</p>
         <p className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</p>
       </section>
     </div>

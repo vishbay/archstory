@@ -10,17 +10,17 @@ Explore real architectures and watch each request travel through them hop by hop
 
 ## Features
 
-- **Explore** 12 built-in designs with step-by-step request flows: URL shortener, news feed, ride hailing, chat, video streaming, checkout, ticket booking, file storage and sync, multi-tenant SaaS, autocomplete, rate limiter and notifications.
+- **Explore** 16 built-in designs with step-by-step request flows: URL shortener, news feed, ride hailing, chat, video streaming, checkout, ticket booking, file storage and sync, multi-tenant SaaS, autocomplete, rate limiter, notifications, web crawler, distributed key-value store, payment ledger and job scheduler.
 - **Any cloud**: switch between cloud-neutral names, AWS and GCP, with official icons.
 - **Network and zones**: VPCs, subnets and availability-zone failure drills.
 - **Monitoring**: SLOs with error budgets, alerts (page or ticket), what to watch on each component and how to debug it, plus a telemetry layer you can switch on.
 - **Practice**: draw your own design (type `/` to add components, start from a skeleton), record its flows and get automatic checks against a reference. Save attempts and track your progress.
 - **Timed interviews**: the usual phases on a 30, 45 or 60 minute clock, with a checklist for each.
 - **Estimate calculator**: requests per second, storage, bandwidth and cache size, with the arithmetic shown.
-- **Follow-up questions**: 72 questions interviewers ask next, with model answers and a daily spaced-repetition drill.
+- **Follow-up questions**: 96 questions interviewers ask next, with model answers and a daily spaced-repetition drill.
 - **AI interviewer** (optional, your own API key): a mock interview that asks one question at a time about your design, by text or voice.
 - **Review with your own AI**: ArchStory writes the prompt and its findings appear on your design. Paste it into any assistant, or optionally connect your own API key (Anthropic, OpenAI, Gemini, or a local server such as Ollama) to send it from the app.
-- **Any question, not just the 12**: import any other system design question as JSON, or have your own AI write one. An imported design gets everything the built-in ones do: Explore, Practice with automatic checks, timed interviews, AI review and the follow-up drill. No AI or server of its own, no account. An API key stays in your browser and goes only to the provider you pick.
+- **Any question, not just the built-in ones**: import any other system design question as JSON, or have your own AI write one. An imported design gets everything the built-in ones do: Explore, Practice with automatic checks, timed interviews, AI review and the follow-up drill. No AI or server of its own, no account. An API key stays in your browser and goes only to the provider you pick.
 
 ## Quick start
 
@@ -65,7 +65,7 @@ For interview practice, a mid-range model (Claude Sonnet 5.5, GPT-6.1 Sol or Gem
 
 ## Add a design
 
-The 12 built-in designs are a starting set. You can add any other question, in the app or in the repo.
+The built-in designs are a starting set. You can add any other question, in the app or in the repo.
 
 **In the app** (nothing to install): use Import in the left panel or on the home page, or Prompt for your AI to have an assistant write one. Imported designs are saved in your browser under My designs, and you can practise them exactly like the library.
 

@@ -1,0 +1,1090 @@
+{
+  "schema": "archstory/v1",
+  "id": "web-crawler",
+  "meta": {
+    "title": "Web Crawler",
+    "summary": "Crawl about a billion pages a month politely: a URL frontier with per-host politeness and priority, cached robots.txt and DNS, URL and content dedup, and adaptive recrawls.",
+    "tags": [
+      "crawling",
+      "queues",
+      "dedup",
+      "politeness"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Crawl pages starting from seed URLs and from links found in fetched pages",
+      "Obey robots.txt and never send a host more than one request at a time, with a delay between requests",
+      "Store the raw HTML of every fetched page, plus metadata (status, content hash, fetch time, next crawl time)",
+      "Skip URLs that were already seen and pages whose content duplicates a page already stored",
+      "Recrawl known pages on a schedule that follows how often each one changes"
+    ],
+    "nonFunctional": [
+      "Sustain 1B fetched pages per month, scaling out by adding fetchers rather than through one coordinator",
+      "Politeness: one connection per host, at least 1 s (or the robots.txt Crawl-delay) between requests",
+      "Robust to crawler traps, malformed HTML and slow, broken or hostile servers",
+      "A stored raw page is never lost; a crashed component loses at most in-flight fetches, which are retried",
+      "95% of high-priority pages are recrawled within 24 hours of their due time"
+    ],
+    "scale": [
+      {
+        "label": "Fetch rate",
+        "value": "1B pages / month ≈ 400 pages/s avg, plan for ~1,000/s peak"
+      },
+      {
+        "label": "Bandwidth",
+        "value": "~100 KB avg page ≈ 40 MB/s (~320 Mbit/s) avg, ~1 Gbit/s peak"
+      },
+      {
+        "label": "Raw storage",
+        "value": "~25 KB per page gzipped ≈ 25 TB / month, ~300 TB / year"
+      },
+      {
+        "label": "Known URLs",
+        "value": "~10B URLs × ~200 B of metadata ≈ 2 TB"
+      },
+      {
+        "label": "URL seen set",
+        "value": "Bloom filter at 1% false positives ≈ 9.6 bits/URL ≈ 12 GB for 10B URLs (exact 8-byte fingerprints: 80 GB+)"
+      },
+      {
+        "label": "Link discovery",
+        "value": "~50 links / page ≈ 20,000 URLs/s to normalize and dedup"
+      },
+      {
+        "label": "Hosts in flight",
+        "value": "1,000 pages/s with each host fetched at most every ~2 s needs ≥ 2,000 hosts ready at once"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.20.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public (NAT gateways)",
+        "public": true,
+        "tiers": [],
+        "cidr": "10.20.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.20.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.20.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "fetch-success",
+        "name": "Crawler-side fetch success",
+        "kind": "availability",
+        "sli": "Fetch attempts that did not fail because of our own components (resolver, frontier, stores, stream), divided by all fetch attempts, measured at the fetchers. Errors returned by remote sites do not count against it.",
+        "target": 99.5
+      },
+      {
+        "id": "freshness",
+        "name": "Priority page freshness",
+        "kind": "freshness",
+        "sli": "High-priority pages fetched within the threshold of their next_crawl_at, divided by all high-priority pages that came due, measured from the metadata store",
+        "target": 95,
+        "threshold": "< 24 h late"
+      },
+      {
+        "id": "politeness",
+        "name": "Politeness",
+        "kind": "correctness",
+        "sli": "Requests that respected robots.txt, one connection per host and the host's delay, divided by all requests, audited from the fetchers' request log",
+        "target": 100
+      }
+    ],
+    "alerts": [
+      {
+        "id": "politeness-violation",
+        "severity": "page",
+        "when": "Any host receives two concurrent requests or requests closer together than its delay, more than 10 times in 5 minutes",
+        "why": "Hammering a site gets the crawler's IPs blocked and draws abuse complaints. It usually means two frontier shards think they own the same host, so it needs a human now.",
+        "target": "frontier",
+        "slo": "politeness"
+      },
+      {
+        "id": "fetch-error-burn",
+        "severity": "page",
+        "when": "Crawler-side fetch errors burning the error budget 10 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Our own components are failing fetches, so the crawl is falling behind for every host at once.",
+        "target": "fetcher",
+        "slo": "fetch-success"
+      },
+      {
+        "id": "freshness-burn",
+        "severity": "page",
+        "when": "More than 10% of high-priority pages that came due in the last 6 hours are still unfetched",
+        "why": "The pages that matter most are going stale for whoever consumes the crawl. Usually the frontier or the scheduler is stuck.",
+        "target": "scheduler",
+        "slo": "freshness"
+      },
+      {
+        "id": "dns-slow",
+        "severity": "ticket",
+        "when": "Resolver cache hit ratio below 90% or p99 lookup time above 200 ms for 30 minutes",
+        "why": "Slow lookups hold fetch connections idle and cut throughput. A cause to fix before freshness suffers.",
+        "target": "dns_cache"
+      },
+      {
+        "id": "parser-lag",
+        "severity": "ticket",
+        "when": "Parser consumer lag above 30 minutes for 30 minutes",
+        "why": "Fetching continues, but new links and metadata arrive late. The stream absorbs the backlog while parsers are scaled out.",
+        "target": "parse_q"
+      },
+      {
+        "id": "bloom-fill",
+        "severity": "ticket",
+        "when": "Estimated Bloom filter false positive rate above 2%",
+        "why": "Each false positive is a new URL that is silently never crawled. Rebuild the filter larger from the metadata store before coverage drops.",
+        "target": "url_seen"
+      }
+    ],
+    "signals": [
+      {
+        "target": "frontier",
+        "name": "Hosts ready in the politeness heap",
+        "metric": "frontier_ready_hosts",
+        "why": "Fetchers can only work on hosts whose delay has passed. If this falls below the number of fetch slots, fetchers sit idle even with billions of URLs queued."
+      },
+      {
+        "target": "fetcher",
+        "name": "Response code mix and fetch time per host",
+        "metric": "fetch_responses_total{code}, fetch_duration_seconds",
+        "why": "A rise in 429 or 503 means we are too aggressive somewhere; fetch time feeds the per-host delay."
+      },
+      {
+        "target": "dns_cache",
+        "name": "Cache hit ratio and upstream lookup time",
+        "metric": "dns_cache_hit_ratio, dns_upstream_seconds",
+        "why": "Uncached recursive lookups take 10 to 200 ms and are the classic hidden bottleneck of a crawler."
+      },
+      {
+        "target": "url_seen",
+        "name": "Filter fill ratio and estimated false positive rate",
+        "metric": "bloom_fill_ratio",
+        "why": "The false positive rate rises sharply as the filter fills, so it must be resized before it is half full."
+      },
+      {
+        "target": "content_dedup",
+        "name": "Exact and near-duplicate share",
+        "metric": "dedup_hits_total{type}",
+        "why": "A sudden jump usually means a site serving one page under endless URLs: a trap the URL filters missed."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Pages per second dropped, but fetchers report low CPU and few open connections",
+        "steps": [
+          "Check hosts ready in the frontier heap. Few ready hosts means the frontier is dominated by a handful of large hosts all waiting out their delay.",
+          "If so, check front queue selection: discovery may have flooded the queues with one site's URLs. Cap per-host queue length and refill back queues from other hosts.",
+          "Check resolver lookup time. A cold or overloaded DNS cache makes each fetch wait before it connects.",
+          "Check robots.txt cache misses and robots fetch errors. Hosts whose robots.txt returns 5xx are treated as fully disallowed and drop out of the ready set.",
+          "Check parser lag. If parsers are behind, no new URLs reach the frontier and it slowly runs dry."
+        ]
+      },
+      {
+        "symptom": "A site owner reports that the crawler is overloading their server",
+        "steps": [
+          "Pull the request log for the host and confirm the gaps between requests and the number of concurrent connections.",
+          "Check which frontier shard owns the host. A shard rebalance that left two owners breaks the one-connection rule.",
+          "Check whether many hostnames on the site resolve to the same IP. Politeness keyed only by hostname lets wildcard subdomains share one server; key the delay by IP or registered domain too.",
+          "Check that the robots.txt cache picked up their latest rules, and lower the TTL or purge the entry if they just changed it."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "frontier",
+      "label": "URL Frontier",
+      "kind": "service",
+      "description": "Priority front queues, per-host back queues and a politeness heap; sharded by host hash",
+      "replicas": 6,
+      "cloud": {
+        "aws": "EKS",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "dns_cache",
+      "label": "Caching DNS Resolver",
+      "kind": "dns",
+      "tier": "services",
+      "description": "Self-run resolver fleet (for example Unbound) inside the VPC; caches answers for their TTL"
+    },
+    {
+      "id": "frontier_store",
+      "label": "Frontier Queue Store",
+      "kind": "nosql_db",
+      "description": "Durable per-host URL queues and host state (next allowed time, backoff)",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Bigtable"
+      }
+    },
+    {
+      "id": "robots_cache",
+      "label": "Robots.txt Cache",
+      "kind": "cache",
+      "description": "Parsed robots.txt rules per host, 24 h TTL",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "content_dedup",
+      "label": "Content Fingerprints",
+      "kind": "nosql_db",
+      "description": "SHA-256 of each body, plus 64-bit SimHash split into four 16-bit block tables",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Bigtable"
+      }
+    },
+    {
+      "id": "url_seen",
+      "label": "URL Seen Filter",
+      "kind": "cache",
+      "description": "Bloom filter bitmaps sharded by URL hash, checked and set atomically",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "raw_store",
+      "label": "Raw Page Store",
+      "kind": "object_store",
+      "description": "Compressed HTML and response headers (WARC records)",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "meta_db",
+      "label": "Page Metadata DB",
+      "kind": "nosql_db",
+      "description": "One row per known URL: status, hash, ETag, last fetch, change rate, next_crawl_at",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Bigtable"
+      }
+    },
+    {
+      "id": "scheduler",
+      "label": "Recrawl Scheduler",
+      "kind": "scheduler",
+      "description": "Finds known pages that are due and feeds them back to the frontier",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "fetcher",
+      "label": "Fetcher Fleet",
+      "kind": "worker",
+      "description": "Async HTTP clients, hundreds of connections each, one per host",
+      "replicas": 12,
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "parse_q",
+      "label": "Fetched Pages Stream",
+      "kind": "stream",
+      "description": "One event per fetch result, partitioned by host",
+      "cloud": {
+        "aws": "Kinesis Data Streams",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "parser",
+      "label": "Parser & Link Extractor",
+      "kind": "worker",
+      "description": "Extracts and normalizes links, filters traps, records metadata",
+      "replicas": 8,
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "web",
+      "label": "Websites",
+      "kind": "external_api",
+      "description": "Millions of independent hosts, some slow, broken or hostile"
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "scheduler",
+      "to": "meta_db",
+      "label": "due pages"
+    },
+    {
+      "from": "scheduler",
+      "to": "frontier",
+      "label": "recrawls"
+    },
+    {
+      "from": "frontier",
+      "to": "frontier_store"
+    },
+    {
+      "from": "fetcher",
+      "to": "frontier",
+      "label": "lease / complete"
+    },
+    {
+      "from": "fetcher",
+      "to": "dns_cache",
+      "protocol": "DNS"
+    },
+    {
+      "from": "fetcher",
+      "to": "robots_cache"
+    },
+    {
+      "from": "fetcher",
+      "to": "web",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "fetcher",
+      "to": "content_dedup"
+    },
+    {
+      "from": "fetcher",
+      "to": "raw_store"
+    },
+    {
+      "from": "fetcher",
+      "to": "parse_q",
+      "async": true
+    },
+    {
+      "from": "parse_q",
+      "to": "parser"
+    },
+    {
+      "from": "parser",
+      "to": "raw_store"
+    },
+    {
+      "from": "parser",
+      "to": "url_seen"
+    },
+    {
+      "from": "parser",
+      "to": "frontier",
+      "label": "new URLs",
+      "async": true
+    },
+    {
+      "from": "parser",
+      "to": "meta_db"
+    }
+  ],
+  "flows": [
+    {
+      "id": "fetch",
+      "title": "Fetch a page (robots.txt not cached)",
+      "summary": "The main loop: lease a URL whose host is ready, resolve it, check robots.txt, download, dedup the content, store it and hand it to the parsers.",
+      "steps": [
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Lease a URL",
+          "label": "POST /lease",
+          "detail": "Fetchers pull work instead of having it pushed, so a fetcher only takes a URL when it has a free connection slot. Each fetcher leases from the frontier shard that owns a set of hosts.",
+          "payload": "POST /lease HTTP/1.1\nHost: frontier-17.internal\n\n{ \"fetcher\": \"f-04\", \"slots\": 1 }"
+        },
+        {
+          "from": "frontier",
+          "to": "frontier",
+          "kind": "local",
+          "phase": "Lease a URL",
+          "label": "pop politeness heap",
+          "detail": "Mercator design: front queues hold URLs by priority, and back queues each hold URLs for exactly one host. A min-heap keyed by each host's next allowed time gives the host that may be contacted soonest, and its back queue gives the URL. Because a host lives on one shard and one back queue, politeness needs no distributed locks."
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Lease a URL",
+          "label": "lease 60 s",
+          "detail": "The host is marked busy until the fetcher reports back or the lease expires, so no other fetcher can open a second connection to it.",
+          "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"host\": \"example.org\", \"lease_id\": \"l_9f3a\", \"expires_in\": 60, \"attempt\": 1 }"
+        },
+        {
+          "from": "fetcher",
+          "to": "dns_cache",
+          "kind": "req",
+          "phase": "Resolve host",
+          "label": "A? example.org",
+          "detail": "Every fetch needs an IP, and an uncached recursive lookup costs 10 to 200 ms. A crawler touching millions of hosts overwhelms shared or provider resolvers, so it runs its own caching resolver fleet next to the fetchers."
+        },
+        {
+          "from": "dns_cache",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Resolve host",
+          "label": "cache hit",
+          "detail": "Answered from cache for the record's TTL. The frontier can also prefetch DNS for hosts about to become ready, so lookups rarely sit on the fetch path.",
+          "payload": "example.org.  2817  IN A  93.184.215.14"
+        },
+        {
+          "from": "fetcher",
+          "to": "fetcher",
+          "kind": "local",
+          "phase": "Resolve host",
+          "label": "reject private IPs",
+          "detail": "URLs come from untrusted pages, so a link to an internal name could make the crawler fetch its own network or the cloud metadata endpoint. Refuse private, loopback and link-local addresses, and connect to the IP that was checked so a second lookup cannot swap it."
+        },
+        {
+          "from": "fetcher",
+          "to": "robots_cache",
+          "kind": "req",
+          "phase": "Check robots.txt",
+          "label": "GET robots:example.org",
+          "detail": "robots.txt applies per host and changes rarely, so the parsed rules are cached instead of being fetched before every page."
+        },
+        {
+          "from": "robots_cache",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Check robots.txt",
+          "label": "MISS (expired)",
+          "detail": "The cached copy passed its 24 hour TTL, the longest RFC 9309 recommends keeping one."
+        },
+        {
+          "from": "fetcher",
+          "to": "web",
+          "kind": "req",
+          "phase": "Check robots.txt",
+          "label": "GET /robots.txt",
+          "detail": "Fetched over the same connection that will fetch the page. It counts toward the host's politeness budget like any other request.",
+          "payload": "GET /robots.txt HTTP/1.1\nHost: example.org\nUser-Agent: ExampleBot/2.1 (+https://crawler.example.com/bot)"
+        },
+        {
+          "from": "web",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Check robots.txt",
+          "label": "200 text/plain",
+          "detail": "A 4xx means no rules (everything allowed). A 5xx or a timeout means assume everything is disallowed and try again later, because the site may be struggling.",
+          "payload": "User-agent: *\nDisallow: /admin/\nDisallow: /search\nCrawl-delay: 2\nSitemap: https://example.org/sitemap.xml"
+        },
+        {
+          "from": "fetcher",
+          "to": "robots_cache",
+          "kind": "req",
+          "phase": "Check robots.txt",
+          "label": "SET EX 86400",
+          "detail": "Store the parsed rules, not the raw file, so every later check is a lookup. The Crawl-delay is also reported to the frontier with the result.",
+          "payload": "SET robots:example.org '{\"disallow\":[\"/admin/\",\"/search\"],\"crawl_delay\":2}' EX 86400"
+        },
+        {
+          "from": "fetcher",
+          "to": "fetcher",
+          "kind": "local",
+          "phase": "Check robots.txt",
+          "label": "/blog/post-42 allowed",
+          "detail": "Longest matching rule wins. A disallowed URL is dropped and recorded as blocked, without any request to the page."
+        },
+        {
+          "from": "fetcher",
+          "to": "web",
+          "kind": "req",
+          "phase": "Fetch page",
+          "label": "GET /blog/post-42",
+          "detail": "One connection per host, with a 30 s total timeout and a 10 MB body cap so a slow or endless response cannot tie up a slot.",
+          "payload": "GET /blog/post-42 HTTP/1.1\nHost: example.org\nUser-Agent: ExampleBot/2.1 (+https://crawler.example.com/bot)\nAccept: text/html\nAccept-Encoding: gzip, br"
+        },
+        {
+          "from": "web",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Fetch page",
+          "label": "200 text/html, 84 KB",
+          "detail": "The fetch took 0.4 s. That time feeds the host's delay: slower servers get proportionally more time between requests.",
+          "payload": "HTTP/1.1 200 OK\nContent-Type: text/html; charset=utf-8\nContent-Encoding: gzip\nETag: \"5f2a-61c\"\nLast-Modified: Mon, 09 Nov 2026 18:02:11 GMT"
+        },
+        {
+          "from": "fetcher",
+          "to": "fetcher",
+          "kind": "local",
+          "phase": "Content dedup",
+          "label": "SHA-256 + 64-bit SimHash",
+          "detail": "The exact hash catches byte-identical copies (mirrors, the same page under several URLs). SimHash, computed over the visible text, catches near-duplicates that differ only in ads, dates or session tokens."
+        },
+        {
+          "from": "fetcher",
+          "to": "content_dedup",
+          "kind": "req",
+          "phase": "Content dedup",
+          "label": "lookup + conditional put",
+          "detail": "Check the exact hash, then the four 16-bit SimHash blocks. Two fingerprints within 3 bits of each other must share at least one block exactly, so four keyed lookups find every near-duplicate candidate without scanning.",
+          "payload": "PutItem sha256=9c1e…b7 url=https://example.org/blog/post-42\nConditionExpression: attribute_not_exists(sha256)"
+        },
+        {
+          "from": "content_dedup",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Content dedup",
+          "label": "new content",
+          "detail": "No match, so the page is stored. A duplicate would skip storage and parsing, and only record which URL it duplicates."
+        },
+        {
+          "from": "fetcher",
+          "to": "raw_store",
+          "kind": "req",
+          "phase": "Store and hand off",
+          "label": "PUT raw page",
+          "detail": "Raw HTML goes to object storage because it is large, written once and read rarely. Keeping it means parsers can be rerun later without refetching from the site.",
+          "payload": "PUT /raw/2026/11/10/9c1e…b7.warc.gz\nContent-Length: 24816"
+        },
+        {
+          "from": "raw_store",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Store and hand off",
+          "label": "200 OK",
+          "detail": "Durable once acknowledged. Only now is it safe to announce the page."
+        },
+        {
+          "from": "fetcher",
+          "to": "parse_q",
+          "kind": "async",
+          "phase": "Store and hand off",
+          "label": "publish page_fetched",
+          "detail": "Parsing is CPU-bound and fetching is network-bound, so they scale separately. The event carries a pointer to the stored page, not the HTML.",
+          "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"status\": 200, \"object\": \"raw/2026/11/10/9c1e…b7.warc.gz\", \"sha256\": \"9c1e…b7\", \"simhash\": \"0x8f3a21c4d09e7b15\", \"etag\": \"5f2a-61c\", \"fetched_at\": 1762790400 }"
+        },
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Release host",
+          "label": "POST /complete",
+          "detail": "Releasing the lease tells the frontier when the host may be contacted again: now plus the larger of the Crawl-delay and 10 times the last fetch time (Mercator's rule).",
+          "payload": "{ \"lease_id\": \"l_9f3a\", \"status\": 200, \"fetch_ms\": 400, \"crawl_delay_s\": 2 }"
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Release host",
+          "label": "ok, next at +4 s",
+          "detail": "The host goes back into the heap with next allowed time now + 4 s, and the slot is free for whichever host is ready next."
+        }
+      ]
+    },
+    {
+      "id": "discover",
+      "title": "Parse and discover links",
+      "summary": "A parser turns a fetched page into new URLs: extract, normalize, filter traps, drop ones already seen, enqueue the rest with a priority and record the page's metadata.",
+      "steps": [
+        {
+          "from": "parse_q",
+          "to": "parser",
+          "kind": "async",
+          "phase": "Consume",
+          "label": "deliver page_fetched",
+          "detail": "The stream buffers results so a slow parser fleet never slows fetching. Delivery is at least once, so every write after this must be safe to repeat."
+        },
+        {
+          "from": "parser",
+          "to": "raw_store",
+          "kind": "req",
+          "phase": "Consume",
+          "label": "GET raw page",
+          "detail": "The event only points at the page, keeping stream messages small. The read is by key, so it is fast and cheap."
+        },
+        {
+          "from": "raw_store",
+          "to": "parser",
+          "kind": "res",
+          "phase": "Consume",
+          "label": "84 KB HTML"
+        },
+        {
+          "from": "parser",
+          "to": "parser",
+          "kind": "local",
+          "phase": "Extract links",
+          "label": "63 links found",
+          "detail": "Parse leniently (real HTML is often malformed), resolve relative links against the base URL, and respect rel=nofollow and meta robots. Links from sitemaps are added the same way."
+        },
+        {
+          "from": "parser",
+          "to": "parser",
+          "kind": "local",
+          "phase": "Normalize and filter",
+          "label": "normalize, drop 5 traps",
+          "detail": "Lowercase the scheme and host, drop the fragment and default port, strip session and tracking parameters, so one page does not appear under many URLs. Reject URLs over 2,000 characters, with repeating path segments, or beyond a per-host page budget: the usual signs of a trap such as an endless calendar.",
+          "payload": "HTTPS://Example.org:443/a/../b?utm_source=x&sid=91#top\n  becomes  https://example.org/b"
+        },
+        {
+          "from": "parser",
+          "to": "url_seen",
+          "kind": "req",
+          "phase": "URL dedup",
+          "label": "check-and-set 58 URLs",
+          "detail": "About 50 links per page means 20,000 lookups a second, most for URLs already known. A Bloom filter answers in memory at about 9.6 bits per URL; a Lua script checks and sets each URL's 7 bits atomically on the shard chosen by the URL hash.",
+          "payload": "EVALSHA bf_check_set 1 bf:{shard-41} <7 bit positions per URL × 58>"
+        },
+        {
+          "from": "url_seen",
+          "to": "parser",
+          "kind": "res",
+          "phase": "URL dedup",
+          "label": "21 new, 37 seen",
+          "detail": "A Bloom filter has no false negatives, so a URL is never crawled twice because of it. A false positive (about 1%) makes a new URL look seen, and that URL is skipped: a small loss of coverage, accepted for the memory saved."
+        },
+        {
+          "from": "parser",
+          "to": "frontier",
+          "kind": "async",
+          "phase": "Enqueue",
+          "label": "enqueue 21 URLs",
+          "detail": "Each URL is sent to the frontier shard that owns its host, with a priority from signals such as the linking page's importance, link depth and the host's quality.",
+          "payload": "{ \"urls\": [ { \"url\": \"https://example.org/blog/post-43\", \"priority\": 2, \"depth\": 3 }, … ] }"
+        },
+        {
+          "from": "frontier",
+          "to": "frontier",
+          "kind": "local",
+          "phase": "Enqueue",
+          "label": "front queue by priority",
+          "detail": "New URLs land in one of a few priority front queues. Back queues refill from them, choosing high priority more often, so important pages go first without starving the rest."
+        },
+        {
+          "from": "frontier",
+          "to": "frontier_store",
+          "kind": "req",
+          "phase": "Enqueue",
+          "label": "append to queues",
+          "detail": "Billions of queued URLs do not fit in memory. The frontier keeps only the head and tail of each queue in memory and persists the rest, so a restarted shard loses nothing."
+        },
+        {
+          "from": "frontier_store",
+          "to": "frontier",
+          "kind": "res",
+          "phase": "Enqueue",
+          "label": "ok"
+        },
+        {
+          "from": "parser",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Record metadata",
+          "label": "UpdateItem page row",
+          "detail": "The metadata row is the source of truth for what the crawler knows about a URL. The update is keyed by URL and overwrites fields, so a redelivered event writes the same values again.",
+          "payload": "UpdateItem url=https://example.org/blog/post-42\nSET status=200, sha256='9c1e…b7', etag='5f2a-61c', last_fetch=1762790400, next_crawl_at=1763395200"
+        },
+        {
+          "from": "meta_db",
+          "to": "parser",
+          "kind": "res",
+          "phase": "Record metadata",
+          "label": "ok"
+        },
+        {
+          "from": "parser",
+          "to": "parser",
+          "kind": "local",
+          "phase": "Record metadata",
+          "label": "commit offset",
+          "detail": "The offset is committed only after every write succeeded. A parser crash before this replays the event, which is safe because each write is idempotent."
+        }
+      ]
+    },
+    {
+      "id": "recrawl",
+      "title": "Recrawl a known page (304 Not Modified)",
+      "summary": "The scheduler feeds due pages back to the frontier. A conditional GET finds the page unchanged, so its recrawl interval grows.",
+      "steps": [
+        {
+          "from": "scheduler",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Find due pages",
+          "label": "query due bucket",
+          "detail": "Rows are indexed by the hour they fall due, spread over many shards, so the scheduler reads only pages that are due instead of scanning 10B rows.",
+          "payload": "Query index=by_due  due_hour='2026-11-10T14' AND shard=17"
+        },
+        {
+          "from": "meta_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Find due pages",
+          "label": "12,400 rows with ETags",
+          "detail": "Each row carries the stored ETag and Last-Modified, so the fetch can be conditional."
+        },
+        {
+          "from": "scheduler",
+          "to": "scheduler",
+          "kind": "local",
+          "phase": "Find due pages",
+          "label": "assign priority",
+          "detail": "Pages that change often and matter most (home pages, news) get high priority; long-stable pages get low priority."
+        },
+        {
+          "from": "scheduler",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Enqueue recrawls",
+          "label": "enqueue 12,400",
+          "detail": "Recrawls go through the same frontier as new URLs, so they obey the same per-host politeness. The URL seen filter is skipped because these URLs are known on purpose."
+        },
+        {
+          "from": "frontier",
+          "to": "frontier_store",
+          "kind": "req",
+          "phase": "Enqueue recrawls",
+          "label": "append to queues"
+        },
+        {
+          "from": "frontier_store",
+          "to": "frontier",
+          "kind": "res",
+          "phase": "Enqueue recrawls",
+          "label": "ok"
+        },
+        {
+          "from": "frontier",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Enqueue recrawls",
+          "label": "202 accepted",
+          "detail": "The scheduler moves each row to a pending state so the next run does not enqueue it again."
+        },
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Conditional fetch",
+          "label": "POST /lease",
+          "detail": "Later, when the host's turn comes, a fetcher leases the URL like any other."
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Conditional fetch",
+          "label": "lease + ETag",
+          "payload": "{ \"url\": \"https://example.org/about\", \"lease_id\": \"l_a771\", \"etag\": \"\\\"77b-5d0\\\"\", \"last_modified\": \"Tue, 03 Nov 2026 09:00:00 GMT\" }"
+        },
+        {
+          "from": "fetcher",
+          "to": "web",
+          "kind": "req",
+          "phase": "Conditional fetch",
+          "label": "GET If-None-Match",
+          "detail": "DNS and robots.txt come from cache as in the main flow (not shown). A conditional request lets the server skip sending the body when nothing changed.",
+          "payload": "GET /about HTTP/1.1\nHost: example.org\nIf-None-Match: \"77b-5d0\"\nIf-Modified-Since: Tue, 03 Nov 2026 09:00:00 GMT"
+        },
+        {
+          "from": "web",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Conditional fetch",
+          "label": "304 Not Modified",
+          "detail": "No body, so bandwidth and storage are saved. Servers that ignore these headers return 200, and the content hash then shows whether anything changed."
+        },
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Reschedule",
+          "label": "POST /complete",
+          "detail": "Releases the host so its delay starts counting."
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Reschedule",
+          "label": "ok"
+        },
+        {
+          "from": "fetcher",
+          "to": "parse_q",
+          "kind": "async",
+          "phase": "Reschedule",
+          "label": "publish not_modified",
+          "detail": "The same stream carries every fetch outcome, so metadata is always written in one place.",
+          "payload": "{ \"url\": \"https://example.org/about\", \"status\": 304, \"fetched_at\": 1762790400 }"
+        },
+        {
+          "from": "parse_q",
+          "to": "parser",
+          "kind": "async",
+          "phase": "Reschedule",
+          "label": "deliver not_modified"
+        },
+        {
+          "from": "parser",
+          "to": "parser",
+          "kind": "local",
+          "phase": "Reschedule",
+          "label": "interval × 2 (max 30 d)",
+          "detail": "Adaptive recrawl: an unchanged page waits twice as long next time, and a changed one waits half as long (down to an hour). Crawl budget flows to pages that actually change."
+        },
+        {
+          "from": "parser",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Reschedule",
+          "label": "UpdateItem next_crawl_at",
+          "payload": "UpdateItem url=https://example.org/about\nSET last_fetch=1762790400, interval_h=192, next_crawl_at=1763481600"
+        },
+        {
+          "from": "meta_db",
+          "to": "parser",
+          "kind": "res",
+          "phase": "Reschedule",
+          "label": "ok"
+        }
+      ]
+    },
+    {
+      "id": "host-failing",
+      "title": "Host slow or failing (backoff)",
+      "summary": "A host answers 503. The frontier backs that host off exponentially while fetchers keep working on other hosts.",
+      "steps": [
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Lease",
+          "label": "POST /lease"
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Lease",
+          "label": "shop.example.net, attempt 1",
+          "payload": "{ \"url\": \"https://shop.example.net/p/1187\", \"lease_id\": \"l_c204\", \"attempt\": 1 }"
+        },
+        {
+          "from": "fetcher",
+          "to": "web",
+          "kind": "req",
+          "phase": "Fetch fails",
+          "label": "GET /p/1187",
+          "detail": "DNS and robots.txt come from cache (not shown). The site is overloaded and takes 8 s to answer."
+        },
+        {
+          "from": "web",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Fetch fails",
+          "label": "503, Retry-After: 120",
+          "payload": "HTTP/1.1 503 Service Unavailable\nRetry-After: 120"
+        },
+        {
+          "from": "fetcher",
+          "to": "fetcher",
+          "kind": "local",
+          "phase": "Fetch fails",
+          "label": "classify: retryable",
+          "detail": "Timeouts, connection resets, 429 and 5xx are retryable and say the host is struggling. 404 and 410 are permanent: the URL is marked gone and not retried."
+        },
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Back off host",
+          "label": "POST /complete status=503",
+          "detail": "The fetcher reports the outcome instead of retrying itself, because only the frontier knows the host's schedule.",
+          "payload": "{ \"lease_id\": \"l_c204\", \"status\": 503, \"fetch_ms\": 8000, \"retry_after_s\": 120 }"
+        },
+        {
+          "from": "frontier",
+          "to": "frontier",
+          "kind": "local",
+          "phase": "Back off host",
+          "label": "host waits ≥ 120 s",
+          "detail": "The whole host backs off, not just the URL: next allowed time = now + max(Retry-After, 60 s × 2^failures) with jitter, capped at 24 h. The URL goes back on its host queue with attempt 2. After 5 consecutive failures the host is parked for a day and its URLs are recorded as failed."
+        },
+        {
+          "from": "frontier",
+          "to": "frontier_store",
+          "kind": "req",
+          "phase": "Back off host",
+          "label": "save host backoff",
+          "detail": "Backoff state is durable so a frontier restart does not immediately hit a struggling site again.",
+          "payload": "PutItem host=shop.example.net next_allowed=1762790528 failures=1"
+        },
+        {
+          "from": "frontier_store",
+          "to": "frontier",
+          "kind": "res",
+          "phase": "Back off host",
+          "label": "ok"
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Back off host",
+          "label": "ok"
+        },
+        {
+          "from": "fetcher",
+          "to": "frontier",
+          "kind": "req",
+          "phase": "Next host",
+          "label": "POST /lease",
+          "detail": "The fetcher immediately asks for more work: its slot is free."
+        },
+        {
+          "from": "frontier",
+          "to": "frontier",
+          "kind": "local",
+          "phase": "Next host",
+          "label": "heap top: another host",
+          "detail": "The failing host now sits deep in the heap. Because each host has its own back queue, one bad site cannot block URLs from any other site."
+        },
+        {
+          "from": "frontier",
+          "to": "fetcher",
+          "kind": "res",
+          "phase": "Next host",
+          "label": "news.example.com/…",
+          "payload": "{ \"url\": \"https://news.example.com/world/2026/11/10/summit\", \"lease_id\": \"l_c205\", \"attempt\": 1 }"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "frontier",
+      "kind": "tradeoff",
+      "text": "Mercator-style frontier: a few priority front queues decide what is important, and back queues (about 3 per fetch slot, one host each) plus a heap of next allowed times enforce politeness. Sharding by host hash keeps all of a host's state on one node, so politeness needs no coordination; the cost is that a shard rebalance must hand hosts over cleanly."
+    },
+    {
+      "target": "url_seen",
+      "kind": "tradeoff",
+      "text": "A Bloom filter for 10B URLs at 1% false positives takes about 12 GB, against 80 GB or more for exact 8-byte fingerprints. False positives mean some new URLs are never crawled; nothing is crawled twice. The metadata store keeps the exact list, so the filter can be rebuilt larger when it fills."
+    },
+    {
+      "target": "dns_cache",
+      "kind": "scaling",
+      "text": "DNS is a classic crawler bottleneck: lookups are slow, standard resolver libraries block a thread, and managed resolvers throttle per-interface query rates. A self-run caching resolver with async lookups and prefetch for hosts about to be fetched keeps it off the critical path."
+    },
+    {
+      "target": "raw_store",
+      "kind": "scaling",
+      "text": "About 25 TB a month of compressed HTML. One object per page means a billion PUT requests a month; appending pages into ~1 GB WARC files and storing offsets cuts request cost by orders of magnitude, at the cost of buffering on the fetcher. Older crawls move to colder storage classes."
+    },
+    {
+      "target": "fetcher",
+      "kind": "security",
+      "text": "Fetchers follow URLs written by strangers. Block private, loopback and link-local addresses after resolving (and connect to the checked IP) to prevent server-side request forgery, cap body size and time, and never execute fetched content. Identify the bot with a User-Agent and contact URL, and send traffic from fixed NAT IPs that site owners can verify."
+    },
+    {
+      "target": "web",
+      "kind": "failure",
+      "text": "Websites are the least reliable part of the system: slow responses, 5xx, robots.txt outages and traps that generate infinite URLs. Per-host backoff, per-host page budgets and URL length and depth limits keep one bad site from consuming the crawl."
+    }
+  ],
+  "questions": [
+    {
+      "id": "politeness",
+      "q": "How do you crawl 1,000 pages a second without overloading any single website?",
+      "a": "Give every host its own back queue in the frontier and a next allowed time, kept in a min-heap, so a host is leased to only one fetcher at a time and only after its delay has passed. The delay is the larger of the robots.txt Crawl-delay and about 10 times the last fetch time, so slow servers get more breathing room. Throughput comes from crawling thousands of hosts in parallel, not from crawling one host faster.",
+      "topic": "scale",
+      "targets": [
+        "frontier",
+        "fetcher"
+      ]
+    },
+    {
+      "id": "bloom-filter",
+      "q": "Why use a Bloom filter for the URL seen set, and what happens on a false positive?",
+      "a": "With 10B URLs an exact set of fingerprints needs 80 GB or more, while a Bloom filter at 1% false positives needs about 12 GB and answers in memory. It never gives false negatives, so no URL is crawled twice because of it. A false positive makes a new URL look seen, so it is skipped and never crawled: a small loss of coverage traded for memory, which you size the filter to keep low.",
+      "topic": "tradeoffs",
+      "targets": [
+        "url_seen",
+        "parser"
+      ]
+    },
+    {
+      "id": "near-duplicates",
+      "q": "Many URLs serve the same or almost the same content. How do you avoid storing and parsing it again?",
+      "a": "Hash the body for exact duplicates and compute a 64-bit SimHash of the visible text for near-duplicates, where pages within about 3 bits are treated as the same. To find matches without scanning, split the SimHash into four 16-bit blocks and index each: two fingerprints within 3 bits must share at least one block exactly. A duplicate is recorded against the original URL but not stored or parsed again.",
+      "topic": "data",
+      "targets": [
+        "content_dedup",
+        "fetcher"
+      ]
+    },
+    {
+      "id": "traps",
+      "q": "How do you stop the crawler from getting stuck in a trap such as an infinite calendar?",
+      "a": "Normalize URLs so session IDs and tracking parameters do not create endless variants, and reject URLs that are too long, too deep or repeat path segments. Give each host a page budget per crawl cycle, so even an undetected trap can only consume that host's share. A sudden rise in near-duplicate pages from one host is a good signal that a trap got through.",
+      "topic": "reliability",
+      "targets": [
+        "parser",
+        "frontier",
+        "content_dedup"
+      ]
+    },
+    {
+      "id": "recrawl",
+      "q": "How do you decide when to recrawl a page you have already fetched?",
+      "a": "Estimate each page's change rate from history: if a recrawl finds it unchanged (a 304 or the same content hash), double its interval, and if it changed, halve it, within bounds such as one hour to 30 days. Store next_crawl_at in the metadata store, indexed by due time, so the scheduler reads only due pages. Use conditional GETs with the stored ETag so unchanged pages cost almost no bandwidth.",
+      "topic": "data",
+      "targets": [
+        "scheduler",
+        "meta_db"
+      ]
+    },
+    {
+      "id": "fetcher-crash",
+      "q": "A fetcher crashes in the middle of a fetch. What happens to that URL, and can a page be processed twice?",
+      "a": "The frontier leased the URL with a timeout, so when the lease expires the URL goes back on its host's queue and is fetched again; nothing is lost. Processing is at least once: the same page can be fetched or delivered to a parser twice. That is safe because the content store write is conditional, metadata updates are keyed by URL, and the URL seen filter drops links that were already enqueued.",
+      "topic": "reliability",
+      "targets": [
+        "frontier",
+        "fetcher",
+        "parse_q",
+        "parser"
+      ]
+    }
+  ]
+}

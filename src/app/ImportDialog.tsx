@@ -34,7 +34,7 @@ export function ImportDialog({ onClose, onImport, initialText = '' }: { onClose:
       onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); readFile(e.dataTransfer.files[0]) }}>
       <h3>Import a design</h3>
       <p className="muted small">
-        Any system design question can be added, not just the 12 built in. Once imported it opens in Explore and can be practised, checked and reviewed like the others.<br />
+        Any system design question can be added, not just the built-in ones. Once imported it opens in Explore and can be practised, checked and reviewed like the others.<br />
         Paste or drop an <code>archstory/v1</code> JSON file, or paste an AI's whole answer: code fences and
         surrounding text are ignored. Never written one? <button className="link" onClick={useExample}>Start from an example</button>,
         edit it, and it is checked as you type. Schema: <a href={`${import.meta.env.BASE_URL}schema/archstory-v1.json`} target="_blank">archstory-v1.json</a>.

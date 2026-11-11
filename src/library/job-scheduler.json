@@ -1,0 +1,929 @@
+{
+  "schema": "archstory/v1",
+  "id": "job-scheduler",
+  "meta": {
+    "title": "Distributed Job Scheduler",
+    "summary": "Run one-off and cron jobs for many tenants on time, at least once, with leases to catch dead workers, retries with backoff and a dead-letter queue.",
+    "tags": [
+      "scheduling",
+      "leases",
+      "retries",
+      "idempotency"
+    ],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Submit one-off jobs (run now or at a given time) and recurring jobs (cron expression plus time zone) through an API",
+      "Each job calls an HTTP endpoint with its own timeout, retry policy and priority (high or standard)",
+      "Pause, resume and cancel jobs, and trigger a recurring job by hand",
+      "See each job's next run, its current state and every attempt from the last 30 days",
+      "Failed runs retry with exponential backoff; runs that use up their attempts go to a dead-letter queue for inspection and replay",
+      "Per-tenant limits on runs in flight at once"
+    ],
+    "nonFunctional": [
+      "A run starts within 10 s of its due time (p99), including at the top of the hour",
+      "At-least-once execution: an accepted run is never silently skipped. Duplicates are possible, so job targets must be idempotent",
+      "A run on a crashed worker is detected and rescheduled within about a minute",
+      "Two scheduler instances never dispatch the same due run",
+      "One busy tenant cannot delay other tenants' jobs",
+      "Survives the loss of one availability zone"
+    ],
+    "scale": [
+      {
+        "label": "Active job definitions",
+        "value": "5M (4M recurring, 1M one-off waiting)"
+      },
+      {
+        "label": "Runs",
+        "value": "30M / day, about 350 / s on average"
+      },
+      {
+        "label": "Top-of-hour spike",
+        "value": "Up to 200k runs due at :00, spread over 60 s by jitter (about 3.3k / s)"
+      },
+      {
+        "label": "Runs in flight at peak",
+        "value": "40k, lasting 1 s to 1 h (median 8 s)"
+      },
+      {
+        "label": "Run history",
+        "value": "30 days kept: about 1B attempt records, 500 GB"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.12.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.12.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.12.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.12.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "start-lag",
+        "name": "Runs start on time",
+        "kind": "latency",
+        "sli": "Runs whose start time (worker claim) minus due time is under the threshold, divided by all runs, excluding runs held back by their own tenant's quota",
+        "target": 99,
+        "threshold": "< 10 s"
+      },
+      {
+        "id": "api-availability",
+        "name": "Job API availability",
+        "kind": "availability",
+        "sli": "Job API requests that do not return 5xx, divided by all requests, measured at the load balancer",
+        "target": 99.9
+      },
+      {
+        "id": "no-lost-runs",
+        "name": "No lost runs",
+        "kind": "correctness",
+        "sli": "Runs due more than 1 hour ago that reached a final state (succeeded, dead or cancelled), divided by all runs due more than 1 hour ago",
+        "target": 99.999
+      }
+    ],
+    "alerts": [
+      {
+        "id": "lag-burn",
+        "severity": "page",
+        "when": "Runs starting more than 10 s late above 1% of runs for 5 minutes, and above 1% over 1 hour",
+        "why": "Jobs are firing late for many tenants, which is the main promise of a scheduler.",
+        "target": "scheduler",
+        "slo": "start-lag"
+      },
+      {
+        "id": "api-burn",
+        "severity": "page",
+        "when": "Job API 5xx burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Tenants cannot create, cancel or inspect jobs.",
+        "target": "job_api",
+        "slo": "api-availability"
+      },
+      {
+        "id": "stuck-runs",
+        "severity": "page",
+        "when": "Any run more than 15 minutes past due and still SCHEDULED or ENQUEUED, not held by a tenant quota, for 10 minutes",
+        "why": "A run that nobody is going to pick up is a silently skipped job, the one failure the design promises never happens.",
+        "target": "jobs_db",
+        "slo": "no-lost-runs"
+      },
+      {
+        "id": "queue-age",
+        "severity": "ticket",
+        "when": "Oldest message in the standard queue above 60 s for 10 minutes",
+        "why": "Workers are short of capacity. Scale-out should have handled it; find out why it did not before it turns into lag.",
+        "target": "std_q",
+        "slo": "start-lag"
+      },
+      {
+        "id": "lease-expiry",
+        "severity": "ticket",
+        "when": "Lease expirations above 1% of runs for 15 minutes",
+        "why": "Workers are dying mid-run (out of memory, bad deploys, ungraceful scale-in) or heartbeats are failing. Every expiry is a retry and a possible duplicate.",
+        "target": "worker"
+      },
+      {
+        "id": "dlq-growth",
+        "severity": "ticket",
+        "when": "More than 500 dead-lettered runs in an hour, or more than 50 for one tenant",
+        "why": "A target is broken or a tenant deployed a bug. Someone should look and tell the tenant before replaying.",
+        "target": "dlq"
+      },
+      {
+        "id": "dispatch-slow",
+        "severity": "ticket",
+        "when": "Dispatch query p99 above 250 ms for 15 minutes",
+        "why": "Usually index bloat or vacuum falling behind on the runs table. It comes before start lag.",
+        "target": "jobs_db"
+      }
+    ],
+    "signals": [
+      {
+        "target": "scheduler",
+        "name": "Due backlog",
+        "metric": "runs_due_backlog{priority}",
+        "why": "SCHEDULED runs whose due time has passed. Growing means dispatch cannot keep up."
+      },
+      {
+        "target": "worker",
+        "name": "Start lag by priority",
+        "metric": "run_start_lag_seconds{priority}",
+        "why": "Claim time minus due time: the number tenants actually feel."
+      },
+      {
+        "target": "worker",
+        "name": "Lease expirations and fenced writes",
+        "metric": "run_lease_expired_total, run_fenced_write_total",
+        "why": "Fenced writes count late results from zombie workers that the attempt check rejected."
+      },
+      {
+        "target": "scheduler",
+        "name": "Runs deferred by tenant quota",
+        "metric": "dispatch_deferred_total{tenant}",
+        "why": "Shows which tenants are at their limit, so their lateness is not mistaken for a platform problem."
+      },
+      {
+        "target": "jobs_db",
+        "name": "Dead tuples on the runs table",
+        "metric": "pg_stat_user_tables_n_dead_tup{table=\"runs\"}",
+        "why": "Every state change rewrites a row. If vacuum falls behind, the due-runs index bloats and dispatch slows."
+      },
+      {
+        "target": "std_q",
+        "name": "Age of the oldest message",
+        "metric": "queue_oldest_message_age_seconds",
+        "why": "Separates slow dispatch (backlog in the database) from too few workers (backlog in the queue)."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Jobs start late",
+        "steps": [
+          "Find where the backlog sits: due runs piling up in the database means dispatch is slow, an old queue message means workers are short.",
+          "If dispatch is slow, check dispatch query latency, lock waits and dead tuples on the runs table, and that all scheduler instances are running.",
+          "If workers are short, check worker count against queue age and whether scale-out is reacting fast enough before the top of the hour.",
+          "Break lag down by tenant: if one tenant is late because it is at its quota, that is the quota working, not an outage."
+        ]
+      },
+      {
+        "symptom": "A tenant says a job ran twice",
+        "steps": [
+          "Look up the run id in the history: two attempts with different attempt numbers means a lease expired and the run was retried.",
+          "Check the first worker's heartbeats and logs around the expiry: a crash, a long GC pause or a network partition.",
+          "Compare lease length with the heartbeat interval; leases should survive at least two missed heartbeats.",
+          "Check that the target honors the Idempotency-Key header. Duplicates are part of the contract, so the fix may be on their side."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Tenant Services",
+      "kind": "client",
+      "description": "Tenant backends and the web console calling the Job API"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the API hostname at the load balancer",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "description": "TLS termination and HTTP routing to the Job API",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "job_api",
+      "label": "Job API",
+      "kind": "service",
+      "description": "Validates jobs and cron expressions, enforces tenant limits, serves status and history",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "jobs_db",
+      "label": "Jobs DB",
+      "kind": "sql_db",
+      "description": "Source of truth: job definitions, tenant limits and one row per active run with state, due time, attempt and lease",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "scheduler",
+      "label": "Scheduler",
+      "kind": "scheduler",
+      "replicas": 3,
+      "description": "Every second claims due runs with SKIP LOCKED and enqueues them; also sweeps expired leases and owns the retry policy",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "high_q",
+      "label": "High-priority Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "std_q",
+      "label": "Standard Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "dlq",
+      "label": "Dead-letter Queue",
+      "kind": "queue",
+      "description": "Runs that used up every attempt, kept for inspection and replay",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "worker",
+      "label": "Workers",
+      "kind": "worker",
+      "description": "Claim a run with a lease, heartbeat while it runs, call the target, record the result",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "history",
+      "label": "Run History",
+      "kind": "nosql_db",
+      "description": "One record per attempt, keyed by job id and time, expired after 30 days",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Bigtable"
+      }
+    },
+    {
+      "id": "target",
+      "label": "Tenant Endpoints",
+      "kind": "external_api",
+      "description": "The HTTP endpoints jobs call; expected to honor an idempotency key"
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "client",
+      "to": "dns"
+    },
+    {
+      "from": "client",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "job_api"
+    },
+    {
+      "from": "job_api",
+      "to": "jobs_db"
+    },
+    {
+      "from": "job_api",
+      "to": "history"
+    },
+    {
+      "from": "scheduler",
+      "to": "jobs_db"
+    },
+    {
+      "from": "scheduler",
+      "to": "high_q",
+      "async": true
+    },
+    {
+      "from": "scheduler",
+      "to": "std_q",
+      "async": true
+    },
+    {
+      "from": "scheduler",
+      "to": "dlq",
+      "async": true
+    },
+    {
+      "from": "high_q",
+      "to": "worker"
+    },
+    {
+      "from": "std_q",
+      "to": "worker"
+    },
+    {
+      "from": "worker",
+      "to": "jobs_db"
+    },
+    {
+      "from": "worker",
+      "to": "target"
+    },
+    {
+      "from": "worker",
+      "to": "history",
+      "async": true
+    }
+  ],
+  "flows": [
+    {
+      "id": "submit",
+      "title": "Submit a recurring job",
+      "summary": "Validate the cron expression, then write the job and its first run in one transaction. Nothing is scheduled in memory, so any scheduler instance can pick it up.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve jobs.example.com",
+          "detail": "The tenant's service finds the load balancer by name, so its addresses can change without client updates."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "load balancer IPs",
+          "payload": "jobs.example.com.  60  IN A  198.51.100.20"
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /v1/jobs",
+          "detail": "The idempotency key makes a retried submit return the same job instead of creating a second one that would run every night as well.",
+          "payload": "POST /v1/jobs\nAuthorization: Bearer <tenant token>\nIdempotency-Key: 6f1c0e2a\n\n{ \"name\": \"nightly-invoice-export\",\n  \"schedule\": { \"cron\": \"0 2 * * *\", \"timezone\": \"America/New_York\", \"jitter_s\": 60 },\n  \"target\": { \"url\": \"https://billing.acme.example/hooks/export\", \"method\": \"POST\" },\n  \"priority\": \"standard\", \"timeout_s\": 900,\n  \"retry\": { \"max_attempts\": 5, \"base_s\": 30, \"max_s\": 3600 },\n  \"overlap\": \"skip\", \"misfire\": \"run_once\" }"
+        },
+        {
+          "from": "lb",
+          "to": "job_api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to any API instance",
+          "detail": "The API is stateless, so any instance in any zone can take the request."
+        },
+        {
+          "from": "job_api",
+          "to": "job_api",
+          "kind": "local",
+          "phase": "Validate",
+          "label": "parse cron, compute first run",
+          "detail": "The next fire time is computed in the job's own time zone, so 02:00 New York stays 02:00 across daylight saving changes. A stable offset of hash(job_id) mod 60 s spreads jobs that all say 02:00 across a minute."
+        },
+        {
+          "from": "job_api",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Persist",
+          "label": "INSERT job + first run",
+          "detail": "The job and its first run row are written in one transaction, so a job can never exist without a next run to fire. The run id is derived from the job and its scheduled time, and a unique constraint stops the same occurrence being created twice.",
+          "payload": "BEGIN;\nINSERT INTO jobs (job_id, tenant_id, cron, tz, target, priority, retry, idem_key)\n  VALUES ('j_8c2', 't_acme', '0 2 * * *', 'America/New_York', '{...}', 'standard', '{...}', '6f1c0e2a')\n  ON CONFLICT (tenant_id, idem_key) DO NOTHING;\nINSERT INTO runs (run_id, job_id, tenant_id, scheduled_for, due_at, state, attempt)\n  VALUES ('r_8c2_20261111T0700Z', 'j_8c2', 't_acme', '2026-11-11T07:00:00Z', '2026-11-11T07:00:12Z', 'SCHEDULED', 0);\nCOMMIT;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "job_api",
+          "kind": "res",
+          "phase": "Persist",
+          "label": "COMMIT ok",
+          "detail": "Committed to the primary and its synchronous standby, so the job survives a zone failure."
+        },
+        {
+          "from": "job_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 job j_8c2, next run 07:00:12 UTC",
+          "payload": "HTTP/1.1 201 Created\n\n{ \"job_id\": \"j_8c2\", \"state\": \"active\", \"next_run_at\": \"2026-11-11T07:00:12Z\" }"
+        }
+      ]
+    },
+    {
+      "id": "dispatch",
+      "title": "A due job is dispatched and run",
+      "summary": "A scheduler claims due rows with SKIP LOCKED, checks the tenant quota and enqueues them; a worker claims the run with a lease, heartbeats while it calls the target, then records the result.",
+      "steps": [
+        {
+          "from": "scheduler",
+          "to": "scheduler",
+          "kind": "local",
+          "phase": "Find due runs",
+          "label": "tick (every 1 s)",
+          "detail": "All three scheduler instances run this loop at the same time. There is no leader: the database lock in the next step decides who gets which rows."
+        },
+        {
+          "from": "scheduler",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Find due runs",
+          "label": "SELECT due FOR UPDATE SKIP LOCKED",
+          "detail": "SKIP LOCKED makes each instance take a different batch of due rows instead of waiting on or double-taking the same ones. A partial index on due_at covering only SCHEDULED rows keeps this fast however many finished runs exist. Due times are compared with the database clock, so skew between scheduler hosts does not matter.",
+          "payload": "BEGIN;\nSELECT run_id, job_id, tenant_id, priority\nFROM runs\nWHERE state = 'SCHEDULED' AND due_at <= now()\nORDER BY priority, due_at\nLIMIT 500\nFOR UPDATE SKIP LOCKED;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Find due runs",
+          "label": "500 rows locked by this instance"
+        },
+        {
+          "from": "scheduler",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Check tenant quota",
+          "label": "count in-flight runs per tenant",
+          "detail": "Fairness is enforced before anything reaches the shared queue. An index on (tenant_id, state) makes this a cheap count for the tenants in the batch. Two schedulers counting at once can overshoot a limit by a few runs, which is fine for fairness; a strict limit would need a counter row updated in the same transaction.",
+          "payload": "SELECT r.tenant_id, count(*) AS in_flight, t.max_in_flight\nFROM runs r JOIN tenants t USING (tenant_id)\nWHERE r.tenant_id = ANY($batch_tenants) AND r.state IN ('ENQUEUED', 'RUNNING')\nGROUP BY r.tenant_id, t.max_in_flight;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Check tenant quota",
+          "label": "t_acme: 47 of 50 in flight, admit 3",
+          "detail": "Runs over a tenant's limit are not enqueued. Their due_at is pushed back a few seconds, so they wait in the database and never fill the shared queue ahead of other tenants."
+        },
+        {
+          "from": "scheduler",
+          "to": "std_q",
+          "kind": "async",
+          "phase": "Enqueue",
+          "label": "SendMessageBatch (10 per call)",
+          "detail": "Priority picks the queue. The message carries only the run id; the database row stays the source of truth.",
+          "payload": "{ \"run_id\": \"r_8c2_20261111T0700Z\", \"job_id\": \"j_8c2\", \"tenant_id\": \"t_acme\" }"
+        },
+        {
+          "from": "scheduler",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Enqueue",
+          "label": "mark ENQUEUED, insert next run, COMMIT",
+          "detail": "Messages are sent while the rows are still locked, then the transaction commits. A crash in between leaves the rows SCHEDULED to be sent again: a duplicate message, never a lost run. For cron jobs the next occurrence is inserted now, so the schedule continues even if this run is slow or fails.",
+          "payload": "UPDATE runs SET state = 'ENQUEUED', enqueued_at = now()\n  WHERE run_id = ANY($admitted);\nINSERT INTO runs (run_id, job_id, tenant_id, scheduled_for, due_at, state, attempt)\n  VALUES ('r_8c2_20261112T0700Z', 'j_8c2', 't_acme', '2026-11-12T07:00:00Z', '2026-11-12T07:00:12Z', 'SCHEDULED', 0)\n  ON CONFLICT (job_id, scheduled_for) DO NOTHING;\nCOMMIT;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Enqueue",
+          "label": "COMMIT ok"
+        },
+        {
+          "from": "std_q",
+          "to": "worker",
+          "kind": "async",
+          "phase": "Claim with a lease",
+          "label": "receive (visibility timeout 5 min)",
+          "detail": "Workers long-poll the high-priority queue more often than the standard one (for example 3 to 1), so urgent runs go first without starving the rest."
+        },
+        {
+          "from": "worker",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Claim with a lease",
+          "label": "UPDATE ... SET state = 'RUNNING' RETURNING attempt",
+          "detail": "A conditional update claims the run: only one worker can move it out of ENQUEUED, so a duplicate message finds 0 rows and is dropped. The lease says how long the claim lasts without a heartbeat. The new attempt number doubles as a fencing token. A RUNNING row also counts toward its tenant's in-flight limit until it finishes.",
+          "payload": "UPDATE runs\nSET state = 'RUNNING', attempt = attempt + 1, worker_id = 'w-17',\n    started_at = now(), lease_until = now() + interval '60 seconds'\nWHERE run_id = 'r_8c2_20261111T0700Z'\n  AND state IN ('SCHEDULED', 'ENQUEUED') AND due_at <= now()\nRETURNING attempt, target, timeout_s;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "worker",
+          "kind": "res",
+          "phase": "Claim with a lease",
+          "label": "attempt 1, lease until 07:01:13"
+        },
+        {
+          "from": "worker",
+          "to": "std_q",
+          "kind": "req",
+          "phase": "Claim with a lease",
+          "label": "DeleteMessage",
+          "detail": "Once the row is claimed, the lease in the database protects the run, so the message is deleted. If the worker had died before claiming, the message would reappear after the visibility timeout and another worker would take it."
+        },
+        {
+          "from": "worker",
+          "to": "target",
+          "kind": "req",
+          "phase": "Run",
+          "label": "POST /hooks/export",
+          "detail": "Execution is at least once, so this call may be a repeat of an earlier attempt. The run id is sent as an idempotency key and the target uses it to skip work it already did. The request is signed so the tenant can verify it came from the scheduler.",
+          "payload": "POST /hooks/export\nIdempotency-Key: r_8c2_20261111T0700Z\nX-Job-Attempt: 1\nX-Signature: t=1762844413,v1=5d1e...\n\n{ \"job_id\": \"j_8c2\", \"scheduled_for\": \"2026-11-11T07:00:00Z\" }"
+        },
+        {
+          "from": "worker",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Run",
+          "label": "heartbeat every 20 s: extend lease",
+          "detail": "While the call runs, the worker pushes lease_until forward. A 60 s lease with 20 s heartbeats tolerates two missed beats. If the update matches 0 rows, the worker has lost its lease and abandons the run.",
+          "payload": "UPDATE runs SET lease_until = now() + interval '60 seconds'\nWHERE run_id = 'r_8c2_20261111T0700Z' AND attempt = 1 AND state = 'RUNNING';"
+        },
+        {
+          "from": "jobs_db",
+          "to": "worker",
+          "kind": "res",
+          "phase": "Run",
+          "label": "1 row: lease held"
+        },
+        {
+          "from": "target",
+          "to": "worker",
+          "kind": "res",
+          "phase": "Run",
+          "label": "200 OK after 4 min"
+        },
+        {
+          "from": "worker",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Record result",
+          "label": "SET state = 'SUCCEEDED' WHERE attempt = 1",
+          "detail": "The attempt check fences the write: if this worker's lease had expired and a retry had started, its late result would match 0 rows and be discarded instead of overwriting the newer attempt.",
+          "payload": "UPDATE runs SET state = 'SUCCEEDED', finished_at = now()\nWHERE run_id = 'r_8c2_20261111T0700Z' AND attempt = 1 AND state = 'RUNNING';"
+        },
+        {
+          "from": "jobs_db",
+          "to": "worker",
+          "kind": "res",
+          "phase": "Record result",
+          "label": "1 row updated"
+        },
+        {
+          "from": "worker",
+          "to": "history",
+          "kind": "async",
+          "phase": "Record result",
+          "label": "append attempt record",
+          "detail": "Attempt details go to a store built for a billion append-only records, keeping the hot runs table small. Finished run rows are deleted from the database later by a cleanup job.",
+          "payload": "{ \"pk\": \"j_8c2\", \"sk\": \"2026-11-11T07:00:00Z#1\", \"run_id\": \"r_8c2_20261111T0700Z\", \"status\": \"SUCCEEDED\", \"http_status\": 200, \"started_at\": \"2026-11-11T07:00:13Z\", \"duration_ms\": 241812, \"worker\": \"w-17\" }"
+        }
+      ]
+    },
+    {
+      "id": "worker-dies",
+      "title": "Worker dies mid-job: lease expires, retries, dead-letter",
+      "summary": "No one reports a dead worker. The scheduler notices the lease ran out, reschedules with backoff, and after the last allowed attempt moves the run to the dead-letter queue.",
+      "steps": [
+        {
+          "from": "high_q",
+          "to": "worker",
+          "kind": "async",
+          "phase": "Claim and start",
+          "label": "receive r_41a (hourly reconcile)",
+          "detail": "A high-priority job for tenant t_globex, allowed 5 attempts."
+        },
+        {
+          "from": "worker",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Claim and start",
+          "label": "claim: RUNNING, attempt 1, lease 60 s"
+        },
+        {
+          "from": "jobs_db",
+          "to": "worker",
+          "kind": "res",
+          "phase": "Claim and start",
+          "label": "attempt 1"
+        },
+        {
+          "from": "worker",
+          "to": "high_q",
+          "kind": "req",
+          "phase": "Claim and start",
+          "label": "DeleteMessage"
+        },
+        {
+          "from": "worker",
+          "to": "target",
+          "kind": "req",
+          "phase": "Claim and start",
+          "label": "POST /hooks/reconcile",
+          "detail": "The target starts the work. Whether it finishes is unknown to the scheduler from here on."
+        },
+        {
+          "from": "worker",
+          "to": "worker",
+          "kind": "local",
+          "phase": "Worker dies",
+          "label": "host lost: heartbeats stop",
+          "detail": "Nothing sends a failure message: the process is gone, or merely frozen by a long GC pause or a network partition. The only evidence is that lease_until stops moving forward."
+        },
+        {
+          "from": "scheduler",
+          "to": "scheduler",
+          "kind": "local",
+          "phase": "Detect expired lease",
+          "label": "sweep tick (every 5 s)",
+          "detail": "The same scheduler instances that dispatch also sweep, again sharing the work through SKIP LOCKED."
+        },
+        {
+          "from": "scheduler",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Detect expired lease",
+          "label": "SELECT RUNNING with expired lease",
+          "detail": "Leases are judged by the database clock, so a scheduler with a skewed clock cannot expire a healthy run early.",
+          "payload": "SELECT run_id, tenant_id, attempt, retry\nFROM runs\nWHERE state = 'RUNNING' AND lease_until < now()\nLIMIT 500\nFOR UPDATE SKIP LOCKED;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Detect expired lease",
+          "label": "r_41a, attempt 1 of 5, expired 3 s ago"
+        },
+        {
+          "from": "scheduler",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Retry with backoff",
+          "label": "SCHEDULED, due in 30 s + jitter",
+          "detail": "The scheduler owns the retry policy for every kind of failure. The delay doubles each attempt (30 s, 60 s, 120 s, 240 s, capped at 1 h) plus up to 20% random jitter, so many failed runs do not all retry in the same second. Leaving RUNNING also frees the tenant's in-flight slot. If the old worker was only paused and wakes up, its next heartbeat or result fails the attempt check and it stops.",
+          "payload": "UPDATE runs\nSET state = 'SCHEDULED', worker_id = NULL, lease_until = NULL,\n    due_at = now() + interval '30 seconds' * 2 ^ (attempt - 1) * (1 + random() * 0.2),\n    last_error = 'lease expired on w-09'\nWHERE run_id = 'r_41a_20261111T0900Z' AND attempt = 1;\nCOMMIT;"
+        },
+        {
+          "from": "jobs_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Retry with backoff",
+          "label": "rescheduled for 09:01:08"
+        },
+        {
+          "from": "scheduler",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Give up after 5 attempts",
+          "label": "attempt 5 failed: SET state = 'DEAD'",
+          "detail": "Attempts 2 to 5 travel the normal dispatch path over the next 8 minutes or so, and each one fails because the target keeps returning 500. When the retry pass sees attempt 5 fail it stops retrying, because the job's max_attempts is reached.",
+          "payload": "UPDATE runs SET state = 'DEAD', finished_at = now()\nWHERE run_id = 'r_41a_20261111T0900Z' AND attempt = 5 AND state = 'FAILED';"
+        },
+        {
+          "from": "jobs_db",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Give up after 5 attempts",
+          "label": "1 row updated"
+        },
+        {
+          "from": "scheduler",
+          "to": "dlq",
+          "kind": "async",
+          "phase": "Give up after 5 attempts",
+          "label": "publish dead run",
+          "detail": "The run is parked, not dropped. An alert fires, the tenant sees it as dead in the console, and it can be replayed once the target is fixed. The 10:00 occurrence of this hourly job was already inserted at dispatch, so the schedule carries on.",
+          "payload": "{ \"run_id\": \"r_41a_20261111T0900Z\", \"job_id\": \"j_41a\", \"tenant_id\": \"t_globex\", \"attempts\": 5, \"last_error\": \"HTTP 500 from target\" }"
+        }
+      ]
+    },
+    {
+      "id": "status",
+      "title": "Check a job's status and history",
+      "summary": "Current state comes from the jobs database; past attempts come from the history store.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /v1/jobs/j_8c2/runs?limit=20",
+          "detail": "The tenant's console asks for the job, its next run and its recent attempts."
+        },
+        {
+          "from": "lb",
+          "to": "job_api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward"
+        },
+        {
+          "from": "job_api",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Current state",
+          "label": "SELECT job and its open runs",
+          "detail": "Only the database knows what is happening right now: the next due time and any run that is queued or running, with its attempt and lease.",
+          "payload": "SELECT j.*, r.run_id, r.state, r.due_at, r.attempt, r.lease_until\nFROM jobs j LEFT JOIN runs r ON r.job_id = j.job_id AND r.state IN ('SCHEDULED', 'ENQUEUED', 'RUNNING')\nWHERE j.job_id = 'j_8c2' AND j.tenant_id = 't_acme';"
+        },
+        {
+          "from": "jobs_db",
+          "to": "job_api",
+          "kind": "res",
+          "phase": "Current state",
+          "label": "active, next run 2026-11-12 07:00:12"
+        },
+        {
+          "from": "job_api",
+          "to": "history",
+          "kind": "req",
+          "phase": "Past attempts",
+          "label": "Query pk = j_8c2, newest first, 20",
+          "detail": "History is keyed by job id and time, so the latest attempts for one job are a single range read, however many jobs the tenant has."
+        },
+        {
+          "from": "history",
+          "to": "job_api",
+          "kind": "res",
+          "phase": "Past attempts",
+          "label": "20 attempt records"
+        },
+        {
+          "from": "job_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 OK"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 job + runs",
+          "payload": "{ \"job_id\": \"j_8c2\", \"state\": \"active\", \"next_run_at\": \"2026-11-12T07:00:12Z\",\n  \"runs\": [ { \"run_id\": \"r_8c2_20261111T0700Z\", \"attempt\": 1, \"status\": \"SUCCEEDED\", \"duration_ms\": 241812 }, ... ] }"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "tradeoff",
+      "text": "Exactly-once execution is not achievable in general: a worker can finish the work and die before recording it, and nobody can tell that apart from dying before the work. The design picks at-least-once with an idempotency key per run. Jobs where a duplicate is worse than a miss can opt into at-most-once: mark the run started before calling and never retry it."
+    },
+    {
+      "target": "scheduler",
+      "kind": "tradeoff",
+      "text": "Three ways to stop two schedulers taking the same run: one elected leader (simple, but one instance does all the work and failover pauses dispatch), partitions owned through leases (scales out, but rebalancing is real work), or SELECT ... FOR UPDATE SKIP LOCKED on one database (no coordination at all, limited by that database). SKIP LOCKED is enough at this scale; partition ownership is the next step."
+    },
+    {
+      "target": "scheduler",
+      "kind": "failure",
+      "text": "If dispatch stops for 20 minutes, due runs simply wait in the database and are overdue on recovery. Each job's misfire policy decides what happens: run once (the default, since only the next occurrence exists) or skip if more than a grace period late. One-off jobs always run. Cron times use the job's time zone: a 02:30 run is skipped on the spring-forward night unless the policy moves it, and a 01:30 run must not fire twice in autumn."
+    },
+    {
+      "target": "jobs_db",
+      "kind": "scaling",
+      "text": "Every run causes several writes (dispatch, claim, heartbeats, result): about 20k row writes per second at the top-of-hour peak. Keep the runs table small by deleting finished rows once they are in history, give the due-runs index a partial condition on state, and tune autovacuum for heavy churn. Beyond one primary, shard runs by hash(job_id) and give each scheduler a set of shards."
+    },
+    {
+      "kind": "scaling",
+      "text": "Most cron jobs say minute 0, which creates a thundering herd at the top of the hour. A stable per-job jitter spreads them over a minute, workers scale out on queue age and a few minutes before the hour, and per-tenant quotas keep one tenant's 50k hourly jobs from filling the queues."
+    },
+    {
+      "target": "worker",
+      "kind": "security",
+      "text": "Workers call URLs that tenants choose, which is a server-side request forgery risk. Resolve the hostname and refuse private, link-local and metadata addresses, sign every request so tenants can verify it, and send traffic through NAT with fixed egress IPs that tenants can allowlist."
+    }
+  ],
+  "questions": [
+    {
+      "id": "exactly-once",
+      "q": "Can you guarantee that each job runs exactly once?",
+      "a": "Not in general: a worker can complete the work and crash before recording success, and the system cannot tell that from a crash before the work, so it must either retry (risking a duplicate) or not (risking a miss). The design chooses at-least-once and sends the run id as an idempotency key, so a target that records processed keys gets effectively-once results. Fencing writes by attempt number also stops a stale worker from overwriting a newer attempt's outcome.",
+      "topic": "consistency",
+      "targets": [
+        "worker",
+        "target",
+        "jobs_db"
+      ]
+    },
+    {
+      "id": "double-dispatch",
+      "q": "You run three scheduler instances for availability. How do you stop two of them dispatching the same run?",
+      "a": "Each instance claims due rows with SELECT ... FOR UPDATE SKIP LOCKED inside a transaction, so rows locked by one instance are skipped by the others rather than shared. Alternatives are a single leader chosen by a lease in etcd or ZooKeeper, which pauses dispatch during failover, or partitioning runs and leasing partitions to instances, which scales past one database. A unique constraint on (job_id, scheduled_for) stops the next occurrence of a cron job being created twice.",
+      "topic": "tradeoffs",
+      "targets": [
+        "scheduler",
+        "jobs_db"
+      ]
+    },
+    {
+      "id": "dead-worker",
+      "q": "A worker dies halfway through a job. How does the system notice, and what stops the old worker from writing a result later if it was only paused?",
+      "a": "The claim gives the worker a 60 s lease that it extends with a heartbeat every 20 s; a sweep in the scheduler finds RUNNING rows whose lease has passed and reschedules them with backoff. The attempt number set at claim is a fencing token: every heartbeat and result write includes it, so a worker that wakes up after a GC pause matches 0 rows, learns it lost the lease and stops. The lease length is a trade-off between detecting crashes quickly and falsely expiring slow but healthy workers.",
+      "topic": "reliability",
+      "targets": [
+        "worker",
+        "jobs_db",
+        "scheduler"
+      ]
+    },
+    {
+      "id": "top-of-hour",
+      "q": "200,000 jobs are due at exactly midnight. How do you avoid a thundering herd?",
+      "a": "Give each job a stable jitter offset, such as hash(job_id) mod 60 s, so they spread over a minute while each job still fires at the same moment every day. Scale workers ahead of known peaks rather than waiting for the queue to grow, and keep dispatch batched (500 rows per query, 10 messages per send). Tenant quotas stop any single tenant's burst from taking the whole capacity.",
+      "topic": "scale",
+      "targets": [
+        "scheduler",
+        "worker",
+        "std_q"
+      ]
+    },
+    {
+      "id": "missed-runs",
+      "q": "The schedulers were down for 20 minutes. What happens to the runs that came due during the outage?",
+      "a": "They are not lost, because due runs are rows in the database rather than timers in memory; when dispatch resumes they are simply overdue and get picked up oldest first. A per-job misfire policy then decides: run once and compute the next time from now, or skip runs more than a grace period late, for jobs like a report that is useless after the fact. Catching up every missed occurrence is rarely wanted, and the scheduler compares due times with the database clock so host clock skew cannot cause early or missed runs.",
+      "topic": "reliability",
+      "targets": [
+        "scheduler",
+        "jobs_db"
+      ]
+    },
+    {
+      "id": "fairness",
+      "q": "One tenant submits a million jobs at once. How do you keep everyone else's jobs on time?",
+      "a": "The scheduler counts each tenant's queued and running runs before enqueuing, and runs over the tenant's limit stay in the database with a slightly later due time instead of filling the shared queue. The API also rate-limits submissions and caps active jobs per tenant. Priority queues polled in a weighted ratio protect urgent work, and the start-lag SLO excludes runs held by their own tenant's quota so throttling a noisy tenant does not look like an outage.",
+      "topic": "performance",
+      "targets": [
+        "jobs_db",
+        "scheduler",
+        "job_api",
+        "high_q"
+      ]
+    }
+  ]
+}
