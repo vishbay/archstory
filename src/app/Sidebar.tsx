@@ -39,7 +39,7 @@ export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onV
       <div className="panel-foot side-actions">
         <button className="browse" onClick={onBrowse} title="Search all designs (⌘K / Ctrl+K)">Browse designs<kbd>⌘K</kbd></button>
         <div className="row wrap">
-          <button onClick={onImport}>Import</button>
+          <button onClick={onImport} title="Add any other system design question as a JSON design, then explore and practise it">Import</button>
           <button onClick={onViewJson} title="See the JSON behind the design you are viewing">View JSON</button>
           <button onClick={onExport}>Export</button>
           <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant">Prompt for your AI</button>

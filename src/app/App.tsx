@@ -143,14 +143,14 @@ export function App() {
           <span className="sep" />
           <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog"
             title={mode === 'practice' ? 'Switch problem (⌘K / Ctrl+K)' : 'Switch design (⌘K / Ctrl+K)'}>
-            {mode === 'practice' ? (LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title : design.meta.title}<span className="chev-down" aria-hidden>▾</span>
+            {mode === 'practice' ? (all.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title : design.meta.title}<span className="chev-down" aria-hidden>▾</span>
           </button>
         </>}
         {mode !== 'home' && (
           <nav className="seg" aria-label="Mode">
             <button className={mode === 'explore' ? 'on' : ''} onClick={() => setMode('explore')}>Explore</button>
             <button className={mode === 'practice' ? 'on' : ''}
-              onClick={() => { if (LIBRARY.some(d => d.id === design.id)) setProblemId(design.id); setMode('practice') }}>Practice</button>
+              onClick={() => { setProblemId(design.id); setMode('practice') }}>Practice</button>
           </nav>
         )}
         <span className="spacer" />
@@ -177,7 +177,7 @@ export function App() {
             onTour={() => { store.set('archstory.tour.explore', false); open(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setLeftOpen(true); setRightOpen(true); setMode('explore'); setTour('explore') }} />
         </main>
       ) : mode === 'practice' ? (
-        <Practice key={problemId} problemId={problemId} cloud={cloud} colorMode={theme.resolved}
+        <Practice key={problemId} problems={all} problemId={problemId} cloud={cloud} colorMode={theme.resolved}
           leftOpen={leftOpen} rightOpen={rightOpen} onExport={exportDesign} onViewJson={setJsonOf} />
       ) : (<>
       {leftOpen && (
@@ -230,9 +230,9 @@ export function App() {
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
       {estimating && <EstimateDialog problem={design} onClose={() => setEstimating(false)} />}
       {drill && <DrillDialog designs={[...LIBRARY, ...mine]} onlyId={drill.id} onClose={() => setDrill(null)} />}
-      {picking && <DesignPicker library={LIBRARY} mine={mode === 'practice' ? [] : mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
+      {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
         onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}
-        onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id) }} />}
+        onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id); if (id === problemId) setProblemId(LIBRARY[0].id) }} />}
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={reply => { setGenerating(false); setImportText(reply ?? ''); setImporting(true) }}
         onGenerated={d => { setGenerating(false); importDesign(d) }} />}

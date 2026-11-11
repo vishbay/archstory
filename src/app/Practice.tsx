@@ -1,8 +1,7 @@
-// Practice mode: build your own answer to a library problem on the same tier-band canvas, record request flows
+// Practice mode: build your own answer to a library or imported problem on the same tier-band canvas, record request flows
 // by clicking components, then check it against the reference design.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import { LIBRARY } from '../library'
 import { edgeId, TIERS, type Design } from '../model/schema'
 import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
 import { addNode, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
@@ -30,11 +29,11 @@ import type { StoredReview } from './ReviewPanel'
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
 const kv = storeKv
 
-export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
-  problemId: string; cloud: Cloud; colorMode: 'light' | 'dark'
+export function Practice({ problems, problemId, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
+  problems: Design[]; problemId: string; cloud: Cloud; colorMode: 'light' | 'dark'
   leftOpen: boolean; rightOpen: boolean; onExport: (d: Design) => void; onViewJson: (d: Design) => void
 }) {
-  const ref = LIBRARY.find(d => d.id === problemId) ?? LIBRARY[0]
+  const ref = problems.find(d => d.id === problemId) ?? problems[0]
   const [hist, setHist] = useState(() => initHistory<Design>(store.get(attemptKey(ref.id), blankAttempt(ref))))
   const attempt = hist.present
   const [loadedFor, setLoadedFor] = useState(ref.id)
@@ -42,7 +41,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
   const [snaps, setSnaps] = useState<Snapshot[]>(() => loadSnapshots(kv, ref.id))
   const [attemptMsg, setAttemptMsg] = useState('')
   const reload = (id: string) => {
-    setHist(initHistory<Design>(store.get(attemptKey(id), blankAttempt(LIBRARY.find(d => d.id === id) ?? ref))))
+    setHist(initHistory<Design>(store.get(attemptKey(id), blankAttempt(problems.find(d => d.id === id) ?? ref))))
     setReviewState(store.get(reviewKey(id), null))
     setSnaps(loadSnapshots(kv, id)); setAttemptMsg('')
   }
@@ -133,7 +132,7 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
     setSnaps(next); store.set(snapshotsKey(ref.id), next); setAttemptMsg('Attempt deleted.')
   }
   const backUp = () => {
-    const b = collectBackup(LIBRARY.map(d => d.id), kv, new Date())
+    const b = collectBackup(problems.map(d => d.id), kv, new Date())
     const n = Object.keys(b.attempts).length
     if (!n && !Object.keys(b.snapshots).length) return setAttemptMsg('Nothing to back up yet.')
     downloadJson(`archstory-practice-${new Date().toISOString().slice(0, 10)}.json`, b)
@@ -142,11 +141,11 @@ export function Practice({ problemId, cloud, colorMode, leftOpen, rightOpen, onE
   const restore = async (file: File) => {
     let json: unknown
     try { json = JSON.parse(await file.text()) } catch { return setAttemptMsg('That file is not valid JSON.') }
-    const r = parseBackup(json, LIBRARY.map(d => d.id))
+    const r = parseBackup(json, problems.map(d => d.id))
     if (!r.ok) return setAttemptMsg(r.errors.join(' '))
     const n = Object.keys(r.backup.attempts).length
     if (!confirm(`Restore ${n} answer${n === 1 ? '' : 's'}? Any different answer you have now is kept as a "Before restore" attempt.`)) return
-    const byId = Object.fromEntries(LIBRARY.map(d => [d.id, d]))
+    const byId = Object.fromEntries(problems.map(d => [d.id, d]))
     const done = applyBackup(r.backup, kv, new Date(), (id, d) => { const c = runChecks(d, byId[id]); return { passed: c.passed, total: c.total } })
     reload(ref.id); reloadDeck(); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
     setAttemptMsg(`Restored ${done.attempts} answer${done.attempts === 1 ? '' : 's'} and ${done.snapshots} new saved attempts${done.kept ? `; ${done.kept} current answer${done.kept === 1 ? ' was' : 's were'} kept as "Before restore"` : ''}.${r.skipped.length ? ` Skipped ${r.skipped.length}: ${r.skipped.join('; ')}.` : ''}`)
