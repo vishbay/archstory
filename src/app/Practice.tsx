@@ -98,6 +98,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const putSession = (next: TimedSession | null) => { setSession(next); store.set(timedKey, next) }
 
   const viewport = useViewportWidth()
+  const [phoneNote, setPhoneNote] = useState(() => !store.get('archstory.phoneNote', false))
   const insets = panelInsets(viewport, leftOpen, rightOpen)
   const sideFits = viewport > 900 && viewport - insets.left - insets.right >= SIDE_MIN
   if (side && !sideFits) setWhose('mine')
@@ -323,6 +324,12 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
               onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</Toggle>
           </>}
         </Toolbar>
+        {phoneNote && viewport <= 600 && (
+          <div className="phone-note">
+            <span>Drawing works best on a larger screen. On a phone, Explore and the daily drill work well.</span>
+            <button className="icon ghost" aria-label="Dismiss" onClick={() => { setPhoneNote(false); store.set('archstory.phoneNote', true) }}>×</button>
+          </div>
+        )}
         {connecting && !showRef && (
           <div className="rec-banner conn">
             <span className="rec-dot" />
