@@ -4,7 +4,7 @@ import type { Design } from '../model/schema'
 import { colorOf } from '../model/kinds'
 import { layoutBands, NODE_H, NODE_W } from '../layout/bands'
 import { runChecks } from '../practice/checks'
-import { percent, practised, progressOf, type Progress } from '../practice/progress'
+import { percent, practised, practisedCount, progressOf, type Progress } from '../practice/progress'
 import { storeKv } from './hooks'
 import { openAiSettings } from './useAiConfig'
 import { deckStats } from '../practice/cards'
@@ -79,9 +79,10 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
   const first = library.find(d => d.id === 'url-shortener') ?? library[0]
   // Read once when the page opens; Home remounts each time the learner comes back to it.
   const progress = useMemo(() => Object.fromEntries([...library, ...mine].map(d => [d.id, progressOf(storeKv, d, runChecks)])), [library, mine])
-  const done = library.filter(d => practised(progress[d.id])).length
+  const everything = [...library, ...mine]
+  const done = practisedCount(everything, progress)
   const deck = useDeck()
-  const cards = deckStats(library, deck, today())
+  const cards = deckStats(everything, deck, today())
 
   return (
     <div className="home">
@@ -123,7 +124,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
       <section>
         <div className="lib-head">
           <h2>Library</h2>
-          {done > 0 && <span className="lib-progress">Practised {done} of {library.length}</span>}
+          {done > 0 && <span className="lib-progress">Practised {done} of {everything.length}</span>}
           <div className="seg" role="group" aria-label="Difficulty">
             {(['all', 'easy', 'medium', 'hard'] as const).map(l => (
               <button key={l} className={level === l ? 'on' : ''} onClick={() => setLevel(l)}>{l === 'all' ? 'All' : l[0].toUpperCase() + l.slice(1)}</button>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
 import { addNode, blankAttempt } from './attempt'
-import { percent, practised, progressOf } from './progress'
+import { percent, practised, practisedCount, progressOf } from './progress'
 import { addSnapshot, attemptKey, newSnapshot, reviewKey, snapshotsKey, type Kv } from './snapshots'
 
 const ref = LIBRARY[0]
@@ -49,5 +49,14 @@ describe('progressOf', () => {
     kv.set(snapshotsKey(ref.id), addSnapshot([], newSnapshot([], answer, { passed: 1, total: 2 }, rev(3), '', new Date(1000))))
     kv.set(reviewKey(ref.id), rev(4))
     expect(progressOf(kv, ref, score(1, 2)).review).toBe(4)
+  })
+})
+
+describe('practisedCount', () => {
+  it('counts library and imported designs that have been started', () => {
+    const mine = { ...LIBRARY[1], id: 'mine-1' }
+    const p = (inProgress: boolean) => ({ inProgress, attempts: 0, best: null, review: null })
+    expect(practisedCount([LIBRARY[0], mine, LIBRARY[2]], { [LIBRARY[0].id]: p(true), 'mine-1': p(true), [LIBRARY[2].id]: p(false) })).toBe(2)
+    expect(practisedCount([mine], {})).toBe(0)
   })
 })

@@ -44,6 +44,24 @@ describe('attempt editing', () => {
   })
 })
 
+describe('reference without flows', () => {
+  const flowless = { ...chat0(), flows: [] }
+  function chat0() { return LIBRARY.find(x => x.id === 'chat')! }
+  const { d, ids: [c, lb, svc] } = build(['web_client', 'load_balancer', 'service'])
+  const att = connect(connect(d, c, lb), lb, svc)
+  it('says flows are not compared, once, and still asks for the learner\'s own flow', () => {
+    const r = runChecks(att, flowless).checks
+    expect(r.filter(x => x.id === 'flow-count')).toEqual([expect.objectContaining({ level: 'info' })])
+    expect(r.find(x => x.id === 'flows')?.level).toBe('fail')
+  })
+  it('treats a reference with only empty flows the same way, and keeps component checks', () => {
+    const emptyFlows = { ...flowless, flows: [{ id: 'f', title: 'Empty', steps: [] }] as Design['flows'] }
+    const r = runChecks(att, emptyFlows).checks
+    expect(r.some(x => x.id === 'flow-count' && /no request flows/.test(x.title))).toBe(true)
+    expect(r.some(x => x.id.startsWith('has:'))).toBe(true)
+  })
+})
+
 describe('monitoring check', () => {
   const chat = LIBRARY.find(x => x.id === 'chat')!
   const base = () => { const { d, ids: [c, lb, svc] } = build(['web_client', 'load_balancer', 'service']); return { d: connect(connect(d, c, lb), lb, svc) } }

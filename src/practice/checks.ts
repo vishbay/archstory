@@ -59,8 +59,10 @@ export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: 
         nodes: [...new Set(problems.flatMap(x => [f.steps[x.i].from, f.steps[x.i].to]))] }
       : { id: `flow:${f.id}`, level: 'pass', title: `"${f.title}" runs end to end (${f.steps.length} steps)` })
   }
-  if (real.length && real.length < ref.flows.length)
-    add({ id: 'flow-count', level: 'info', title: `The reference walks through ${ref.flows.length} flows`, detail: ref.flows.map(f => f.title).join(', ') })
+  const refFlows = ref.flows.filter(f => f.steps.length)
+  if (!refFlows.length) add({ id: 'flow-count', level: 'info', title: 'The reference has no request flows, so flows are not compared' })
+  else if (real.length && real.length < refFlows.length)
+    add({ id: 'flow-count', level: 'info', title: `The reference walks through ${refFlows.length} flows`, detail: refFlows.map(f => f.title).join(', ') })
 
   // 4. Coverage against the reference
   for (const fam of [...theirs].filter(f => !UNCHECKED.has(f)).sort()) {

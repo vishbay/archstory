@@ -17,6 +17,7 @@ describe('AI answers', () => {
     expect(p).toContain('Include an "observability" section')
     expect(p).toContain('Do NOT add telemetry components')
     expect(p).toContain('"phase"')
+    expect(p).toContain('Set "meta.difficulty" to "easy", "medium" or "hard"')
     expect(p).not.toContain('—')
     const example = JSON.parse(extractJson(p.slice(p.indexOf('Example of a valid design'))))
     expect(parseDesign(example).ok).toBe(true)

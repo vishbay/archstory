@@ -15,6 +15,8 @@ export interface Progress {
 }
 
 export const practised = (p: Progress) => p.inProgress || p.attempts > 0
+/** How many of these designs the learner has started or saved an attempt for. */
+export const practisedCount = (designs: Design[], progress: Record<string, Progress>) => designs.filter(d => progress[d.id] && practised(progress[d.id])).length
 export const percent = (b: { passed: number; total: number }) => (b.total ? Math.round((b.passed / b.total) * 100) : 0)
 
 export function progressOf(kv: Kv, ref: Design, score: (answer: Design, ref: Design) => { passed: number; total: number }): Progress {
