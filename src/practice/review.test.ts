@@ -34,6 +34,15 @@ describe('review prompt', () => {
     expect(p).toContain('"service", "sql_db"')
     expect(p).not.toContain('—')
   })
+  it('includes the security and decisions sections and dimensions when written', () => {
+    const a = { ...attempt, reasoning: { security: 'mTLS between services', decisions: 'Queue vs direct call: queue' } }
+    const p = reviewPrompt(a, url, [], false)
+    expect(p).toContain('## Security and compliance\nmTLS between services')
+    expect(p).toContain('## Key decisions\nQueue vs direct call: queue')
+    expect(p).toContain('- security:')
+    expect(p).toContain('- decisions:')
+    expect(p).not.toContain('—')
+  })
   it('can leave the reference out', () => {
     expect(reviewPrompt(attempt, url, [], false)).not.toContain('reference answer')
   })
@@ -48,6 +57,12 @@ describe('parseReview', () => {
     expect(r.review.findings.map(f => f.severity)).toEqual(['major', 'minor', 'praise'])
     expect(r.review.findings[1].target).toBeNull()
     expect(r.warnings[0]).toMatch(/unknown component "ghost"/)
+  })
+  it('loads reviews with or without the security and decisions dimensions', () => {
+    const old = parseReview(answer, attempt)
+    const added = parseReview({ ...answer, scores: [...answer.scores, { dimension: 'security', score: 2 }, { dimension: 'decisions', score: '4', comment: 'clear' }] }, attempt)
+    expect(old.ok && old.review.scores.map(s => s.dimension)).toEqual(['data'])
+    expect(added.ok && added.review.scores.map(s => s.dimension)).toEqual(['data', 'security', 'decisions'])
   })
   it('rejects malformed reviews with paths', () => {
     const r = parseReview({ ...answer, findings: [{ severity: 'catastrophic', title: 'x' }] }, attempt)

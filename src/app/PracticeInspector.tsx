@@ -21,7 +21,9 @@ const REASONING = [
   { key: 'api', title: 'API design', hint: 'The main endpoints or messages, with request and response shapes.' },
   { key: 'data_model', title: 'Data model', hint: 'Tables or keys, primary keys, indexes, and how data is partitioned.' },
   { key: 'monitoring', title: 'Monitoring and alerting', hint: 'Your SLIs and SLOs, what pages someone versus what only files a ticket, and how you would trace a slow request.' },
-  { key: 'tradeoffs', title: 'Trade-offs and bottlenecks', hint: 'What did you choose and what did you give up? What breaks first at 10× load?' },
+  { key: 'security', title: 'Security and compliance', hint: 'Who can call what (authn and authz), secrets and keys, encryption in transit and at rest, network isolation, and any rules that apply (PCI, GDPR, data residency).' },
+  { key: 'tradeoffs', title: 'Trade-offs and bottlenecks', hint: 'What breaks first at 10× load, and what is the bottleneck? What does the design give up overall?' },
+  { key: 'decisions', title: 'Key decisions', hint: 'Two or three big choices, each as: the options, what you picked and why, and what you give up.' },
 ]
 const LEVEL_ICON = { pass: '✓', fail: '✕', warn: '!', info: 'i' } as const
 
@@ -222,7 +224,7 @@ export function PracticeInspector(p: {
             <p className="muted small">Write what you would say out loud in the interview. Saved with your answer and included in exports.</p>
             {REASONING.map(r => (
               <label key={r.key} id={`reasoning-${r.key}`} className="field">{r.title}
-                <textarea rows={5} placeholder={r.hint} value={d.reasoning?.[r.key] ?? ''}
+                <textarea rows={5} placeholder={r.key === 'decisions' ? `${r.hint}\nExample: Queue or direct call? Queue (SQS): absorbs spikes; gives up immediate results.` : r.hint} value={d.reasoning?.[r.key] ?? ''}
                   onChange={e => setAttempt({ ...d, reasoning: { ...d.reasoning, [r.key]: e.target.value } }, `reasoning:${r.key}`)} />
               </label>
             ))}

@@ -11,7 +11,9 @@ export const DIMENSIONS = [
   { id: 'scale', title: 'Scalability', rubric: 'handles the stated load; names bottlenecks; partitioning and replication' },
   { id: 'reliability', title: 'Reliability', rubric: 'no single points of failure; failure handling; meets availability targets' },
   { id: 'operations', title: 'Monitoring', rubric: 'how it would be run: SLIs and SLOs tied to the requirements, alerts on symptoms users feel, tracing and logging to find a cause (from the written reasoning or monitoring components if present, otherwise say it was not addressed)' },
+  { id: 'security', title: 'Security and compliance', rubric: 'authn and authz, secrets and keys, encryption in transit and at rest, network isolation, and any rules that apply such as PCI, GDPR or data residency (from the written reasoning or the design; score it when the candidate wrote about it or the problem clearly needs it, otherwise leave this dimension out)' },
   { id: 'tradeoffs', title: 'Trade-offs', rubric: 'explains choices and alternatives (from the written reasoning if present, otherwise judged from the design)' },
+  { id: 'decisions', title: 'Decision quality', rubric: 'for each big choice the candidate names the options considered, why one was picked and what it costs (score it only when the candidate wrote key decisions, otherwise leave this dimension out)' },
 ] as const
 export const SEVERITIES = ['critical', 'major', 'minor', 'praise'] as const
 
@@ -60,7 +62,7 @@ export function signature(d: Design): string {
 
 export const REASONING_TITLES: Record<string, string> = {
   requirements: 'Requirements and assumptions', estimates: 'Capacity estimates', api: 'API design',
-  data_model: 'Data model', monitoring: 'Monitoring and alerting', tradeoffs: 'Trade-offs and bottlenecks',
+  data_model: 'Data model', monitoring: 'Monitoring and alerting', security: 'Security and compliance', tradeoffs: 'Trade-offs and bottlenecks', decisions: 'Key decisions',
 }
 
 const EXAMPLE: Review = {
@@ -141,6 +143,7 @@ Rules:
 - "target" in each finding is one of these component ids, or null for a design-wide finding: ${ids}.
 - "severity" is one of "critical", "major", "minor" or "praise". Include 2 to 4 "praise" findings for what is done well.
 - Give 4 to 10 findings, most important first. Each non-praise finding has a concrete "suggestion".
+- "scores" may leave out "security" and "decisions" when they do not apply; every other dimension is always scored.
 - "followUps" has 3 to 5 questions an interviewer would ask next.
 - Be specific to this design and this problem. Do not use em dashes.
 `
