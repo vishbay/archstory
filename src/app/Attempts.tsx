@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { MAX_SNAPSHOTS, trend, type Snapshot } from '../practice/snapshots'
 
+const help = (n: number) => (n > 3 ? 'saw reference' : `${n} hint${n === 1 ? '' : 's'}`)
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 /** Practice sidebar: save named snapshots of the answer, reopen or delete them, and back everything up to a file. */
@@ -32,6 +33,7 @@ export function Attempts({ snaps, canSave, suggested, onSave, onOpen, onDelete, 
                   <span title="Checks passed">{s.passed}/{s.total} checks</span>
                   {d !== null && d !== 0 && <span className={`delta ${d > 0 ? 'up' : 'down'}`} title="Change in the share of checks passed, against the previous attempt">{d > 0 ? '+' : ''}{d}%</span>}
                   {s.overall !== null && <span title="Pasted AI review score">review {s.overall}/5</span>}
+                  {!!s.hints && <span title="Help used before saving: hints taken, or the reference opened">{help(s.hints)}</span>}
                 </div>
                 <div className="attempt-actions">
                   <button className="link" onClick={() => onOpen(s)} title="Replace the working answer with this one (Undo brings yours back)">Open</button>

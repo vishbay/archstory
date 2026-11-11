@@ -11,6 +11,8 @@ export interface Snapshot {
   passed: number; total: number
   /** The pasted AI review's overall score (1 to 5), when there was one. */
   overall: number | null; review: StoredReview | null
+  /** Help used before saving: 1 to 3 hints, 4 when the reference was opened (added later; older snapshots do not have it). */
+  hints?: number
 }
 export interface Kv { get(key: string): unknown; set(key: string, value: unknown): boolean }
 export interface Backup {
@@ -23,7 +25,10 @@ export interface Backup {
 export const attemptKey = (id: string) => `archstory.attempt.${id}`
 export const reviewKey = (id: string) => `archstory.review.${id}`
 export const snapshotsKey = (id: string) => `archstory.snapshots.${id}`
+export const hintsKey = (id: string) => `archstory.hints.${id}`
 export const DECK_KEY = 'archstory.deck'
+/** Highest hint level used, 0 to 4 (4: opened the reference); anything else reads as 0. */
+export const cleanHints = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 4 ? v : 0)
 
 export const loadSnapshots = (kv: Kv, id: string): Snapshot[] => {
   const v = kv.get(snapshotsKey(id))
@@ -42,10 +47,10 @@ export function nextName(list: Snapshot[]): string {
   return `Attempt ${Math.max(0, ...used) + 1}`
 }
 
-export function newSnapshot(list: Snapshot[], design: Design, score: { passed: number; total: number }, review: StoredReview | null, name: string, now: Date): Snapshot {
+export function newSnapshot(list: Snapshot[], design: Design, score: { passed: number; total: number }, review: StoredReview | null, name: string, now: Date, hints = 0): Snapshot {
   return {
     id: `s${now.getTime().toString(36)}${list.length}`, name: name.trim() || nextName(list), at: now.toISOString(), design,
-    passed: score.passed, total: score.total, overall: review?.review.overall ?? null, review,
+    passed: score.passed, total: score.total, overall: review?.review.overall ?? null, review, ...(hints ? { hints } : {}),
   }
 }
 
@@ -97,7 +102,10 @@ export function parseBackup(input: unknown, problemIds: string[]): BackupResult 
   }
   for (const [id, list] of Object.entries(b.snapshots ?? {})) {
     if (!known.has(id)) { skipped.push(`${id}: problem not in this version`); continue }
-    const ok = (Array.isArray(list) ? list : []).filter(isSnapshot).flatMap(s => { const design = valid(s.design); return design ? [{ ...s, design }] : [] })
+    const ok = (Array.isArray(list) ? list : []).filter(isSnapshot).flatMap(({ hints, ...s }) => {
+      const design = valid(s.design), h = cleanHints(hints)
+      return design ? [{ ...s, design, ...(h ? { hints: h } : {}) }] : []
+    })
     if (ok.length) out.snapshots[id] = ok
   }
   const deck = cleanDeck(b.deck)
@@ -125,7 +133,7 @@ export function applyBackup(backup: Backup, kv: Kv, now: Date, score: (id: strin
     const incoming = backup.attempts[id]
     if (incoming && current?.nodes?.length && !sameDesign(current, incoming)) {
       const review = kv.get(reviewKey(id)) as StoredReview | null
-      list = addSnapshot(list, newSnapshot(list, current, score(id, current), review, 'Before restore', now)); kept++
+      list = addSnapshot(list, newSnapshot(list, current, score(id, current), review, 'Before restore', now, cleanHints(kv.get(hintsKey(id))))); kept++
     }
     for (const s of backup.snapshots[id] ?? []) {
       if (!list.some(x => x.id === s.id)) snapshots++

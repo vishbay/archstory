@@ -15,20 +15,20 @@ const FAMILY: Record<string, string> = {
   worker: 'worker', scheduler: 'worker',
   service: 'service', search: 'service',
 }
-const familyOf = (n: DNode) => FAMILY[n.kind] ?? n.kind
+export const familyOf = (n: DNode) => FAMILY[n.kind] ?? n.kind
 
-const FAMILY_NAME: Record<string, string> = {
+export const FAMILY_NAME: Record<string, string> = {
   entry: 'a load balancer or API gateway', database: 'a database', queue: 'a queue or event stream', worker: 'background workers',
   cache: 'a cache', cdn: 'a CDN', dns: 'DNS', waf: 'a web application firewall', db_replica: 'read replicas',
   object_store: 'object storage', websocket_gateway: 'a WebSocket gateway', geo_index: 'a geo index', search_index: 'a search index',
   analytics: 'an analytics store', auth: 'an auth / identity service', key_gen: 'a key generator', rate_limiter: 'a rate limiter',
   payment_provider: 'a payment provider', notification_provider: 'a push / email provider', external_api: 'an external API',
 }
-const nameOfFamily = (f: string) => FAMILY_NAME[f] ?? `a ${f.replace(/_/g, ' ')}`
-const UNCHECKED = new Set(['client', 'service'])
-const TELEMETRY_KINDS = new Set(['telemetry_collector', 'metrics_store', 'log_store', 'trace_store', 'alerting', 'oncall'])
+export const nameOfFamily = (f: string) => FAMILY_NAME[f] ?? `a ${f.replace(/_/g, ' ')}`
+export const UNCHECKED = new Set(['client', 'service'])
+export const TELEMETRY_KINDS = new Set(['telemetry_collector', 'metrics_store', 'log_store', 'trace_store', 'alerting', 'oncall'])
 // Pieces interviewers usually treat as implied: worth saying out loud, but not a failure when missing.
-const IMPLIED = new Set(['dns'])
+export const IMPLIED = new Set(['dns'])
 
 export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: number; total: number } {
   const checks: Check[] = []

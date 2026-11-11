@@ -21,7 +21,7 @@ import { applySkeleton, duplicateNode, SKELETONS } from '../practice/quick'
 import { openDrill, reloadDeck } from './useDeck'
 import { end as endTimed, nextPhase, pause as pauseTimed, resume as resumeTimed, startSession, toggleTick, type TimedSession } from '../practice/timed'
 import { commit, initHistory, redo, undo } from '../practice/history'
-import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
+import { addSnapshot, applyBackup, attemptKey, cleanHints, collectBackup, hintsKey, loadSnapshots, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, type Snapshot } from '../practice/snapshots'
 import { Attempts } from './Attempts'
 import { downloadJson } from './files'
 import type { StoredReview } from './ReviewPanel'
@@ -40,7 +40,12 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const [review, setReviewState] = useState<StoredReview | null>(() => store.get(reviewKey(ref.id), null))
   const [snaps, setSnaps] = useState<Snapshot[]>(() => loadSnapshots(kv, ref.id))
   const [attemptMsg, setAttemptMsg] = useState('')
+  // Highest hint level used on this problem (4: opened the reference), so saved attempts can say how much help they had.
+  const [hints, setHintsState] = useState(() => cleanHints(store.get(hintsKey(ref.id), 0)))
+  const setHints = (n: number) => { setHintsState(n); store.set(hintsKey(ref.id), n) }
+  const takeHint = (n: number) => { if (n > hints) setHints(n) }
   const reload = (id: string) => {
+    setHintsState(cleanHints(store.get(hintsKey(id), 0)))
     setHist(initHistory<Design>(store.get(attemptKey(id), blankAttempt(problems.find(d => d.id === id) ?? ref))))
     setReviewState(store.get(reviewKey(id), null))
     setSnaps(loadSnapshots(kv, id)); setAttemptMsg('')
@@ -115,10 +120,10 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const startConnecting = () => { stopRecording(); setConnecting(true); setConnFrom(null); setSelected(null); setPicked(null); setShowRef(false) }
   const reset = () => {
     if (!confirm(`Clear your answer for "${ref.meta.title}"? This cannot be undone.`)) return
-    setAttempt(blankAttempt(ref)); setReview(null); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
+    setAttempt(blankAttempt(ref)); setReview(null); setHints(0); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
   }
   const saveAttempt = (name: string) => {
-    const next = addSnapshot(snaps, newSnapshot(snaps, attempt, result, review, name, new Date()))
+    const next = addSnapshot(snaps, newSnapshot(snaps, attempt, result, review, name, new Date(), hints))
     setSnaps(next)
     setAttemptMsg(store.set(snapshotsKey(ref.id), next) ? 'Attempt saved.' : 'Could not save: browser storage is blocked or full. Use Back up to keep a copy.')
   }
@@ -277,7 +282,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
           <Seg label="View" value={view} onChange={setView}
             options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow?.steps.length }]} />
           <Seg label="Whose design" value={showRef ? 'ref' : 'mine'}
-            onChange={k => { if (k === 'ref') { setShowRef(true); stopRecording(); stopConnecting(); setPicked(null) } else setShowRef(false); setSelected(null) }}
+            onChange={k => { if (k === 'ref') { setShowRef(true); takeHint(4); stopRecording(); stopConnecting(); setPicked(null) } else setShowRef(false); setSelected(null) }}
             options={[{ key: 'mine', label: 'Mine' }, { key: 'ref', label: 'Reference' }]} />
           {view === 'canvas' && <>
             <ToolbarSep />
@@ -361,7 +366,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
                 selected={selected} onSelect={setSelected} picked={picked} onPick={setPicked}
                 flow={flow} onFlow={id => { setFlowId(id); stopRecording() }} player={player}
                 recording={recording} onRecord={() => { stopConnecting(); setRecording(true); setRecFrom(null); setSelected(null); setPicked(null) }} onStopRecording={stopRecording}
-                result={result} reasoningOn={reasoningOn} onCompare={() => setShowRef(true)}
+                result={result} reasoningOn={reasoningOn} onCompare={() => { setShowRef(true); takeHint(4) }}
+                hints={hints} onHint={takeHint}
                 reference={ref} review={review} onReview={setReview} timed={timed} />}
         </aside>
       )}

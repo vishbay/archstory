@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
 import { addNode, blankAttempt } from './attempt'
-import { addSnapshot, applyBackup, attemptKey, collectBackup, loadSnapshots, MAX_SNAPSHOTS, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, trend, type Kv } from './snapshots'
+import { addSnapshot, applyBackup, attemptKey, collectBackup, hintsKey, loadSnapshots, MAX_SNAPSHOTS, newSnapshot, nextName, parseBackup, reviewKey, snapshotsKey, trend, type Kv } from './snapshots'
 
 const ref = LIBRARY[0]
 const ids = LIBRARY.map(d => d.id)
@@ -109,6 +109,35 @@ describe('practice backup', () => {
     expect(list.map(s => s.name)).toContain('Before restore')
     expect(list.find(s => s.name === 'Before restore')!.design.nodes).toHaveLength(4)
     expect((kv.get(attemptKey(ref.id)) as { nodes: unknown[] }).nodes).toHaveLength(2)
+  })
+
+  it('carries the help used on a snapshot, and still reads snapshots and backups made before it existed', () => {
+    const { kv, mine } = seed()
+    const helped = newSnapshot([], mine, { passed: 3, total: 8 }, null, 'Helped', at(2), 2)
+    expect(helped.hints).toBe(2)
+    expect('hints' in newSnapshot([], mine, { passed: 3, total: 8 }, null, '', at(2))).toBe(false)
+    kv.set(snapshotsKey(ref.id), addSnapshot(loadSnapshots(kv, ref.id), helped))
+    const file = JSON.parse(JSON.stringify(collectBackup(ids, kv, at(5))))
+    const r = parseBackup(file, ids)
+    const list = r.ok ? r.backup.snapshots[ref.id] : []
+    expect(list.map(s => s.hints)).toEqual([2, undefined])
+    const fresh = memory()
+    if (r.ok) applyBackup(r.backup, fresh, at(6), () => ({ passed: 0, total: 0 }))
+    expect(loadSnapshots(fresh, ref.id).find(s => s.name === 'Helped')?.hints).toBe(2)
+    // A made-up value is dropped rather than shown
+    file.snapshots[ref.id][0].hints = 'lots'
+    const bad = parseBackup(file, ids)
+    expect(bad.ok && 'hints' in bad.backup.snapshots[ref.id][0]).toBe(false)
+  })
+
+  it('a "Before restore" snapshot records the help used on the current answer', () => {
+    const { kv } = seed()
+    const file = JSON.parse(JSON.stringify(collectBackup(ids, kv, at(5))))
+    kv.set(attemptKey(ref.id), answer(['client', 'service', 'cache']))
+    kv.set(hintsKey(ref.id), 4)
+    const r = parseBackup(file, ids)
+    if (r.ok) applyBackup(r.backup, kv, at(9), () => ({ passed: 1, total: 8 }))
+    expect(loadSnapshots(kv, ref.id).find(s => s.name === 'Before restore')?.hints).toBe(4)
   })
 
   it('restoring the same backup twice adds nothing new', () => {

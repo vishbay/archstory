@@ -2,6 +2,7 @@ import { HA_MODES, STEP_KINDS, type Design, type Flow } from '../model/schema'
 import { KINDS, type Cloud, nameOf } from '../model/kinds'
 import { addFlow, flipEdge, removeEdge, removeFlow, removeNode, removeStep, renameFlow, setEdgeAsync, stepProblem, updateNode, updateStep } from '../practice/attempt'
 import type { Check } from '../practice/checks'
+import { hintsFor, MAX_HINT } from '../practice/hints'
 import { ReviewPanel, type StoredReview } from './ReviewPanel'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import { NodeIcon } from './NodeIcon'
@@ -32,6 +33,7 @@ export function PracticeInspector(p: {
   flow: Flow | undefined; onFlow: (id: string) => void; player: Player
   recording: boolean; onRecord: () => void; onStopRecording: () => void
   result: { checks: Check[]; passed: number; total: number }; reasoningOn: boolean; onCompare: () => void
+  hints: number; onHint: (level: number) => void
   reference: Design; review: StoredReview | null; onReview: (r: StoredReview | null) => void
   timed: TimedControls
 }) {
@@ -178,6 +180,24 @@ export function PracticeInspector(p: {
               ))}
             </ul>
             <p className="muted small">Highlighted components on the canvas are involved in a failed check.</p>
+            <h4>Need a hint?</h4>
+            {p.hints > 0 && (
+              <ul className="checks">
+                {hintsFor(d, p.reference).slice(0, p.hints).map(h => (
+                  <li key={h.level} className={h.done ? 'lvl-pass' : 'lvl-info'}>
+                    <span className="check-icon">{h.level}</span>
+                    <div>
+                      <b>{h.title}</b>
+                      {h.lines.map(l => <p key={l}>{l}</p>)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {p.hints < MAX_HINT && <button className="small-btn" onClick={() => p.onHint(p.hints + 1)}>{p.hints ? 'Next hint' : 'Show a hint'}</button>}
+            <p className="muted small">{p.hints > MAX_HINT ? 'You have opened the reference; saved attempts note that.'
+              : p.hints === MAX_HINT ? 'That is every hint. Compare with reference shows the whole design.'
+              : `${MAX_HINT - p.hints} hint${MAX_HINT - p.hints === 1 ? '' : 's'} left, each a little more direct. Saved attempts note how many you used.`}</p>
           </>
         )}
 
