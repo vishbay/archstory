@@ -1,5 +1,5 @@
 // A short guided tour: dims the page, rings one element, and explains it in a small card.
-import { useEffect, useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { TourStep } from './tourSteps'
 
@@ -28,19 +28,27 @@ export function Tour({ steps, onDone }: { steps: TourStep[]; onDone: () => void 
     return () => window.removeEventListener('keydown', onKey, true)
   })
 
-  // Card below the target when there is room, otherwise above; centred when the target is missing.
+  // Card below the target when there is room, otherwise above, otherwise inside a target that fills the screen;
+  // always kept on screen. Centred when the target is missing.
   const W = 320, vw = window.innerWidth, vh = window.innerHeight
-  const below = rect && rect.bottom + 190 < vh
-  const style = rect
-    ? { left: Math.min(Math.max(12, rect.left + rect.width / 2 - W / 2), vw - W - 12), top: below ? rect.bottom + 14 : undefined, bottom: below ? undefined : vh - rect.top + 14 }
-    : { left: vw / 2 - W / 2, top: vh / 2 - 90 }
+  const card = useRef<HTMLDivElement>(null)
+  const [h, setH] = useState(190)
+  useLayoutEffect(() => { if (card.current) setH(card.current.offsetHeight) }, [i, rect])
+  const top = !rect ? vh / 2 - h / 2
+    : rect.bottom + 14 + h < vh - 12 ? rect.bottom + 14
+    : rect.top - 14 - h > 12 ? rect.top - 14 - h
+    : rect.bottom - h - 24
+  const style = {
+    left: rect ? Math.min(Math.max(12, rect.left + rect.width / 2 - W / 2), vw - W - 12) : vw / 2 - W / 2,
+    top: Math.min(Math.max(12, top), vh - h - 12),
+  }
 
   return (
     <div className="tour" role="dialog" aria-modal="true" aria-label="Tour">
       {rect
         ? <div className="tour-ring" style={{ left: rect.left - PAD, top: rect.top - PAD, width: rect.width + PAD * 2, height: rect.height + PAD * 2 }} />
         : <div className="tour-dim" />}
-      <div className="tour-card" style={{ ...style, width: W }}>
+      <div ref={card} className="tour-card" style={{ ...style, width: W }}>
         <span className="muted small">{i + 1} of {steps.length}</span>
         <h3>{step.title}</h3>
         <p>{step.body}</p>
