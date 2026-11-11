@@ -67,16 +67,16 @@ function ZoneNode({ data }: NodeProps) {
 type NodeData = {
   node: DNode; cloud: Cloud; state: State; selected: boolean; note?: string
   tag?: { text: string; level?: Level | 'role' }; failed?: boolean; compact?: boolean
-  editable?: boolean; flagged?: boolean; recordingFrom?: boolean; mark?: { count: number; severity: string }
+  editable?: boolean; flagged?: boolean; recordingFrom?: boolean; mark?: { count: number; severity: string }; gap?: Gap
   /** Monitoring layer: which telemetry this component emits, and whether it is a telemetry part itself. */
   signals?: { metrics: boolean; logs: boolean; traces: boolean }; telemetry?: boolean
 }
 const SIDES: [Side, Position][] = [['top', Position.Top], ['right', Position.Right], ['bottom', Position.Bottom], ['left', Position.Left]]
 
 function ComponentNode({ data }: NodeProps) {
-  const { node: n, cloud, state, selected, note, tag, failed, compact, editable, flagged, recordingFrom, mark, signals, telemetry } = data as NodeData
+  const { node: n, cloud, state, selected, note, tag, failed, compact, editable, flagged, recordingFrom, mark, gap, signals, telemetry } = data as NodeData
   const name = nameOf(n, cloud)
-  const cls = [`node st-${state}`, selected && 'selected', failed && 'failed', compact && 'compact', editable && 'editable', flagged && 'flagged', recordingFrom && 'rec-from', telemetry && 'telemetry']
+  const cls = [`node st-${state}`, selected && 'selected', failed && 'failed', compact && 'compact', editable && 'editable', flagged && 'flagged', recordingFrom && 'rec-from', gap && `mark-${gap}`, telemetry && 'telemetry']
   return (
     <div className={cls.filter(Boolean).join(' ')}
       style={{ width: telemetry ? OBS_NODE_W : compact ? ZNODE_W : NODE_W }} title={compact ? name : undefined}>
@@ -169,6 +169,9 @@ function backdrop(design: Design, cloud: Cloud, L: Pick<Layout, 'bands' | 'subne
 // Edges a scenario does not use stay as faint lines without arrowheads.
 const marker = (d: EdgeData) => (d.state === 'off' ? undefined : { type: MarkerType.ArrowClosed, color: edgeColor(d), width: 16, height: 16 })
 
+/** Side by side with the reference: outline what one design has and the other lacks. */
+export type Gap = 'missing' | 'extra'
+
 /** Practice mode: the canvas becomes an editor. */
 export interface EditProps {
   onConnect: (from: string, to: string) => void
@@ -181,9 +184,12 @@ export interface EditProps {
   mode?: 'record' | 'connect' | null
 }
 
-export function BandCanvas({ design, flow, player, cloud, network, monitoring = false, zonesView, zone, selected, onSelect, colorMode, edit, insets = { left: 12, right: 12 }, captionDetail = true }: {
+export function BandCanvas({ id, design, flow, player, cloud, network, monitoring = false, zonesView, zone, selected, onSelect, colorMode, edit, gaps, insets = { left: 12, right: 12 }, captionDetail = true }: {
+  /** Needed when two canvases share the page, so their SVG ids do not clash. */
+  id?: string
   design: Design; flow: Flow | undefined; player: Player; cloud: Cloud; network: boolean; monitoring?: boolean; zonesView: boolean; zone: ZoneState
   selected: string | null; onSelect: (id: string | null) => void; colorMode: 'light' | 'dark'; edit?: EditProps
+  gaps?: { ids: Set<string>; gap: Gap }
   /** Pixels at the left and right edge covered by floating panels. */
   insets?: { left: number; right: number; top?: number }
   /** Show the step's explanation in the caption (only needed when the Flow panel is closed). */
@@ -316,6 +322,7 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
         id: n.id, type: 'component', position: L.pos[n.id], draggable: false,
         data: { node: n, cloud, state: nodeState(n.id), selected: selected === n.id, tag: tagFor(n), signals: mon ? emits(n.kind) : undefined,
           editable: !!edit, flagged: edit?.flagged.has(n.id), recordingFrom: edit?.recordingFrom === n.id, mark: edit?.marks?.get(n.id),
+          gap: gaps?.ids.has(n.id) ? gaps.gap : undefined,
           note: cur?.kind === 'local' && cur.from === n.id ? cur.label : undefined } satisfies NodeData,
       })),
     ]
@@ -336,10 +343,10 @@ export function BandCanvas({ design, flow, player, cloud, network, monitoring = 
       edges.push({ id: `${a}->${b}`, source: a, target: b, sourceHandle: 's-right', targetHandle: 't-left', type: 'flow', data, markerEnd: marker(data) })
     }
     return { nodes, edges }
-  }, [L, tierRoutes, zoneRoutes, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit])
+  }, [L, tierRoutes, zoneRoutes, zoned, zone, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit, gaps])
 
   return (
-    <ReactFlow key={`${design.id}:${net}:${zoned}:${mon}:${obsOpen}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+    <ReactFlow id={id} key={`${design.id}:${net}:${zoned}:${mon}:${obsOpen}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       nodesDraggable={false} nodesConnectable={!!edit} elementsSelectable={false} colorMode={colorMode}
       connectionMode={ConnectionMode.Loose}
       onConnectStart={(_, h) => { dragFrom.current = h.nodeId }}

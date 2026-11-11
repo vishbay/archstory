@@ -6,7 +6,8 @@ import { edgeId, TIERS, type Design } from '../model/schema'
 import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
 import { addNode, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
-import { BandCanvas, type ZoneState } from './BandCanvas'
+import { compareDesigns } from '../practice/compare'
+import { BandCanvas, type EditProps, type ZoneState } from './BandCanvas'
 import { ExportImageButton, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
@@ -27,6 +28,9 @@ import { downloadJson } from './files'
 import type { StoredReview } from './ReviewPanel'
 
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
+/** Side by side needs this much canvas between the floating panels: two panes of about 360px. */
+const SIDE_MIN = 720
+const NONE = new Set<string>()
 const kv = storeKv
 
 export function Practice({ problems, problemId, cloud, colorMode, leftOpen, rightOpen, onExport, onViewJson }: {
@@ -64,7 +68,10 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const [dropping, setDropping] = useState(false)
   const setReview = (r: StoredReview | null) => { setReviewState(r); store.set(reviewKey(ref.id), r) }
 
-  const [showRef, setShowRef] = useState(false)
+  const [whose, setWhose] = useState<'mine' | 'ref' | 'side'>('mine')
+  const showRef = whose === 'ref', side = whose === 'side'
+  /** Back to the learner's own canvas from the reference; side by side stays, since its left canvas is the answer. */
+  const leaveRef = () => setWhose(w => (w === 'ref' ? 'mine' : w))
   const [view, setView] = useState<'canvas' | 'timeline'>('canvas')
   const [network, setNetwork] = useState(false)
   const [monitoring, setMonitoring] = useState(false)
@@ -92,10 +99,14 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
 
   const viewport = useViewportWidth()
   const insets = panelInsets(viewport, leftOpen, rightOpen)
+  const sideFits = viewport > 900 && viewport - insets.left - insets.right >= SIDE_MIN
+  if (side && !sideFits) setWhose('mine')
   const shown = showRef ? ref : attempt
   const flow = shown.flows.find(f => f.id === flowId) ?? shown.flows[0]
   const player = usePlayer(flow?.steps.length ?? 0, `${shown.id}/${flow?.id}`)
+  const idle = usePlayer(0, 'reference')   // the reference pane in side by side does not play
   const result = useMemo(() => runChecks(attempt, ref), [attempt, ref])
+  const gaps = useMemo(() => (side ? compareDesigns(attempt, ref) : null), [side, attempt, ref])
   const flagged = useMemo(() => new Set(tab === 'check' ? result.checks.filter(c => c.level === 'fail' || c.level === 'warn').flatMap(c => c.nodes ?? []) : []),
     [result, tab])
   // Review findings marked on their components while the review tab is open
@@ -117,7 +128,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
 
   const stopRecording = () => { setRecording(false); setRecFrom(null) }
   const stopConnecting = () => { setConnecting(false); setConnFrom(null) }
-  const startConnecting = () => { stopRecording(); setConnecting(true); setConnFrom(null); setSelected(null); setPicked(null); setShowRef(false) }
+  const startConnecting = () => { stopRecording(); setConnecting(true); setConnFrom(null); setSelected(null); setPicked(null); leaveRef() }
   const reset = () => {
     if (!confirm(`Clear your answer for "${ref.meta.title}"? This cannot be undone.`)) return
     setAttempt(blankAttempt(ref)); setReview(null); setHints(0); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
@@ -128,7 +139,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
     setAttemptMsg(store.set(snapshotsKey(ref.id), next) ? 'Attempt saved.' : 'Could not save: browser storage is blocked or full. Use Back up to keep a copy.')
   }
   const openAttempt = (s: Snapshot) => {
-    setAttempt(s.design); setReview(s.review); setSelected(null); setPicked(null); stopRecording(); setFlowId(''); setShowRef(false)
+    setAttempt(s.design); setReview(s.review); setSelected(null); setPicked(null); stopRecording(); setFlowId(''); leaveRef()
     setAttemptMsg(`Opened "${s.name}". Undo brings your previous answer back.`)
   }
   const deleteAttempt = (s: Snapshot) => {
@@ -183,7 +194,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const quickPick = (kind: string) => {
     const r = addNode(attempt, kind)
     const from = selected && attempt.nodes.some(n => n.id === selected) ? selected : null
-    setAttempt(from ? connect(r.design, from, r.id) : r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
+    setAttempt(from ? connect(r.design, from, r.id) : r.design); setSelected(r.id); setPicked(null); setTab('build'); leaveRef()
   }
   const duplicate = (id: string | null) => {
     const r = id ? duplicateNode(attempt, id) : null
@@ -192,7 +203,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
 
   const add = (kind: string) => {
     const r = addNode(attempt, kind)
-    setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build'); setShowRef(false)
+    setAttempt(r.design); setSelected(r.id); setPicked(null); setTab('build'); leaveRef()
   }
   const onNode = (id: string | null) => {
     if (showRef) { setSelected(id); if (id) setRefTab(t => (t === 'monitoring' || t === 'questions' ? t : 'component')); return }
@@ -230,6 +241,14 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  const edit: EditProps | undefined = showRef ? undefined : {
+    onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
+    onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },
+    // side by side shows only the comparison outlines
+    pickedEdge: picked ? edgeId(picked) : null, flagged: side ? NONE : flagged, marks: side ? undefined : marks, recordingFrom: recording ? recFrom : connecting ? connFrom : null,
+    mode: recording ? 'record' : connecting ? 'connect' : null,
+  }
+  const timerTop = !showRef && session && session.endedAt === null ? 56 : undefined   // room for the timer banner
   const r = ref.requirements
   const kindsByTier = TIERS.map(t => ({ t, kinds: Object.entries(KINDS).filter(([, v]) => v.tier === t) }))
 
@@ -281,9 +300,10 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
         <Toolbar>
           <Seg label="View" value={view} onChange={setView}
             options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow?.steps.length }]} />
-          <Seg label="Whose design" value={showRef ? 'ref' : 'mine'}
-            onChange={k => { if (k === 'ref') { setShowRef(true); takeHint(4); stopRecording(); stopConnecting(); setPicked(null) } else setShowRef(false); setSelected(null) }}
-            options={[{ key: 'mine', label: 'Mine' }, { key: 'ref', label: 'Reference' }]} />
+          <Seg label="Whose design" value={whose}
+            onChange={k => { if (k !== 'mine') takeHint(4); if (k === 'ref') { stopRecording(); stopConnecting(); setPicked(null) } setWhose(k); setSelected(null) }}
+            options={[{ key: 'mine', label: 'Mine' }, { key: 'ref', label: 'Reference' },
+              { key: 'side', label: 'Side by side', disabled: !sideFits, title: sideFits ? 'Your answer and the reference next to each other' : 'Side by side needs a wider window, or a side panel closed' }]} />
           {view === 'canvas' && <>
             <ToolbarSep />
             <ToolbarLabel>Layers</ToolbarLabel>
@@ -323,15 +343,31 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
           onDrop={e => { setDropping(false); const k = e.dataTransfer.getData('application/x-kind'); if (k) { e.preventDefault(); add(k) } }}>
           {view === 'timeline' && flow?.steps.length
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
-            : <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={!showRef && session && session.endedAt === null ? { ...insets, top: 56 } : insets} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
-                  edit={showRef ? undefined : {
-                    onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
-                    onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },
-                    pickedEdge: picked ? edgeId(picked) : null, flagged, marks, recordingFrom: recording ? recFrom : connecting ? connFrom : null,
-                    mode: recording ? 'record' : connecting ? 'connect' : null,
-                  }} />}
-          {!showRef && attempt.nodes.length === 0 && (
+            : gaps
+              // Two canvases: the answer keeps the outer provider (so Export image saves it), the reference gets its own.
+              ? <div className="side-by-side">
+                  <div className="side-panes">
+                    <section className="side-pane" aria-label="Your answer">
+                      <span className="side-label">Your answer</span>
+                      <BandCanvas design={attempt} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
+                        zonesView={false} zone={NO_ZONES} insets={{ left: 12, right: 12, top: timerTop ?? 28 }} captionDetail={!rightOpen} selected={selected} onSelect={onNode} colorMode={colorMode}
+                        edit={edit} gaps={{ ids: gaps.extra, gap: 'extra' }} />
+                    </section>
+                    <section className="side-pane ref" aria-label="Reference">
+                      <span className="side-label">Reference</span>
+                      <ReactFlowProvider>
+                        <BandCanvas id="reference" design={ref} flow={undefined} player={idle} cloud={cloud} network={network}
+                          zonesView={false} zone={NO_ZONES} insets={{ left: 12, right: 12, top: timerTop ?? 28 }} selected={null} onSelect={() => {}} colorMode={colorMode}
+                          gaps={{ ids: gaps.missing, gap: 'missing' }} />
+                      </ReactFlowProvider>
+                    </section>
+                  </div>
+                  <p className="side-legend">Outlined on the reference: kinds of component your answer does not have yet. Outlined on yours: extras the reference does without.</p>
+                </div>
+              : <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
+                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={{ ...insets, top: timerTop }} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
+                  edit={edit} />}
+          {!showRef && !side && attempt.nodes.length === 0 && (
             <div className="empty-hint">
               <b>Design: {ref.meta.title}</b>
               <span>Add components from the palette, or press <kbd>/</kbd> and type. Drag from one component's edge to another to connect them, then record a request flow.</span>
@@ -366,7 +402,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
                 selected={selected} onSelect={setSelected} picked={picked} onPick={setPicked}
                 flow={flow} onFlow={id => { setFlowId(id); stopRecording() }} player={player}
                 recording={recording} onRecord={() => { stopConnecting(); setRecording(true); setRecFrom(null); setSelected(null); setPicked(null) }} onStopRecording={stopRecording}
-                result={result} reasoningOn={reasoningOn} onCompare={() => { setShowRef(true); takeHint(4) }}
+                result={result} reasoningOn={reasoningOn} onCompare={() => { setWhose(sideFits ? 'side' : 'ref'); takeHint(4) }}
                 hints={hints} onHint={takeHint}
                 reference={ref} review={review} onReview={setReview} timed={timed} />}
         </aside>

@@ -1,7 +1,7 @@
 // The one toolbar above the canvas, shared by Explore and Practice: view switches on the left,
 // network and availability in the middle, editing actions on the right.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { useReactFlow } from '@xyflow/react'
+import { useReactFlow, useStoreApi } from '@xyflow/react'
 import type { Cloud } from '../model/kinds'
 import { zoneName } from '../model/availability'
 import { exportCanvasImage } from './exportImage'
@@ -80,13 +80,14 @@ export function AvailabilityMenu({ zoneCount, cloud, zonesView, onZonesView, fai
   )
 }
 
-/** Save the canvas as a PNG. Must sit inside the ReactFlowProvider that wraps the toolbar and the canvas. */
+/** Save the canvas as a PNG. Must sit inside the ReactFlowProvider of the canvas it saves. */
 export function ExportImageButton({ title, disabled }: { title: string; disabled?: boolean }) {
   const rf = useReactFlow()
+  const store = useStoreApi()
   const [busy, setBusy] = useState(false)
   const run = async () => {
     setBusy(true)
-    try { await exportCanvasImage(rf.getNodes(), title) } catch (e) { alert(`Could not save the image. ${e instanceof Error ? e.message : ''}`.trim()) }
+    try { await exportCanvasImage(rf.getNodes(), title, store.getState().domNode) } catch (e) { alert(`Could not save the image. ${e instanceof Error ? e.message : ''}`.trim()) }
     setBusy(false)
   }
   return <button className="tb-btn" disabled={disabled || busy} title="Save the canvas as a PNG to paste into notes or docs" onClick={run}>Export image</button>

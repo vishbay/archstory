@@ -11,9 +11,10 @@ export function imageFileName(title: string): string {
   return `${slug || 'canvas'}.png`
 }
 
-/** Render every node (whatever the current pan and zoom) at 2x on the theme's canvas colour, and download it. */
-export async function exportCanvasImage(nodes: Node[], title: string) {
-  const el = document.querySelector<HTMLElement>('.react-flow__viewport')
+/** Render every node (whatever the current pan and zoom) at 2x on the theme's canvas colour, and download it.
+ *  `root` is the canvas to render, so another canvas on the page is never picked up instead. */
+export async function exportCanvasImage(nodes: Node[], title: string, root: ParentNode | null) {
+  const el = root?.querySelector<HTMLElement>('.react-flow__viewport')
   if (!el || !nodes.length) throw new Error('Nothing on the canvas to export.')
   const b = getNodesBounds(nodes)
   const w = Math.min(MAX, Math.ceil(b.width + PAD * 2)), h = Math.min(MAX, Math.ceil(b.height + PAD * 2))
