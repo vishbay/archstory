@@ -1,0 +1,902 @@
+{
+  "schema": "archstory/v1",
+  "id": "multi-region-app",
+  "meta": {
+    "title": "Multi-Region Active-Active App",
+    "summary": "Serve profile and order traffic for users in North America and Europe from two regions at once, so each user hits the nearest region and losing a whole region costs about a minute and a few seconds of writes.",
+    "tags": [
+      "multi-region",
+      "active-active",
+      "disaster recovery",
+      "replication",
+      "conflict resolution",
+      "idempotency"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Users read and edit their profile (name, addresses, preferences, avatar)",
+      "Users place orders and see their order history",
+      "Every request is served by the nearest healthy region",
+      "Either region can serve any user: no sticky sessions and no region pinned in the client",
+      "A nightly billing and reporting run summarizes orders for finance"
+    ],
+    "nonFunctional": [
+      "Reads p99 < 150 ms measured at the regional load balancer",
+      "99.99% availability for reads, 99.95% for order placement",
+      "Survive the loss of a whole region: RTO 1 min, RPO 5 s for profile and order data",
+      "Each region can carry 100% of global peak on its own",
+      "A request retried after a failover never creates a second order or a second charge",
+      "EU users' personal data handling meets the company's data residency commitments"
+    ],
+    "scale": [
+      {
+        "label": "Users",
+        "value": "40M registered (24M North America, 16M Europe), 10M daily active"
+      },
+      {
+        "label": "Reads",
+        "value": "~60,000/s global peak (profile, order history), ~95% cache hits"
+      },
+      {
+        "label": "Writes",
+        "value": "~4,000/s peak (profile, cart and order updates); orders ~3M/day, 400/s peak"
+      },
+      {
+        "label": "Data",
+        "value": "40M profiles × ~2 KB ≈ 80 GB; orders ~1 KB × 3M/day ≈ 1.1 TB/year, stored in both regions"
+      },
+      {
+        "label": "Replication",
+        "value": "~4 MB/s across the Atlantic ≈ 10 TB/month of cross-region transfer; lag p99 < 1 s"
+      },
+      {
+        "label": "Capacity",
+        "value": "each region sized for 60,000 reads/s and 4,000 writes/s, so normally at about half load"
+      }
+    ]
+  },
+  "regions": {
+    "regions": [
+      {
+        "id": "use1",
+        "name": "us-east-1",
+        "role": "active"
+      },
+      {
+        "id": "euw1",
+        "name": "eu-west-1",
+        "role": "active"
+      }
+    ],
+    "strategy": "active-active",
+    "rto": "1 min",
+    "rpo": "5 s",
+    "failover": "Latency-based DNS records with health checks on each region's load balancer (every 10 s from several checker locations, unhealthy after 3 failures). A failed region's record is withdrawn and resolvers move users to the other region once the 30 s TTL expires; nothing has to be promoted because both regions already take writes.",
+    "dnsTtl": 30
+  },
+  "network": {
+    "cidr": "10.20.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.20.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.20.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.20.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "read-availability",
+        "name": "Profile and history reads",
+        "kind": "availability",
+        "sli": "Read requests answered without a 5xx or timeout, divided by all read requests, summed across both regions' load balancers",
+        "target": 99.99
+      },
+      {
+        "id": "read-latency",
+        "name": "Read speed",
+        "kind": "latency",
+        "sli": "Read requests answered within the threshold, divided by all read requests, at each regional load balancer",
+        "target": 99,
+        "threshold": "< 150 ms"
+      },
+      {
+        "id": "order-availability",
+        "name": "Order placement",
+        "kind": "availability",
+        "sli": "Order requests that end in a definite answer (created, replayed or rejected by a rule), divided by all order requests, at the load balancers",
+        "target": 99.95
+      },
+      {
+        "id": "replication-freshness",
+        "name": "Cross-region replication",
+        "kind": "freshness",
+        "sli": "Minutes in which the global table's replication latency to the other region stays under the threshold, divided by all minutes",
+        "target": 99.9,
+        "threshold": "< 2 s"
+      }
+    ],
+    "alerts": [
+      {
+        "id": "read-burn",
+        "severity": "page",
+        "when": "Read errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour), in either region",
+        "why": "Users cannot load their profile or orders. Check whether one region is failing and DNS has not moved its users yet.",
+        "target": "lb",
+        "slo": "read-availability"
+      },
+      {
+        "id": "order-burn",
+        "severity": "page",
+        "when": "Order errors burning the error budget 14 times too fast (5 minutes and 1 hour)",
+        "why": "Users cannot buy, which loses revenue directly.",
+        "target": "api",
+        "slo": "order-availability"
+      },
+      {
+        "id": "region-unhealthy",
+        "severity": "page",
+        "when": "A region's DNS health check is failing for 1 minute, or one region's error rate is 10 times the other's for 5 minutes",
+        "why": "Failover should be automatic, but a human must confirm it happened, that the surviving region is absorbing the load, and that the failed region stays out until it is fixed.",
+        "target": "dns"
+      },
+      {
+        "id": "replication-lag",
+        "severity": "ticket",
+        "when": "Global table replication latency above 5 s for 10 minutes",
+        "why": "Lag is the data a region failure would lose right now, so sustained lag above the RPO means the RPO is not being met even though users notice nothing.",
+        "target": "db",
+        "slo": "replication-freshness"
+      },
+      {
+        "id": "headroom",
+        "severity": "ticket",
+        "when": "Either region above 50% of its tested capacity at daily peak (CPU, task count or table capacity), for 3 days",
+        "why": "Above half, the surviving region could not take the other region's users in a failover. This is the alert that protects the RTO.",
+        "target": "api",
+        "slo": "read-latency"
+      },
+      {
+        "id": "billing-late",
+        "severity": "ticket",
+        "when": "The nightly billing run has not finished by 06:00 UTC",
+        "why": "Finance reports wait, but no user is affected. It also fires on the morning after us-east-1 is lost, because the job only runs there.",
+        "target": "billing"
+      }
+    ],
+    "signals": [
+      {
+        "target": "db",
+        "name": "Replication latency to the other region",
+        "metric": "dynamodb_replication_latency_ms{source_region,receiving_region}",
+        "why": "The live RPO: how many seconds of writes a region failure would lose."
+      },
+      {
+        "target": "dns",
+        "name": "Health check status per region",
+        "metric": "route53_health_check_status{endpoint=use1|euw1}",
+        "why": "Tells you which regions DNS is currently answering with."
+      },
+      {
+        "target": "lb",
+        "name": "Requests per region",
+        "metric": "lb_requests_total{region}",
+        "why": "Should split roughly 60/40 between North America and Europe; a sudden 100/0 split is a failover, planned or not."
+      },
+      {
+        "target": "api",
+        "name": "Idempotent replays",
+        "metric": "orders_idempotency_total{outcome=new|replayed|resumed|mismatch}",
+        "why": "Replays and resumed orders spike right after a failover, when clients retry in the other region."
+      },
+      {
+        "target": "cache",
+        "name": "Hit ratio per region",
+        "metric": "cache_hits / (cache_hits + cache_misses){region}",
+        "why": "Drops sharply in the surviving region after a failover, because the moved users' keys were never cached there."
+      },
+      {
+        "target": "billing",
+        "name": "Last successful run",
+        "metric": "billing_last_success_timestamp",
+        "why": "The job runs only in us-east-1, so a region failure shows up here first."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "A user says a profile change they made disappeared",
+        "steps": [
+          "Look up the item in both regions and compare the last-modified timestamps and the region that wrote each version.",
+          "Search the API logs in both regions for writes to that user id within a few seconds of each other: two concurrent writes mean last writer wins dropped one.",
+          "Check replication latency at the time: high lag widens the window in which two regions can both accept a write.",
+          "If it recurs for one data type, route that type's writes to the user's home region, or change the data to merge (for example append-only address entries)."
+        ]
+      },
+      {
+        "symptom": "Order placement errors right after a region was withdrawn from DNS",
+        "steps": [
+          "Confirm on the load balancer request counts that traffic actually moved, and how long clients kept hitting the failed region (resolvers that ignore the TTL).",
+          "Check the surviving region's capacity: task count against its maximum, table throttling, and cache hit ratio, which falls as moved users arrive cold.",
+          "Look at idempotency outcomes: many mismatch results mean clients are generating new order ids on retry instead of reusing them.",
+          "Check payment provider latency and errors, since every resumed order calls it again with the original key."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Web and Mobile App",
+      "kind": "web_client",
+      "description": "Generates the order id once per checkout and reuses it on every retry; keeps a signed access token, no server session"
+    },
+    {
+      "id": "dns",
+      "label": "Latency DNS",
+      "kind": "dns",
+      "description": "Latency-based records for both regions with health checks; answers with the nearest healthy region",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Static assets and avatars from edge locations worldwide",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Regional Load Balancer",
+      "kind": "load_balancer",
+      "description": "One per region: TLS, health endpoint for DNS checks, routing to the API tasks",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "Regional external Application Load Balancer"
+      }
+    },
+    {
+      "id": "api",
+      "label": "Profile and Orders API",
+      "kind": "service",
+      "description": "Stateless; runs in both regions, each sized for 100% of global peak; verifies tokens locally",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "cache",
+      "label": "Regional Cache",
+      "kind": "cache",
+      "description": "One per region, not replicated: profiles and recent orders with a 60 s TTL; holds only the users that region has served",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
+      "id": "db",
+      "label": "Global Table",
+      "kind": "nosql_db",
+      "description": "users, orders, refresh tokens; a full replica in each region takes local writes and replicates asynchronously, last writer wins per item",
+      "cloud": {
+        "aws": "DynamoDB global tables",
+        "gcp": "Spanner"
+      }
+    },
+    {
+      "id": "media",
+      "label": "Avatar Storage",
+      "kind": "object_store",
+      "regions": "global",
+      "description": "A bucket in each region behind one global endpoint, with two-way replication; keys are unique per upload, so replication never conflicts",
+      "cloud": {
+        "aws": "S3 Multi-Region Access Point",
+        "gcp": "Cloud Storage dual-region bucket"
+      }
+    },
+    {
+      "id": "billing",
+      "label": "Billing and Reports Job",
+      "kind": "scheduler",
+      "regions": "primary",
+      "description": "Nightly: exports the day's orders and builds invoices and finance reports; deployed only in us-east-1",
+      "cloud": {
+        "aws": "AWS Batch",
+        "gcp": "Cloud Run Job"
+      }
+    },
+    {
+      "id": "warehouse",
+      "label": "Reporting Warehouse",
+      "kind": "analytics",
+      "replication": "backup",
+      "description": "Order history and finance tables for analysts; loaded in us-east-1, with a daily snapshot copied to eu-west-1 to restore from",
+      "cloud": {
+        "aws": "Redshift",
+        "gcp": "BigQuery"
+      }
+    },
+    {
+      "id": "psp",
+      "label": "Payment Provider",
+      "kind": "payment_provider",
+      "description": "Charges cards; accepts an idempotency key and returns the original charge for a repeated key"
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "client",
+      "to": "dns"
+    },
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "client",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "api"
+    },
+    {
+      "from": "api",
+      "to": "cache"
+    },
+    {
+      "from": "api",
+      "to": "db"
+    },
+    {
+      "from": "api",
+      "to": "psp"
+    },
+    {
+      "from": "cdn",
+      "to": "media"
+    },
+    {
+      "from": "billing",
+      "to": "db"
+    },
+    {
+      "from": "billing",
+      "to": "warehouse"
+    }
+  ],
+  "flows": [
+    {
+      "id": "read",
+      "title": "Read a profile in the nearest region",
+      "summary": "A user in Berlin is answered by eu-west-1: DNS picks the region by measured latency, the token is checked locally, and the profile comes from the regional cache or the local replica of the global table.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve api.shop.example",
+          "detail": "Latency-based routing answers with the region that has the lowest measured latency from the user's resolver, and only among regions whose health checks pass."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "eu-west-1 load balancer, TTL 30 s",
+          "detail": "The short TTL is what lets a failover reach users within the RTO; a long TTL would keep them on a dead region.",
+          "payload": "api.shop.example.  30  IN  A  34.250.17.40   ; eu-west-1 load balancer (latency record, healthy)"
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /v1/me",
+          "detail": "Nothing in the request names a region, so the same request works unchanged against either one.",
+          "payload": "GET /v1/me HTTP/2\nHost: api.shop.example\nAuthorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6ImsyMDI2MTEifQ..."
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /v1/me",
+          "detail": "Any task in any zone can take it, because the service keeps no state between requests."
+        },
+        {
+          "from": "api",
+          "to": "api",
+          "kind": "local",
+          "phase": "Auth",
+          "label": "verify token signature and expiry",
+          "detail": "Sessions are short-lived signed tokens verified with a public key both regions hold, so there is no session store to replicate and a failover does not log anyone out. Refresh tokens live in the global table."
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Read",
+          "label": "GET profile:u_4417",
+          "detail": "The cache in this region only holds users this region has served. It is not replicated, because it can always be refilled from the local table."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Read",
+          "label": "miss"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Read",
+          "label": "GetItem users u_4417 (local replica)",
+          "detail": "Read from the replica in this region: single-digit milliseconds instead of a 75 ms round trip across the Atlantic. It may miss a write made in the other region in the last second.",
+          "payload": "GetItem {\n  TableName: \"users\",\n  Key: { pk: \"USER#u_4417\" },\n  ConsistentRead: false\n}"
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Read",
+          "label": "profile item",
+          "payload": "{ \"pk\": \"USER#u_4417\", \"name\": \"Lena K\", \"home_region\": \"eu-west-1\", \"avatar\": \"avatars/u_4417/9f2c.webp\", \"updated_at\": \"2026-11-10T08:14:03.512Z\" }"
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Read",
+          "label": "SET profile:u_4417 EX 60",
+          "detail": "A 60 s TTL bounds how long this region can show a profile that was changed in the other region, since a write there does not invalidate this cache."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Read",
+          "label": "OK"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 profile"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 profile",
+          "payload": "HTTP/2 200\nx-served-by: eu-west-1\n\n{ \"id\": \"u_4417\", \"name\": \"Lena K\", \"avatar_url\": \"https://cdn.shop.example/avatars/u_4417/9f2c.webp\" }"
+        },
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Avatar",
+          "label": "GET avatar",
+          "detail": "Images never touch the regional stack: the CDN serves them from an edge location near the user."
+        },
+        {
+          "from": "cdn",
+          "to": "media",
+          "kind": "req",
+          "phase": "Avatar",
+          "label": "origin fetch on miss",
+          "detail": "The origin is the global storage endpoint, which routes to the nearest bucket that holds the object and to the other one if a region is down."
+        },
+        {
+          "from": "media",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Avatar",
+          "label": "image, cached for a day"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Avatar",
+          "label": "image"
+        }
+      ]
+    },
+    {
+      "id": "order",
+      "title": "Place an order: commit locally, replicate to the other region",
+      "summary": "The order is written in the user's nearest region and the user gets an answer without waiting on the Atlantic. The global table copies the item to the other region about a second later, and the order id doubles as the idempotency key.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /v1/orders",
+          "detail": "The app creates the order id when the user taps Buy and sends it on every retry. Because the id is chosen by the client, a retry in either region names the same order.",
+          "payload": "POST /v1/orders HTTP/2\nAuthorization: Bearer eyJhbGci...\nIdempotency-Key: ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\n\n{ \"items\": [{ \"sku\": \"BK-2231\", \"qty\": 1 }], \"total_minor\": 3499, \"currency\": \"EUR\", \"payment_method\": \"pm_card_8812\" }"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /v1/orders"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Claim order id",
+          "label": "PutItem order PENDING, if not exists",
+          "detail": "The condition makes the order id unique in this region's replica. It cannot see a write the other region has not replicated yet, which is why the payment step below also needs its own idempotency key.",
+          "payload": "PutItem {\n  TableName: \"orders\",\n  Item: { pk: \"ORDER#ord_01JCK8Z3...\", user: \"u_4417\", status: \"PENDING\", total_minor: 3499,\n          currency: \"EUR\", request_hash: \"sha256:4be1...\", written_in: \"eu-west-1\" },\n  ConditionExpression: \"attribute_not_exists(pk)\"\n}"
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Claim order id",
+          "label": "OK, new order"
+        },
+        {
+          "from": "api",
+          "to": "psp",
+          "kind": "req",
+          "phase": "Charge",
+          "label": "create charge, key = order id",
+          "detail": "Using the order id as the provider's idempotency key means a retry from any region, at any time, gets the original charge back instead of charging again.",
+          "payload": "POST /v1/charges\nIdempotency-Key: ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\n\n{ \"amount\": 3499, \"currency\": \"eur\", \"payment_method\": \"pm_card_8812\" }"
+        },
+        {
+          "from": "psp",
+          "to": "api",
+          "kind": "res",
+          "phase": "Charge",
+          "label": "succeeded, ch_7Tq2"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Confirm",
+          "label": "UpdateItem status PAID",
+          "detail": "The condition only allows the PENDING to PAID step, so a stale or repeated update cannot move the order backwards in this region.",
+          "payload": "UpdateItem {\n  Key: { pk: \"ORDER#ord_01JCK8Z3...\" },\n  UpdateExpression: \"SET #s = :paid, charge_id = :ch\",\n  ConditionExpression: \"#s = :pending\"\n}"
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Confirm",
+          "label": "OK"
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Confirm",
+          "label": "DEL orders:u_4417",
+          "detail": "Clears this region's cached order list so the user sees the new order immediately. The other region's copy expires within its 60 s TTL."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Confirm",
+          "label": "1"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created",
+          "payload": "HTTP/2 201\nx-served-by: eu-west-1\n\n{ \"order_id\": \"ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\", \"status\": \"paid\" }"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "Order confirmed"
+        },
+        {
+          "from": "db",
+          "to": "db",
+          "kind": "local",
+          "phase": "Replicate",
+          "label": "copy item to us-east-1 (async, ~1 s)",
+          "detail": "Replication starts after the commit, so the user never waits on the cross-region round trip. If both regions change the same item before they sync, the version with the later timestamp wins and the other is silently discarded, so the data model keeps that rare: orders are created once under a unique id and only move forward in status."
+        }
+      ]
+    },
+    {
+      "id": "region-failure",
+      "title": "us-east-1 fails: traffic shifts and a retried order resumes",
+      "summary": "Health checks withdraw us-east-1 from DNS and its users land in eu-west-1 within about a minute. A checkout that was in flight is retried with the same order id and finishes without a second order or charge; writes that had not replicated are stranded until the region returns.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "In flight",
+          "label": "POST /v1/orders to us-east-1",
+          "detail": "A New York user taps Buy as us-east-1 fails. The order PENDING row committed and replicated, the charge succeeded at the provider, but the region died before the PAID update replicated."
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "phase": "In flight",
+          "label": "connection reset",
+          "detail": "The app cannot tell whether the order went through, so it keeps the order id and retries with backoff."
+        },
+        {
+          "from": "dns",
+          "to": "dns",
+          "kind": "local",
+          "phase": "Detect",
+          "label": "us-east-1 health check fails 3 times",
+          "detail": "Checks from several locations agree within about 30 s, and the us-east-1 record stops being returned. Requiring several checkers stops one network blip from failing a healthy region over."
+        },
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "phase": "Reroute",
+          "label": "resolve api.shop.example",
+          "detail": "Once the cached answer's 30 s TTL expires, the resolver asks again. Some resolvers and clients hold answers longer than the TTL, which is why a few users take longer to move."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "phase": "Reroute",
+          "label": "eu-west-1 load balancer",
+          "payload": "api.shop.example.  30  IN  A  34.250.17.40   ; only healthy latency record left"
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Retry",
+          "label": "POST /v1/orders, same order id",
+          "detail": "Same id and same body, now to eu-west-1, about 75 ms further away for this user but fully able to serve them.",
+          "payload": "POST /v1/orders HTTP/2\nIdempotency-Key: ord_01JCK9A1F7R2V8PZ6D3K0W5MYS\n\n{ \"items\": [{ \"sku\": \"HD-0410\", \"qty\": 2 }], \"total_minor\": 5998, \"currency\": \"USD\", \"payment_method\": \"pm_card_2290\" }"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Retry",
+          "label": "POST /v1/orders",
+          "detail": "The eu-west-1 fleet is already sized for all users, so it takes the doubled traffic without waiting for autoscaling."
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Retry",
+          "label": "PutItem order PENDING, if not exists",
+          "detail": "The PENDING row from us-east-1 did replicate, so the condition fails and tells the service this is a repeat, not a new order."
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Retry",
+          "label": "exists: PENDING, same request hash",
+          "detail": "Same hash: the same checkout, resume it. A different hash would mean the client reused an id for a different order, answered with 422."
+        },
+        {
+          "from": "api",
+          "to": "psp",
+          "kind": "req",
+          "phase": "Resume",
+          "label": "create charge, key = order id (again)",
+          "detail": "The service cannot know whether us-east-1 charged the card, so it asks again with the same key. The provider is the one place that saw the first attempt."
+        },
+        {
+          "from": "psp",
+          "to": "api",
+          "kind": "res",
+          "phase": "Resume",
+          "label": "succeeded, ch_9Lm4 (replayed)",
+          "detail": "The original charge comes back. No second charge was made."
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Resume",
+          "label": "UpdateItem status PAID",
+          "detail": "If us-east-1 returns later holding its own unreplicated PAID update for this order, both versions say PAID with the same charge, so last writer wins converges on the same answer."
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Resume",
+          "label": "OK"
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Resume",
+          "label": "GET profile:u_2093",
+          "detail": "Moved users arrive at a cache that has never seen them, so hit rates drop and reads fall through to the table until it warms. The table in this region must be provisioned for that, not just for its usual 95% hit rate."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Resume",
+          "label": "miss (cold for US users)"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created (resumed)",
+          "payload": "HTTP/2 201\nx-served-by: eu-west-1\nIdempotent-Replayed: true\n\n{ \"order_id\": \"ord_01JCK9A1F7R2V8PZ6D3K0W5MYS\", \"status\": \"paid\" }"
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "Order confirmed (once)"
+        },
+        {
+          "from": "db",
+          "to": "db",
+          "kind": "local",
+          "phase": "What is lost",
+          "label": "unreplicated us-east-1 writes stranded",
+          "detail": "Writes us-east-1 committed in its last second or so never reached eu-west-1. They replicate when the region returns, where last writer wins may overwrite a newer edit made since. The nightly billing job runs only in us-east-1, so billing stops until that region is back or the job is redeployed, and the warehouse has to be restored in eu-west-1 from yesterday's snapshot."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "dns",
+      "kind": "tradeoff",
+      "text": "DNS failover is cheap and simple but bounded by caching: detection (about 30 s) plus the TTL (30 s) sets the RTO, and some resolvers ignore low TTLs. An anycast global load balancer (AWS Global Accelerator, Google's global external load balancer) gives users fixed IPs and shifts traffic in seconds with no DNS change, at the cost of another managed layer in front of every request."
+    },
+    {
+      "target": "db",
+      "kind": "tradeoff",
+      "text": "Asynchronous multi-writer replication keeps writes local and fast, but two regions can change the same item before they sync, and last writer wins keeps one version whole and drops the other. Conditional writes and transactions are only checked against the local replica. Design so conflicts are rare and harmless: unique ids for new records, status that only moves forward, and anything that must never conflict (stock, balances) written only in one home region or kept in a strongly consistent store."
+    },
+    {
+      "target": "api",
+      "kind": "scaling",
+      "text": "Each region carries about half the traffic but is sized for all of it, so the surviving region absorbs a failover without waiting for autoscaling, which is too slow and may hit capacity or quota limits at the moment everyone else is failing over too. Remember the hidden capacity: the table's read capacity in the surviving region must cover the cold-cache misses of every moved user."
+    },
+    {
+      "target": "billing",
+      "kind": "failure",
+      "text": "The billing job runs only in us-east-1 and the warehouse reaches eu-west-1 only as a daily snapshot, deliberate cost savings that the region drill exposes: losing us-east-1 stops billing and loses up to a day of warehouse loads. That is acceptable only because both are off the request path and the warehouse can be reloaded from point-in-time exports of the global table, which holds every order in both regions; write that recovery runbook down and test it."
+    },
+    {
+      "target": "db",
+      "kind": "security",
+      "text": "A global table copies every item to every region, so EU users' personal data is stored in the US. If residency is required, split by home region instead: EU users' data in a table replicated only between two EU regions, North American users' in two US regions, with routing by the home region in the token rather than by latency."
+    },
+    {
+      "target": "db",
+      "kind": "note",
+      "text": "On Google Cloud the closest managed choice is a multi-region Spanner instance, which behaves differently: it commits each write synchronously to a majority of replicas across regions, so nothing committed is lost and there are no conflicts, but every write pays the cross-region quorum latency. Bigtable with multi-cluster replication is the asynchronous, last writer wins equivalent of the model drawn here."
+    }
+  ],
+  "questions": [
+    {
+      "id": "rto-rpo",
+      "q": "The business asks for zero data loss instead of an RPO of 5 seconds. What changes, and what does it cost?",
+      "a": "Zero RPO means a write is not acknowledged until a second region has it, so every write pays at least one cross-region round trip, about 75 ms between Virginia and Ireland, and writes stop or slow when the regions cannot talk. That means synchronous replication: Spanner multi-region, CockroachDB, or DynamoDB multi-region strong consistency, which involves a third region. A common compromise is synchronous only for the data that truly cannot be lost, such as payments, and asynchronous with a seconds-long RPO for profiles and preferences.",
+      "topic": "tradeoffs",
+      "targets": [
+        "db"
+      ]
+    },
+    {
+      "id": "conflicts",
+      "q": "A user edits their shipping address on a phone in Europe and on a laptop in the US within the same second. What happens, and how would you stop it surprising them?",
+      "a": "Each region accepts its write locally and the global table resolves the conflict with last writer wins per item, so one whole version is kept and the other edit silently disappears, even if the two edits touched different fields. Conditional writes do not help, because each region checks only its own replica. Options are routing each user's writes to a home region (reads stay local), modelling data so concurrent edits merge (each address as its own item, append-only changes), or a strongly consistent store for data where losing an edit matters.",
+      "topic": "consistency",
+      "targets": [
+        "db",
+        "api"
+      ]
+    },
+    {
+      "id": "retry-after-failover",
+      "q": "A checkout times out just as its region fails, and the app retries in the other region. How do you avoid a duplicate order or a double charge?",
+      "a": "The client generates the order id once and reuses it as the idempotency key, so the retry names the same order. If the original row replicated, a conditional put finds it and the service resumes or replays it; if it did not, the new region creates it under the same id, and the two versions later converge on one item instead of two orders. The payment provider call uses the same key, so whichever region calls it gets the original charge back, which is the guarantee that matters most because the database alone cannot see unreplicated writes.",
+      "topic": "reliability",
+      "targets": [
+        "client",
+        "api",
+        "db",
+        "psp"
+      ]
+    },
+    {
+      "id": "cost",
+      "q": "Running each region at 100% of peak roughly doubles the compute bill. How do you justify it, or reduce it?",
+      "a": "Compare the cost with the revenue and penalties of a region outage that lasts until capacity can be found, since autoscaling during a regional event competes with everyone else failing over. To reduce it, commit to the baseline with savings plans or reserved capacity, keep caches and stateless tiers lean, and accept slower non-critical features during a failover by shedding them. A third region changes the arithmetic: three regions each sized for half of peak is 150% of peak in total instead of 200%, at the price of more replication traffic and operational surface.",
+      "topic": "tradeoffs",
+      "targets": [
+        "api",
+        "lb",
+        "db"
+      ]
+    },
+    {
+      "id": "game-days",
+      "q": "How do you know the failover will actually work when a region goes down for real?",
+      "a": "Practise it on a schedule in production: withdraw one region from DNS during a quiet hour (or use a routing control built for this, such as Route 53 Application Recovery Controller), measure the real time until traffic moved, and watch the survivor's latency, throttling and cache hit rate. Inject faults with a tool like AWS Fault Injection Service to fail dependencies, not just whole regions, and rehearse failing back, which is often harder because of stranded writes. Track headroom continuously, because a failover plan that worked last quarter fails when one region has quietly grown past half of its capacity.",
+      "topic": "operations",
+      "targets": [
+        "dns",
+        "lb",
+        "api",
+        "cache"
+      ]
+    },
+    {
+      "id": "residency",
+      "q": "Legal says EU customers' personal data must stay in the EU. What in this design breaks, and how would you change it?",
+      "a": "The global table replicates every item to us-east-1, so EU profiles and orders are stored in the US, and the warehouse loaded in us-east-1 holds them too. Partition by residency: EU users live in a table replicated between two EU regions (for example Ireland and Frankfurt) and North American users in two US regions, each pair active-active for disaster recovery, with requests routed by the user's home region in their token. GDPR itself allows transfers under safeguards, but contracts or national rules often demand residency, and reporting then needs either per-region warehouses or only anonymized aggregates crossing the boundary.",
+      "topic": "security",
+      "targets": [
+        "db",
+        "warehouse",
+        "dns"
+      ]
+    }
+  ]
+}

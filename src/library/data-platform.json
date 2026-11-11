@@ -1,0 +1,1142 @@
+{
+  "schema": "archstory/v1",
+  "id": "data-platform",
+  "meta": {
+    "title": "Data Platform: Lake and Warehouse",
+    "summary": "A retailer's analytics platform: clickstream events streamed and orders captured by CDC into an Iceberg lake with raw, cleaned and curated zones, transformed by scheduled Spark and dbt jobs behind quality gates, and served to BI dashboards from a warehouse.",
+    "tags": [
+      "data lake",
+      "warehouse",
+      "streaming",
+      "CDC",
+      "data quality",
+      "governance"
+    ],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Collect clickstream events (page views, searches, add to cart, checkout steps) from the web and mobile apps",
+      "Capture every insert, update and delete in the operational orders database without slowing it down",
+      "Ingest daily exports from third-party SaaS tools (ad platforms, CRM, customer support)",
+      "Keep data in three zones in object storage: raw (as received, for replay), cleaned (typed, deduplicated, PII tokenized) and curated (business tables and aggregates)",
+      "Serve BI dashboards and ad hoc SQL from a warehouse, and give data scientists Spark and SQL access to the lake",
+      "Block data that fails quality checks from reaching curated tables, and support backfills of any past day or hour",
+      "Column-level access control, PII masking and lineage from source field to dashboard"
+    ],
+    "nonFunctional": [
+      "Clickstream dashboards are no more than 30 minutes behind real time",
+      "Yesterday's orders and revenue tables are published by 06:00 ET every day",
+      "No event the collector acknowledged is lost; reprocessing never double counts",
+      "Events up to 3 days late (offline mobile apps) land in the correct hour",
+      "Dashboard queries return within 5 s (p95)",
+      "Survives the loss of one availability zone; the collector keeps accepting events even when everything behind Kafka is down"
+    ],
+    "scale": [
+      {
+        "label": "Clickstream events",
+        "value": "2B / day, about 23k / s on average and 80k / s at sale peaks, about 1 KB each"
+      },
+      {
+        "label": "Data landed per day",
+        "value": "About 2.1 TB uncompressed (2 TB clickstream, 50 GB orders CDC from 40M row changes, 20 GB SaaS exports); about 250 GB as compressed Parquet"
+      },
+      {
+        "label": "Retention",
+        "value": "Kafka 7 days; raw 13 months; cleaned 2 years; curated 7 years (finance). About 400 TB in the lake, 60% of it in infrequent-access tiers"
+      },
+      {
+        "label": "Warehouse",
+        "value": "40 TB compressed; 600 dashboard users, up to 2k queries / hour at the Monday morning peak; 50 data scientists"
+      },
+      {
+        "label": "Freshness",
+        "value": "Clickstream dashboards within 30 min; daily finance tables by 06:00 ET"
+      },
+      {
+        "label": "Late events",
+        "value": "About 2% arrive more than 1 hour late, almost all within 3 days"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.20.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.20.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.20.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.20.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "dashboard-freshness",
+        "name": "Clickstream dashboards are fresh",
+        "kind": "freshness",
+        "sli": "5-minute samples where the newest hour published in the warehouse clickstream marts is less than the threshold behind now, divided by all samples",
+        "target": 99,
+        "threshold": "< 30 min behind"
+      },
+      {
+        "id": "nightly-ready",
+        "name": "Daily finance tables on time",
+        "kind": "freshness",
+        "sli": "Days on which fct_orders and daily_revenue for the previous day were published, with tests passing, by the deadline, divided by all days",
+        "target": 96,
+        "threshold": "by 06:00 ET"
+      },
+      {
+        "id": "curated-correct",
+        "name": "Curated data is right first time",
+        "kind": "correctness",
+        "sli": "Curated partitions published that did not need a restatement within 30 days, divided by all curated partitions published",
+        "target": 99.5
+      },
+      {
+        "id": "query-latency",
+        "name": "Dashboard queries are fast",
+        "kind": "latency",
+        "sli": "Queries from the BI tool's service account that finish under the threshold, divided by all of them, measured in the warehouse query log",
+        "target": 95,
+        "threshold": "< 5 s"
+      }
+    ],
+    "alerts": [
+      {
+        "id": "freshness-burn",
+        "severity": "page",
+        "when": "Newest published clickstream hour more than 30 min behind for 3 consecutive samples (15 min)",
+        "why": "Merchandisers are steering a live sale on numbers that are no longer current.",
+        "target": "warehouse",
+        "slo": "dashboard-freshness"
+      },
+      {
+        "id": "nightly-late",
+        "severity": "page",
+        "when": "At 04:30 ET the nightly DAG's remaining critical path, at its usual task durations, ends after 06:00 ET",
+        "why": "Finance and the morning revenue email depend on it. Paging at 04:30 leaves time to rerun a failed task or scale out before the deadline.",
+        "target": "scheduler",
+        "slo": "nightly-ready"
+      },
+      {
+        "id": "query-slow",
+        "severity": "page",
+        "when": "BI queries slower than 5 s above 5% of queries for 15 minutes during business hours",
+        "why": "Dashboards time out for hundreds of users at once.",
+        "target": "warehouse",
+        "slo": "query-latency"
+      },
+      {
+        "id": "gate-blocked",
+        "severity": "ticket",
+        "when": "Any quality gate blocks a curated publish, or more than 0.5% of a topic's events go to quarantine for 15 minutes",
+        "why": "The gate already protected the dashboards, so nothing is wrong yet. Someone must find the cause and backfill before the data goes stale; if they do not, freshness-burn pages.",
+        "target": "spark",
+        "slo": "curated-correct"
+      },
+      {
+        "id": "stream-lag",
+        "severity": "ticket",
+        "when": "Consumer lag of the streaming job on clickstream.raw above 10 minutes of data for 10 minutes",
+        "why": "The landing job is falling behind, which eats the 30 minute freshness budget before anyone sees stale dashboards.",
+        "target": "events",
+        "slo": "dashboard-freshness"
+      },
+      {
+        "id": "cdc-slot",
+        "severity": "ticket",
+        "when": "CDC replication lag above 15 minutes, or WAL retained by the replication slot on the orders DB above 20 GB",
+        "why": "A stalled CDC task makes the slot keep WAL on the production database. Left alone it fills the disk and takes checkout down, so act well before that.",
+        "target": "cdc"
+      }
+    ],
+    "signals": [
+      {
+        "target": "spark",
+        "name": "Quarantined events by schema",
+        "metric": "events_quarantined_total{topic, schema_ref, reason}",
+        "why": "A jump on one schema_ref points straight at the app release that broke the contract."
+      },
+      {
+        "target": "spark",
+        "name": "Late events by delay",
+        "metric": "event_lateness_seconds_bucket{topic}",
+        "why": "Received time minus event time. Shows whether the 3 day watermark still covers almost all late events."
+      },
+      {
+        "target": "lake",
+        "name": "Small files per partition",
+        "metric": "iceberg_data_files{table}, iceberg_avg_file_size_bytes{table}",
+        "why": "Minute-by-minute streaming commits create many small files. If compaction falls behind, every query and job reading the table slows down."
+      },
+      {
+        "target": "cdc",
+        "name": "Replication slot retained WAL",
+        "metric": "pg_replication_slot_retained_bytes{slot=\"lake_cdc\"}",
+        "why": "Measured on the orders DB itself: the earliest sign that CDC has stalled."
+      },
+      {
+        "target": "warehouse",
+        "name": "Bytes scanned per day by team",
+        "metric": "warehouse_bytes_scanned_total{team, user}",
+        "why": "Query cost is mostly bytes scanned, so one dashboard or notebook without a partition filter shows up here first."
+      },
+      {
+        "target": "scheduler",
+        "name": "Nightly DAG critical path end time",
+        "metric": "dag_critical_path_eta_seconds{dag=\"nightly_orders\"}",
+        "why": "Predicts the 06:00 deadline from the tasks still to run, so a slow night is visible before it becomes a late one."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Clickstream dashboards are stale",
+        "steps": [
+          "Find the last stage that moved: newest hour in the warehouse mart, newest snapshot on curated.page_views_hourly, newest snapshot on cleaned.events, consumer lag on clickstream.raw.",
+          "If Kafka lag is growing, check the streaming job: is it running, are micro-batches slower than the 1 minute trigger, is it stuck on one hot partition.",
+          "If cleaned is current but curated is not, open the latest curated run in the scheduler: a blocked quality gate means bad data upstream, so look at quarantine counts by schema.",
+          "If curated is current but the warehouse is not, check the load task and warehouse queueing; a load waiting behind heavy ad hoc queries needs its own workload queue."
+        ]
+      },
+      {
+        "symptom": "Yesterday's revenue in the dashboard does not match the orders database",
+        "steps": [
+          "Compare row counts and sums for the day at each hop: orders DB, CDC change files in raw, cleaned.orders, fct_orders.",
+          "If raw is short, check the CDC task for errors or restarts and whether the nightly sensor ran before the CDC watermark passed midnight.",
+          "If cleaned differs from raw, look for changes applied out of order: the merge must keep the last change per order by LSN, not by file arrival.",
+          "If only the mart differs, check time zones (UTC in the lake, ET in finance reports) and refunds dated on a different day from the order."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "app",
+      "label": "Storefront Apps",
+      "kind": "client",
+      "description": "Web and mobile apps with a tracking SDK that buffers events on the device and sends them in batches"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points the collector hostname at the load balancer",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "description": "TLS termination and HTTP routing to the collectors",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "collector",
+      "label": "Event Collector",
+      "kind": "service",
+      "description": "Deliberately thin: checks the app key and size, stamps received time, writes to Kafka. No schema validation, so a bad release never makes it reject events",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "orders_db",
+      "label": "Orders DB",
+      "kind": "sql_db",
+      "description": "The operational database behind checkout: customers, orders, order lines, refunds. The platform reads its change log, never its tables",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "lake",
+      "label": "Data Lake",
+      "kind": "object_store",
+      "ha": "regional",
+      "description": "Iceberg tables in Parquet, in raw, cleaned and curated zones (plus quarantine). Lifecycle rules move older files to infrequent-access tiers",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "warehouse",
+      "label": "Warehouse",
+      "kind": "analytics",
+      "tier": "data",
+      "ha": "regional",
+      "description": "Serves BI: dbt models and marts, partitioned and clustered, reading curated lake tables as external tables. Column masking and row policies for PII",
+      "cloud": {
+        "aws": "Redshift",
+        "gcp": "BigQuery"
+      }
+    },
+    {
+      "id": "registry",
+      "label": "Catalog and Schema Registry",
+      "kind": "service",
+      "tier": "data",
+      "icon": "📚",
+      "ha": "regional",
+      "description": "Table metadata and Iceberg snapshot pointers, event schemas with compatibility rules, data contracts for SaaS exports, column tags (PII) that drive access policies, and lineage",
+      "cloud": {
+        "aws": "Glue Data Catalog",
+        "gcp": "Dataplex"
+      }
+    },
+    {
+      "id": "events",
+      "label": "Clickstream Topic",
+      "kind": "stream",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "Kafka topic clickstream.raw: 96 partitions keyed by session id, replication factor 3, 7 day retention for replay",
+      "cloud": {
+        "aws": "MSK (Kafka)",
+        "gcp": "Managed Service for Apache Kafka"
+      }
+    },
+    {
+      "id": "cdc",
+      "label": "CDC Replication",
+      "kind": "worker",
+      "ha": "primary-standby",
+      "description": "Reads the orders DB's logical replication slot and writes every change, deletes included, as Parquet files to the raw zone",
+      "cloud": {
+        "aws": "DMS",
+        "gcp": "Datastream"
+      }
+    },
+    {
+      "id": "scheduler",
+      "label": "Orchestrator",
+      "kind": "scheduler",
+      "ha": "regional",
+      "description": "Airflow DAGs: the 15 minute curated build, the nightly orders DAG, dbt runs and backfills. Owns dependencies, retries and SLAs",
+      "cloud": {
+        "aws": "MWAA",
+        "gcp": "Cloud Composer"
+      }
+    },
+    {
+      "id": "spark",
+      "label": "Spark Jobs",
+      "kind": "worker",
+      "description": "One long-running streaming job lands clickstream every minute; batch jobs on transient clusters build cleaned and curated tables, run quality gates and backfills. Checkpoints live in the lake, so a job restarts in another zone",
+      "cloud": {
+        "aws": "EMR",
+        "gcp": "Dataproc"
+      }
+    },
+    {
+      "id": "saas",
+      "label": "SaaS Exports",
+      "kind": "external_api",
+      "description": "Ad platforms, CRM and support tools; pulled daily through their export APIs, with rate limits and their own schema changes"
+    },
+    {
+      "id": "bi",
+      "label": "BI Tool",
+      "kind": "external_api",
+      "description": "Dashboards and ad hoc exploration; queries the warehouse as a service account with each user's identity passed through for access policies",
+      "cloud": {
+        "aws": "QuickSight",
+        "gcp": "Looker"
+      }
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "app",
+      "to": "dns"
+    },
+    {
+      "from": "app",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "collector"
+    },
+    {
+      "from": "collector",
+      "to": "events"
+    },
+    {
+      "from": "events",
+      "to": "spark",
+      "async": true
+    },
+    {
+      "from": "spark",
+      "to": "registry"
+    },
+    {
+      "from": "spark",
+      "to": "lake"
+    },
+    {
+      "from": "spark",
+      "to": "saas"
+    },
+    {
+      "from": "cdc",
+      "to": "orders_db"
+    },
+    {
+      "from": "cdc",
+      "to": "lake"
+    },
+    {
+      "from": "scheduler",
+      "to": "spark"
+    },
+    {
+      "from": "scheduler",
+      "to": "warehouse"
+    },
+    {
+      "from": "warehouse",
+      "to": "lake"
+    },
+    {
+      "from": "bi",
+      "to": "warehouse"
+    }
+  ],
+  "flows": [
+    {
+      "id": "clickstream",
+      "title": "A clickstream event reaches a dashboard",
+      "summary": "The collector only acknowledges what Kafka has durably stored. A streaming job lands events every minute into raw and cleaned Iceberg tables by event time; every 15 minutes a batch job rebuilds the touched hours of curated tables behind a quality gate, and the warehouse replaces those hours in its marts.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve events.shop.example",
+          "detail": "The SDK finds the collector by name, so the load balancer can change without an app release."
+        },
+        {
+          "from": "dns",
+          "to": "app",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "load balancer IPs"
+        },
+        {
+          "from": "app",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Collect",
+          "label": "POST /v1/events (batch of 20)",
+          "detail": "The SDK buffers events on the device and sends every 10 s or 20 events, which saves battery and requests. Each event carries its own id, schema reference and the device's event time, because the time it is sent can be hours later.",
+          "payload": "POST /v1/events\nX-App-Key: ios-prod-7f2c\n\n{ \"sent_at\": \"2026-11-10T14:02:11Z\",\n  \"events\": [\n    { \"event_id\": \"01JC9Q4W8E7K\", \"schema\": \"add_to_cart/3\",\n      \"event_ts\": \"2026-11-10T14:01:58Z\", \"session_id\": \"s_91a\",\n      \"user_id\": \"u_5521\", \"product_id\": \"p_88213\", \"price\": 19.99, \"qty\": 1 },\n    ... ] }"
+        },
+        {
+          "from": "lb",
+          "to": "collector",
+          "kind": "req",
+          "phase": "Collect",
+          "label": "forward",
+          "detail": "Collectors are stateless and spread over three zones, so any instance can take any batch."
+        },
+        {
+          "from": "collector",
+          "to": "collector",
+          "kind": "local",
+          "phase": "Collect",
+          "label": "check key and size, stamp received_at",
+          "detail": "The collector does as little as possible so it stays available: no schema checks and no lookups. received_at is the server's clock, used later to measure lateness and to find which hours a backfill must touch."
+        },
+        {
+          "from": "collector",
+          "to": "events",
+          "kind": "req",
+          "phase": "Collect",
+          "label": "produce, key = session_id, acks=all",
+          "detail": "Keying by session keeps one session's events in order on one partition. acks=all with min.insync.replicas=2 means an acknowledged event is on two brokers in two zones before the app is told it can drop it."
+        },
+        {
+          "from": "events",
+          "to": "collector",
+          "kind": "res",
+          "phase": "Collect",
+          "label": "offsets acknowledged"
+        },
+        {
+          "from": "collector",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Collect",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "lb",
+          "to": "app",
+          "kind": "res",
+          "phase": "Collect",
+          "label": "202: SDK clears its buffer"
+        },
+        {
+          "from": "events",
+          "to": "spark",
+          "kind": "async",
+          "phase": "Land in the lake",
+          "label": "streaming job reads (1 min trigger)",
+          "detail": "A Spark Structured Streaming job reads a minute of offsets at a time. Its offsets are saved in a checkpoint in the lake and committed with the table write, so a restart neither skips nor duplicates a micro-batch."
+        },
+        {
+          "from": "spark",
+          "to": "registry",
+          "kind": "req",
+          "phase": "Land in the lake",
+          "label": "get schema add_to_cart/3",
+          "detail": "Each event names its schema version; the job fetches unknown versions once and caches them, so the registry is not on the per-event path."
+        },
+        {
+          "from": "registry",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Land in the lake",
+          "label": "schema v3 (BACKWARD compatible)"
+        },
+        {
+          "from": "spark",
+          "to": "spark",
+          "kind": "local",
+          "phase": "Land in the lake",
+          "label": "validate, dedupe, partition by event time",
+          "detail": "Events are written to the hour they happened in, not the hour they arrived, so an event from a phone that was offline for a day lands in yesterday's partition. Duplicates from SDK retries are dropped on event_id within a 3 day watermark; events later than that go to a late table that the nightly job merges. user_id is replaced by a keyed hash in cleaned, so the raw zone is the only place it appears in clear."
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Land in the lake",
+          "label": "append raw + cleaned (Iceberg commit)",
+          "detail": "Raw keeps every event exactly as received, including ones that fail validation, so any later bug can be fixed by replaying from raw. Each Iceberg commit is atomic: readers see the whole micro-batch or none of it.",
+          "payload": "-- one micro-batch, committed as a new snapshot on each table\nINSERT INTO raw.clickstream      -- event_id, received_at, schema_ref, payload (string)\nINSERT INTO cleaned.events       -- typed columns, PARTITIONED BY (event_type, hours(event_ts))\n-- touched hours recorded for the curated build:\n{ \"batch\": 88121, \"hours\": [\"2026-11-10T14\", \"2026-11-10T13\", \"2026-11-08T21\"] }"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Land in the lake",
+          "label": "snapshot committed"
+        },
+        {
+          "from": "scheduler",
+          "to": "spark",
+          "kind": "req",
+          "phase": "Curate",
+          "label": "every 15 min: build touched hours",
+          "detail": "Curated tables are rebuilt in batch rather than in the streaming job, so aggregates can be recomputed whole for every hour that received late events, and the step can be rerun or backfilled the same way."
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Curate",
+          "label": "read new snapshots, overwrite hours on an audit branch",
+          "detail": "An incremental read returns only rows added since the last processed snapshot. Overwriting whole hours, instead of adding to them, makes the job idempotent: running it twice gives the same table.",
+          "payload": "-- write-audit-publish: writes go to a branch readers cannot see\nALTER TABLE curated.page_views_hourly CREATE BRANCH audit_88121;\nSET spark.wap.branch = audit_88121;\nINSERT OVERWRITE curated.page_views_hourly\nSELECT date_trunc('hour', event_ts) AS hour, product_id, channel,\n       count(*) AS views, count(DISTINCT session_id) AS sessions\nFROM cleaned.events\nWHERE event_type = 'page_view'\n  AND hours(event_ts) IN ('2026-11-10T14', '2026-11-10T13', '2026-11-08T21')\nGROUP BY 1, 2, 3;"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Curate",
+          "label": "branch audit_88121 written"
+        },
+        {
+          "from": "spark",
+          "to": "spark",
+          "kind": "local",
+          "phase": "Quality gate",
+          "label": "run checks on the branch",
+          "detail": "Checks run against the unpublished data: volume against the same hour in the last 4 weeks, null and range checks on key columns, unique keys, and that totals match the cleaned table. A failing check stops the publish, so dashboards keep showing the last good data.",
+          "payload": "checks: curated.page_views_hourly @ audit_88121\n  row_count vs 4-week same-hour median: -3%   (limit +-25%)   PASS\n  null product_id:                      0.00% (limit 0.1%)   PASS\n  unique (hour, product_id, channel):   ok                   PASS\n  sum(views) = cleaned page_view count: ok                   PASS"
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Quality gate",
+          "label": "fast-forward main to the audit branch",
+          "detail": "Publishing is a metadata pointer swap, so readers move from the old hours to the new ones in one step and never see half a rebuild.",
+          "payload": "CALL system.fast_forward('curated.page_views_hourly', 'main', 'audit_88121');"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Quality gate",
+          "label": "main now at the audited snapshot"
+        },
+        {
+          "from": "spark",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Quality gate",
+          "label": "succeeded, 3 hours published"
+        },
+        {
+          "from": "scheduler",
+          "to": "warehouse",
+          "kind": "req",
+          "phase": "Load the warehouse",
+          "label": "replace the 3 hours in the mart",
+          "detail": "Delete and insert by hour in one transaction keeps the warehouse load idempotent too. The mart is partitioned by day and clustered by product, which is how dashboards filter it.",
+          "payload": "BEGIN;\nDELETE FROM mart.page_views_hourly\n  WHERE hour IN ('2026-11-10 14:00', '2026-11-10 13:00', '2026-11-08 21:00');\nINSERT INTO mart.page_views_hourly\n  SELECT * FROM lake_curated.page_views_hourly   -- external Iceberg table\n  WHERE hour IN ('2026-11-10 14:00', '2026-11-10 13:00', '2026-11-08 21:00');\nCOMMIT;"
+        },
+        {
+          "from": "warehouse",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Load the warehouse",
+          "label": "scan curated Parquet (3 hours only)",
+          "detail": "Iceberg metadata lists exactly which files hold those hours, so the warehouse reads a few hundred MB instead of listing or scanning the table."
+        },
+        {
+          "from": "lake",
+          "to": "warehouse",
+          "kind": "res",
+          "phase": "Load the warehouse",
+          "label": "Parquet row groups"
+        },
+        {
+          "from": "warehouse",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Load the warehouse",
+          "label": "COMMIT, 4.1M rows replaced"
+        },
+        {
+          "from": "bi",
+          "to": "warehouse",
+          "kind": "req",
+          "phase": "Dashboard",
+          "label": "tile query: views by product, last 24 h",
+          "detail": "The dashboard reads the small hourly mart, not raw events, and its filter on the partition column limits the scan to two days of data.",
+          "payload": "SELECT product_id, sum(views) AS views\nFROM mart.page_views_hourly\nWHERE hour >= now() - interval '24 hours'\nGROUP BY product_id ORDER BY views DESC LIMIT 50;"
+        },
+        {
+          "from": "warehouse",
+          "to": "bi",
+          "kind": "res",
+          "phase": "Dashboard",
+          "label": "50 rows in 1.2 s, data to 14:15"
+        }
+      ]
+    },
+    {
+      "id": "nightly-orders",
+      "title": "Nightly orders load through CDC",
+      "summary": "CDC streams every change from the orders database into raw all day. At 01:00 the nightly DAG waits until the change log has passed midnight, merges the day's changes into cleaned.orders, pulls the SaaS exports, and runs dbt models and tests in the warehouse.",
+      "steps": [
+        {
+          "from": "cdc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Capture changes",
+          "label": "read logical replication slot from last LSN",
+          "detail": "CDC reads the write-ahead log instead of querying tables, so it puts almost no load on checkout and it sees deletes and every intermediate update, which a nightly SELECT on updated_at would miss."
+        },
+        {
+          "from": "orders_db",
+          "to": "cdc",
+          "kind": "res",
+          "phase": "Capture changes",
+          "label": "changes since LSN 2F/9A001C80"
+        },
+        {
+          "from": "cdc",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Capture changes",
+          "label": "write change files to raw/orders/ every 60 s",
+          "detail": "Each row carries the operation and the log position, which is what lets the merge apply changes in the order the database committed them.",
+          "payload": "op | lsn          | commit_ts            | order_id | status    | total\nI  | 2F/9A0021B0  | 2026-11-09T22:14:03Z | o_77120  | placed    | 84.20\nU  | 2F/9A0384F8  | 2026-11-09T23:40:51Z | o_77120  | shipped   | 84.20\nU  | 2F/9A06C110  | 2026-11-10T03:12:09Z | o_77120  | refunded  | 84.20"
+        },
+        {
+          "from": "lake",
+          "to": "cdc",
+          "kind": "res",
+          "phase": "Capture changes",
+          "label": "object written"
+        },
+        {
+          "from": "scheduler",
+          "to": "scheduler",
+          "kind": "local",
+          "phase": "Wait for a complete day",
+          "label": "01:00 ET: nightly_orders for 2026-11-09",
+          "detail": "A sensor waits until the CDC watermark has passed midnight ET plus a 15 minute grace, so the run never builds yesterday from a partial log. If CDC is behind, the DAG waits rather than publishing short numbers."
+        },
+        {
+          "from": "scheduler",
+          "to": "spark",
+          "kind": "req",
+          "phase": "Merge changes",
+          "label": "submit orders_merge on a transient cluster",
+          "detail": "Batch jobs get their own short-lived cluster sized for the job, so they never compete with the streaming job and cost nothing between runs."
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Merge changes",
+          "label": "read change files for the window",
+          "detail": "The window is by log position, from the LSN the last successful run stopped at to the watermark, so a rerun reads exactly the same changes."
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Merge changes",
+          "label": "38M changes"
+        },
+        {
+          "from": "spark",
+          "to": "spark",
+          "kind": "local",
+          "phase": "Merge changes",
+          "label": "keep the last change per order_id by LSN",
+          "detail": "Files can arrive out of order and CDC can resend changes after a restart, so ordering by LSN, not by file time, makes the merge correct and repeatable."
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Merge changes",
+          "label": "MERGE INTO cleaned.orders",
+          "detail": "The merge applies inserts, updates and deletes in one Iceberg commit, so cleaned.orders matches the database as of the watermark.",
+          "payload": "MERGE INTO cleaned.orders t\nUSING (SELECT * FROM latest_changes) s ON t.order_id = s.order_id\nWHEN MATCHED AND s.op = 'D' THEN DELETE\nWHEN MATCHED AND s.lsn > t.lsn THEN UPDATE SET *\nWHEN NOT MATCHED AND s.op <> 'D' THEN INSERT *;"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Merge changes",
+          "label": "snapshot committed, 2.1M orders touched"
+        },
+        {
+          "from": "spark",
+          "to": "saas",
+          "kind": "req",
+          "phase": "Third-party exports",
+          "label": "GET ad spend export for 2026-11-09",
+          "detail": "SaaS exports are pulled with an incremental cursor and backoff on rate limits. Vendors change formats without notice, which is why these files are checked against a contract before they go further."
+        },
+        {
+          "from": "saas",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Third-party exports",
+          "label": "CSV, 1.2 GB"
+        },
+        {
+          "from": "spark",
+          "to": "registry",
+          "kind": "req",
+          "phase": "Third-party exports",
+          "label": "check against the ad_spend contract",
+          "detail": "The contract lists required columns, types and allowed values, so a renamed column fails here instead of silently loading as nulls."
+        },
+        {
+          "from": "registry",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Third-party exports",
+          "label": "contract v2: all columns match"
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Third-party exports",
+          "label": "write raw file + overwrite cleaned day",
+          "detail": "The original file is kept in raw; the cleaned table's partition for the day is overwritten, so pulling the export again replaces it rather than doubling it."
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Third-party exports",
+          "label": "committed"
+        },
+        {
+          "from": "spark",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Third-party exports",
+          "label": "merge and exports done 02:41"
+        },
+        {
+          "from": "scheduler",
+          "to": "warehouse",
+          "kind": "req",
+          "phase": "Model and test",
+          "label": "dbt build in a staging schema",
+          "detail": "dbt models are built into a staging schema and tested there; only when every test passes are they swapped into the schema dashboards read. That is the same write, audit, publish idea as in the lake.",
+          "payload": "dbt build --select +fct_orders +daily_revenue --vars '{\"ds\": \"2026-11-09\"}' --target staging"
+        },
+        {
+          "from": "warehouse",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Model and test",
+          "label": "read cleaned.orders, changed partitions only",
+          "detail": "fct_orders is incremental: it rebuilds only the order dates touched by last night's changes, including old orders refunded yesterday."
+        },
+        {
+          "from": "lake",
+          "to": "warehouse",
+          "kind": "res",
+          "phase": "Model and test",
+          "label": "Parquet row groups"
+        },
+        {
+          "from": "warehouse",
+          "to": "warehouse",
+          "kind": "local",
+          "phase": "Model and test",
+          "label": "214 tests, then swap staging into prod",
+          "detail": "Tests include unique and not-null keys, accepted status values, and a reconciliation: yesterday's revenue must match the orders database's own daily total within 0.1%."
+        },
+        {
+          "from": "warehouse",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Model and test",
+          "label": "published 04:12 ET, all tests pass"
+        }
+      ]
+    },
+    {
+      "id": "schema-break",
+      "title": "Upstream schema change: quarantine, alert, backfill",
+      "summary": "A mobile release sends add_to_cart with a changed field and an unregistered schema. Nothing is lost, because the collector accepts everything and raw keeps it; the streaming job quarantines the bad events, the quality gate keeps curated tables at the last good data, and after the fix a backfill rebuilds the affected hours.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Bad release",
+          "label": "POST /v1/events from app 8.2",
+          "detail": "Release 8.2 renamed product_id to sku and sends price as text, under schema add_to_cart/4, which was never registered. The app team's CI did not run the schema compatibility check.",
+          "payload": "{ \"event_id\": \"01JCA0M3ZQ2T\", \"schema\": \"add_to_cart/4\", \"event_ts\": \"2026-11-10T13:07:44Z\",\n  \"session_id\": \"s_c40\", \"sku\": \"p_88213\", \"price\": \"19.99 USD\", \"qty\": 1 }"
+        },
+        {
+          "from": "lb",
+          "to": "collector",
+          "kind": "req",
+          "phase": "Bad release",
+          "label": "forward"
+        },
+        {
+          "from": "collector",
+          "to": "events",
+          "kind": "req",
+          "phase": "Bad release",
+          "label": "produce as usual",
+          "detail": "The collector does not validate, so the app gets a 202 and deletes its buffer. That is deliberate: the event is safely stored and can be repaired later, whereas a rejected event would be gone."
+        },
+        {
+          "from": "events",
+          "to": "spark",
+          "kind": "async",
+          "phase": "Detect and quarantine",
+          "label": "micro-batch: 31% of add_to_cart on /4",
+          "detail": "The streaming job sees the new schema reference within a minute of the release rollout reaching users."
+        },
+        {
+          "from": "spark",
+          "to": "registry",
+          "kind": "req",
+          "phase": "Detect and quarantine",
+          "label": "get schema add_to_cart/4",
+          "detail": "The job asks whether this version exists and is compatible with the table it feeds."
+        },
+        {
+          "from": "registry",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Detect and quarantine",
+          "label": "not registered (latest is /3)"
+        },
+        {
+          "from": "spark",
+          "to": "spark",
+          "kind": "local",
+          "phase": "Detect and quarantine",
+          "label": "split: valid to cleaned, failing to quarantine",
+          "detail": "One bad event type must not stop the whole pipeline, so the job keeps landing valid events and routes failing ones, with the reason, to a quarantine table. The gate-blocked alert opens a ticket for the platform on-call and the owning app team."
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Detect and quarantine",
+          "label": "append raw, cleaned (valid) and quarantine",
+          "payload": "INSERT INTO quarantine.events (event_id, received_at, schema_ref, reason, payload)\nVALUES ('01JCA0M3ZQ2T', '2026-11-10T13:07:46Z', 'add_to_cart/4',\n        'schema not registered', '{...original JSON...}');"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Detect and quarantine",
+          "label": "committed"
+        },
+        {
+          "from": "scheduler",
+          "to": "spark",
+          "kind": "req",
+          "phase": "Quality gate holds",
+          "label": "13:15 curated build",
+          "detail": "The curated build runs on schedule; it has no idea anything is wrong upstream."
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Quality gate holds",
+          "label": "write cart hours to an audit branch"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Quality gate holds",
+          "label": "branch written"
+        },
+        {
+          "from": "spark",
+          "to": "spark",
+          "kind": "local",
+          "phase": "Quality gate holds",
+          "label": "check fails: add_to_cart volume -31%",
+          "detail": "Even without the quarantine signal, the volume check catches the drop, because a third of cart events are missing compared with the same hour in the last 4 weeks. main is not moved, so dashboards keep the last good hour and show its timestamp.",
+          "payload": "row_count vs 4-week same-hour median: -31%  (limit +-25%)  FAIL\npublish blocked; main stays at snapshot 77410 (12:00 hour)"
+        },
+        {
+          "from": "spark",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Quality gate holds",
+          "label": "FAILED: gate blocked, not retried",
+          "detail": "Data failures are not retried automatically, since rerunning on the same bad input fails the same way. The cart dashboard goes stale, and after 30 minutes the freshness alert pages."
+        },
+        {
+          "from": "registry",
+          "to": "registry",
+          "kind": "local",
+          "phase": "Fix the contract",
+          "label": "register add_to_cart/4 with a mapping",
+          "detail": "The app team ships 8.2.1 that sends a numeric price again, and registers /4 through CI with the compatibility check now enforced. For the events already sent, the platform adds a one-off mapping: sku to product_id, and the price text parsed into amount and currency."
+        },
+        {
+          "from": "scheduler",
+          "to": "scheduler",
+          "kind": "local",
+          "phase": "Backfill",
+          "label": "trigger backfill, 13:00 to 17:00 UTC",
+          "detail": "A backfill is the normal job run for past hours with a parameter, not a special script, so it uses the same code, checks and publish step."
+        },
+        {
+          "from": "scheduler",
+          "to": "spark",
+          "kind": "req",
+          "phase": "Backfill",
+          "label": "replay quarantine for the 4 hours"
+        },
+        {
+          "from": "spark",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Backfill",
+          "label": "map /4 events, overwrite cleaned and curated hours",
+          "detail": "Each affected hour is overwritten whole, on an audit branch, so the backfill cannot double count events that already landed and can be rerun safely if it fails halfway.",
+          "payload": "INSERT OVERWRITE cleaned.events          -- hours 13..16 for add_to_cart\nSELECT * FROM cleaned.events WHERE ... -- the valid /3 events already there\nUNION ALL\nSELECT map_v4_to_v3(payload) FROM quarantine.events\nWHERE schema_ref = 'add_to_cart/4' AND hours(received_at) BETWEEN 13 AND 16;"
+        },
+        {
+          "from": "lake",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Backfill",
+          "label": "4 hours rewritten, checks pass, published"
+        },
+        {
+          "from": "spark",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Backfill",
+          "label": "backfill succeeded"
+        },
+        {
+          "from": "scheduler",
+          "to": "warehouse",
+          "kind": "req",
+          "phase": "Reload the warehouse",
+          "label": "replace hours 13 to 16 in the marts",
+          "detail": "The same delete-and-insert load as every 15 minutes, for the backfilled hours. Lineage in the catalog lists every downstream table and dashboard of cleaned.events, so nothing is left with the bad numbers."
+        },
+        {
+          "from": "warehouse",
+          "to": "lake",
+          "kind": "req",
+          "phase": "Reload the warehouse",
+          "label": "scan 4 curated hours"
+        },
+        {
+          "from": "lake",
+          "to": "warehouse",
+          "kind": "res",
+          "phase": "Reload the warehouse",
+          "label": "Parquet row groups"
+        },
+        {
+          "from": "warehouse",
+          "to": "scheduler",
+          "kind": "res",
+          "phase": "Reload the warehouse",
+          "label": "COMMIT: cart dashboard current again"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "tradeoff",
+      "text": "Lake and warehouse both exist for different readers. The Iceberg lake is the system of record: cheap storage, open formats any engine can read (Spark, Trino, the warehouse itself), and the raw zone for replay. The warehouse serves BI: hundreds of concurrent short queries, caching, workload queues and fine-grained policies. A lakehouse with one engine over the lake is a reasonable simplification when BI concurrency is modest; the cost here is a copy of curated marts (40 TB) and keeping two sets of access policies in step."
+    },
+    {
+      "target": "spark",
+      "kind": "failure",
+      "text": "Late and duplicate events are the normal case, not the exception. Partition by event time, deduplicate on event_id within a 3 day watermark, and track which hours each micro-batch touched so the curated build recomputes those hours whole. Every write overwrites a partition rather than appending to it, which is what makes reruns, retries and backfills safe."
+    },
+    {
+      "target": "lake",
+      "kind": "scaling",
+      "text": "A 1 minute streaming trigger creates 1,440 commits and many small files per table per day. Compact hourly to files of about 512 MB sorted by the most filtered columns, expire old snapshots after 7 days and remove orphan files, or query planning and scans slow down week by week. Lifecycle rules move raw files older than 30 days to infrequent access and older than 90 days to archive-instant tiers, which cuts storage for that data by roughly 40 to 70%."
+    },
+    {
+      "target": "registry",
+      "kind": "security",
+      "text": "PII is tagged in the catalog at the column level (email, address, user_id), and policies follow the tags: Lake Formation or BigQuery policy tags for the lake, dynamic masking in the warehouse. Cleaned tables hold a keyed hash of user_id so analysts can join and count without seeing it; only a small group can read the raw zone. A deletion request means deleting rows in every zone and then expiring the Iceberg snapshots that still reference them, or the data is still in old files."
+    },
+    {
+      "target": "cdc",
+      "kind": "tradeoff",
+      "text": "CDC instead of nightly extracts: it sees deletes and every intermediate state, puts almost no load on the database and spreads the transfer over the day. The price is operating it: a logical replication slot keeps WAL on the production database while CDC is down, schema changes arrive as part of the stream, and an initial snapshot is needed whenever a table is added or the slot is lost."
+    },
+    {
+      "target": "warehouse",
+      "kind": "scaling",
+      "text": "Query cost tracks bytes scanned. A full scan of two years of cleaned events is about 150 TB, roughly $900 per query at BigQuery on-demand prices; with a 7 day partition filter it is about 1.4 TB, and reading 4 of 40 columns from clustered files brings it under 150 GB. Require partition filters on large tables, point dashboards at hourly marts instead of event tables, and set per-team budgets or reservations with alerts."
+    }
+  ],
+  "questions": [
+    {
+      "id": "lake-vs-warehouse",
+      "q": "Why have both a lake and a warehouse? Would a lakehouse alone be enough?",
+      "a": "The lake is the cheap, open system of record: every source lands there, raw data is kept for replay, and data scientists use Spark on it directly. The warehouse is tuned for many concurrent BI queries, with caching, workload isolation and mature fine-grained security. A lakehouse, an open table format like Iceberg queried by one engine, can serve both when BI concurrency is modest, and it removes the extra copy and the second set of policies; the trade-off is weaker concurrency and governance in some engines, and two systems means two places for access rules to drift.",
+      "topic": "tradeoffs",
+      "targets": [
+        "lake",
+        "warehouse"
+      ]
+    },
+    {
+      "id": "batch-vs-stream",
+      "q": "Merchandising wants the dashboards to be 1 minute behind instead of 30. What would you change, and what does it cost?",
+      "a": "The 30 minutes come from the 15 minute curated schedule plus the warehouse load, not from ingestion, which is already a minute behind. Getting to a minute means computing the aggregates in the stream (Flink, Dataflow or Spark streaming with event-time windows) and writing to a store built for fresh queries, which brings state management, harder handling of late events and many tiny commits. A middle way is a separate real-time view for the few metrics that need it, from the stream with approximate numbers, while the batch path stays the corrected source of truth.",
+      "topic": "tradeoffs",
+      "targets": [
+        "events",
+        "spark",
+        "warehouse"
+      ]
+    },
+    {
+      "id": "schema-evolution",
+      "q": "An app team renames a field in an event. How does the platform handle schema changes without breaking dashboards?",
+      "a": "Producers register every schema version, and the registry enforces a compatibility mode (backward: new readers can read old data), so adding an optional field passes and renaming or retyping a field is rejected, ideally in the app's CI before release. At runtime the streaming job checks each event's version, quarantines unknown or incompatible ones, and keeps the rest flowing, while raw keeps everything for a repair. Iceberg itself handles additive table changes by column id, so adding or renaming a column does not rewrite data; a real breaking change becomes a new event version with a mapping to the old shape.",
+      "topic": "data",
+      "targets": [
+        "registry",
+        "spark",
+        "lake"
+      ]
+    },
+    {
+      "id": "quality-ownership",
+      "q": "Who owns data quality, and what stops bad data from reaching the CFO's revenue dashboard?",
+      "a": "Producers own their contracts: the team that emits an event or owns the orders database is told when it breaks one, because only it can fix the cause. The platform owns the gates: every curated table is written to an audit branch or staging schema, checked for volume, nulls, uniqueness and reconciliation against the source, and only then published, so a failure leaves the last good data in place. The consumers of a mart own its business tests, like revenue matching finance's totals, and a blocked gate is visible as a stale timestamp rather than a wrong number.",
+      "topic": "operations",
+      "targets": [
+        "spark",
+        "scheduler",
+        "registry"
+      ]
+    },
+    {
+      "id": "pii-access",
+      "q": "How do you let data scientists use clickstream and order data without exposing customer PII, and how do you honor a deletion request?",
+      "a": "Classify PII columns in the catalog and drive access from those tags: raw is readable by a small platform group, cleaned holds a keyed hash of user_id so joins and counts still work, and the warehouse masks email and address unless the role is allowed. Lineage shows where each PII column flows, so new tables inherit the right tags. A deletion has to reach every zone and the warehouse: delete by user, rewrite the affected files, and expire old Iceberg snapshots, otherwise time travel still returns the data.",
+      "topic": "security",
+      "targets": [
+        "registry",
+        "lake",
+        "warehouse"
+      ]
+    },
+    {
+      "id": "query-cost",
+      "q": "The warehouse bill doubled last month. How do you find the cause and keep it down?",
+      "a": "Start from the query log: bytes scanned or slot time by user, dashboard and table usually shows a few queries doing most of the spending, often a dashboard tile or notebook scanning an event table without a partition filter. Fix those with partition pruning (require a filter on large tables), clustering on the columns people filter by, and marts or materialized aggregates for dashboards. Then add guardrails: per-team budgets or reservations, maximum bytes per query, result caching, and storage tiering in the lake for data that is rarely read.",
+      "topic": "performance",
+      "targets": [
+        "warehouse",
+        "bi",
+        "lake"
+      ]
+    }
+  ]
+}

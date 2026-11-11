@@ -1,0 +1,1045 @@
+{
+  "schema": "archstory/v1",
+  "id": "cloud-migration",
+  "meta": {
+    "title": "Monolith to Cloud Migration",
+    "summary": "Move an on-premises e-commerce monolith and its Oracle database to the cloud one capability at a time with the strangler fig pattern: a router in front, new services behind it, change data capture between the databases, one writer per entity, and a rollback path at every step.",
+    "tags": [
+      "migration",
+      "strangler fig",
+      "hybrid cloud",
+      "change data capture",
+      "cutover"
+    ],
+    "difficulty": "hard"
+  },
+  "requirements": {
+    "functional": [
+      "Send each URL path to either the monolith or a new cloud service, and change that routing (paths and weights) without a deploy",
+      "Move capabilities one at a time: catalog first (done), orders next (in canary), then cart, checkout, customers and payments",
+      "Each new service owns its own database; it never reads or writes the monolith's tables directly",
+      "Keep the on-premises database and the cloud databases in sync with change data capture in both directions during the transition",
+      "Exactly one system writes each entity at any moment, so there are no dual-write conflicts",
+      "Roll a migrated path back to the monolith in minutes, without losing orders written by the new service",
+      "The monolith and the back office systems that read its database (fulfilment, returns, finance) keep working throughout"
+    ],
+    "nonFunctional": [
+      "No customer-visible downtime for any cutover; any write freeze for one entity lasts under 1 minute",
+      "Rollback of a migrated path (routing plus data ownership) completes in under 5 minutes",
+      "Change data capture applies changes to the other side within 5 s (p99), in both directions",
+      "Proxying a legacy path through the cloud adds no more than 10 ms at p99 compared with today",
+      "Losing one of the two hybrid connections causes no customer impact; the cloud side survives the loss of one availability zone",
+      "Traffic between the cloud and the data centre never crosses the public internet unencrypted"
+    ],
+    "scale": [
+      {
+        "label": "Storefront traffic",
+        "value": "4k requests / s average, 15k / s at sale peaks; about 70% are product and search pages, mostly served by the CDN"
+      },
+      {
+        "label": "Orders",
+        "value": "150k / day, 60 / s at peak; 5% currently created by the new orders service"
+      },
+      {
+        "label": "On-premises database",
+        "value": "Oracle 19c, 9 TB, 1,400 tables, about 20 GB of redo per hour at peak"
+      },
+      {
+        "label": "Hybrid link",
+        "value": "2 x 10 Gbps Direct Connect at two locations, 4 ms round trip, IPsec VPN as backup (about 1.25 Gbps per tunnel)"
+      },
+      {
+        "label": "Traffic over the link",
+        "value": "About 2k proxied requests / s and 1.5 Gbps at peak, plus about 2 MB / s of change data each way"
+      },
+      {
+        "label": "Programme",
+        "value": "18 months: catalog migrated, orders in canary; cart, checkout, customers and payments still on-premises"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.64.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.64.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.64.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.64.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "storefront",
+        "name": "Storefront availability",
+        "kind": "availability",
+        "sli": "Requests to shop.example.com that do not return 5xx, divided by all requests, measured at the router for migrated and proxied paths together",
+        "target": 99.9
+      },
+      {
+        "id": "order-latency",
+        "name": "Order placement latency",
+        "kind": "latency",
+        "sli": "POST /api/orders responses under the threshold, divided by all of them, measured at the router whichever side served the request",
+        "target": 99,
+        "threshold": "< 800 ms"
+      },
+      {
+        "id": "cdc-fresh",
+        "name": "Copies stay current",
+        "kind": "freshness",
+        "sli": "Changes applied to the other database within the threshold of their source commit, divided by all changes, in each direction",
+        "target": 99,
+        "threshold": "< 5 s"
+      },
+      {
+        "id": "copies-agree",
+        "name": "Copies agree",
+        "kind": "correctness",
+        "sli": "Rows whose checksum matches between Oracle and the cloud database in the hourly reconciliation of each migrated entity, divided by rows compared",
+        "target": 99.99
+      }
+    ],
+    "alerts": [
+      {
+        "id": "storefront-burn",
+        "severity": "page",
+        "when": "5xx at the router burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Shoppers cannot browse or buy, whichever side is failing.",
+        "target": "lb",
+        "slo": "storefront"
+      },
+      {
+        "id": "canary-worse",
+        "severity": "page",
+        "when": "Orders service 5xx rate more than 1 point above the monolith's, or its p99 more than 300 ms above, for 5 minutes",
+        "why": "The canary is hurting real orders. The alarm also sets the canary weight to 0 automatically; a human must confirm the rollback finished and the reverse copy drained.",
+        "target": "orders",
+        "slo": "order-latency"
+      },
+      {
+        "id": "order-latency-burn",
+        "severity": "page",
+        "when": "More than 1% of POST /api/orders slower than 800 ms for 10 minutes, and over 1 hour",
+        "why": "Slow checkout loses sales. Usually the link (failed over to VPN) or a chatty new call to the monolith.",
+        "target": "lb",
+        "slo": "order-latency"
+      },
+      {
+        "id": "cdc-lag",
+        "severity": "page",
+        "when": "Apply lag above 60 s in either direction for 10 minutes",
+        "why": "Fulfilment stops seeing new orders, and a rollback cannot hand ownership back until the reverse copy has drained, so the safety net is gone.",
+        "target": "cdc",
+        "slo": "cdc-fresh"
+      },
+      {
+        "id": "link-redundancy",
+        "severity": "ticket",
+        "when": "One Direct Connect connection or its BGP session down for 5 minutes",
+        "why": "Traffic still flows on the other connection, but the next failure drops to the slow VPN backup. Restore redundancy in working hours.",
+        "target": "hybrid"
+      },
+      {
+        "id": "recon-mismatch",
+        "severity": "ticket",
+        "when": "Hourly reconciliation finds more than 10 mismatched rows for any entity",
+        "why": "Silent drift between the copies, usually a type mapping or a skipped change. It must be fixed before the next cutover step relies on the copy.",
+        "target": "orders_db",
+        "slo": "copies-agree"
+      }
+    ],
+    "signals": [
+      {
+        "target": "lb",
+        "name": "Share of traffic served by the cloud",
+        "metric": "router_requests_total{backend=\"cloud|monolith\",route}",
+        "why": "The progress bar of the migration, and the first place a mistaken rule change shows up."
+      },
+      {
+        "target": "hybrid",
+        "name": "Link utilisation and BGP state per connection",
+        "metric": "dx_connection_bps_egress, dx_connection_bps_ingress, dx_bgp_state{connection}",
+        "why": "Each connection must stay under 50% so either one can carry everything when the other fails."
+      },
+      {
+        "target": "cdc",
+        "name": "Apply lag by direction and table",
+        "metric": "cdc_apply_lag_seconds{direction=\"forward|reverse\",table}",
+        "why": "Forward lag delays the cloud copy; reverse lag delays the monolith and blocks a rollback."
+      },
+      {
+        "target": "orders",
+        "name": "Canary against the monolith",
+        "metric": "orders_error_ratio{backend}, orders_latency_p99_ms{backend}",
+        "why": "The rollback decision compares the two sides over the same minutes, not against a fixed number."
+      },
+      {
+        "target": "acl",
+        "name": "Legacy calls per request",
+        "metric": "acl_legacy_calls_per_request, acl_legacy_call_ms",
+        "why": "Every call pays the link round trip. A rising count means a new service leans on the monolith instead of owning its data."
+      },
+      {
+        "target": "onprem_db",
+        "name": "Archived redo headroom",
+        "metric": "oracle_archivelog_retained_hours minus cdc_capture_lag_hours",
+        "why": "If capture falls further behind than Oracle keeps archived logs, CDC cannot resume and the table needs a full reload."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "Pages still served by the monolith got slower after traffic moved behind the cloud router",
+        "steps": [
+          "Compare request time at the router with request time on the on-premises load balancer: the difference is the link plus the router.",
+          "Check round trip time and utilisation on both Direct Connect connections; if one is down, traffic may be on the VPN backup, which adds latency and caps bandwidth.",
+          "Check connection reuse between the router and the on-premises load balancer: a new TLS handshake per request costs several round trips over the link.",
+          "Look for new chatty calls: an anti-corruption layer or migrated service calling the monolith many times per request, or monolith code calling a cloud service in a loop."
+        ]
+      },
+      {
+        "symptom": "Fulfilment cannot see some orders placed through the new orders service",
+        "steps": [
+          "Check reverse apply lag and the CDC task's error table: a stopped task shows as growing lag, a rejected row shows as an apply error.",
+          "Look for constraint failures in Oracle, such as a column the new schema allows to be empty but the old one requires, or a status value the old check constraint does not know.",
+          "Check the loop filter: rows from the cloud must carry origin CLOUD so forward capture skips them, and the reverse task must not filter them by mistake.",
+          "Run the reconciliation for the affected hours on order ids starting with N- and replay the missing ones from the cloud database."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Shoppers",
+      "kind": "web_client",
+      "description": "Browsers and the mobile app calling shop.example.com"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points shop.example.com at the CDN. Moving this record once, at the start, put the cloud router in front of everything",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Terminates TLS near shoppers, caches product pages and images, forwards everything else to the router",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Strangler Router (L7)",
+      "kind": "load_balancer",
+      "description": "Path, method and weighted rules decide per request: migrated paths go to cloud services, everything else to the monolith's on-premises IPs over the hybrid link",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
+      }
+    },
+    {
+      "id": "catalog",
+      "label": "Catalog Service",
+      "kind": "service",
+      "description": "Migrated first: products, prices and categories. Owns all catalog writes now",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "orders",
+      "label": "Orders Service",
+      "kind": "service",
+      "description": "Being migrated: creates 5% of new orders (ids starting N-) and owns only those rows",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "acl",
+      "label": "Anti-corruption Layer",
+      "kind": "service",
+      "description": "Translates between the new domain model and the monolith's internal SOAP API and codes, so legacy quirks stay out of new services",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      }
+    },
+    {
+      "id": "hybrid",
+      "label": "Hybrid Link",
+      "kind": "hybrid_link",
+      "icon": "🛤️",
+      "subnet": "none",
+      "description": "Private connection to the data centre: two dedicated connections at two locations, with a site-to-site VPN as the fallback",
+      "cloud": {
+        "aws": "Direct Connect",
+        "gcp": "Cloud Interconnect"
+      }
+    },
+    {
+      "id": "catalog_db",
+      "label": "Catalog DB",
+      "kind": "sql_db",
+      "description": "Source of truth for products since the catalog cutover; reverse CDC keeps Oracle's PRODUCTS table as a read-only copy for the monolith",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "orders_db",
+      "label": "Orders DB",
+      "kind": "sql_db",
+      "description": "Owns N- orders; holds a CDC copy of every monolith order so history is complete at the final cutover",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "cdc",
+      "label": "CDC Replication",
+      "kind": "worker",
+      "ha": "primary-standby",
+      "description": "Full load, then change data capture: forward from Oracle redo logs into the cloud databases, reverse from the cloud databases back into Oracle, one writer per entity",
+      "cloud": {
+        "aws": "Database Migration Service",
+        "gcp": "Database Migration Service"
+      },
+      "tier": "data"
+    },
+    {
+      "id": "monolith",
+      "label": "On-prem: Monolith",
+      "kind": "service",
+      "tier": "async",
+      "group": "onprem",
+      "description": "The existing Java app tier behind an on-premises load balancer: cart, checkout, customers, payments, 95% of orders and the back office",
+      "subnet": "none"
+    },
+    {
+      "id": "onprem_db",
+      "label": "On-prem: Oracle DB",
+      "kind": "sql_db",
+      "tier": "external",
+      "group": "onprem",
+      "description": "One large Oracle database shared by every module of the monolith, with supplemental logging on for CDC"
+    }
+  ],
+  "groups": [
+    {
+      "id": "onprem",
+      "label": "On-premises data centre",
+      "kind": "boundary"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "dns"
+    },
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
+      "to": "catalog"
+    },
+    {
+      "from": "lb",
+      "to": "orders"
+    },
+    {
+      "from": "lb",
+      "to": "hybrid",
+      "label": "legacy paths"
+    },
+    {
+      "from": "catalog",
+      "to": "catalog_db"
+    },
+    {
+      "from": "orders",
+      "to": "orders_db"
+    },
+    {
+      "from": "orders",
+      "to": "acl"
+    },
+    {
+      "from": "acl",
+      "to": "hybrid"
+    },
+    {
+      "from": "hybrid",
+      "to": "monolith"
+    },
+    {
+      "from": "monolith",
+      "to": "onprem_db"
+    },
+    {
+      "from": "cdc",
+      "to": "hybrid"
+    },
+    {
+      "from": "hybrid",
+      "to": "onprem_db"
+    },
+    {
+      "from": "cdc",
+      "to": "catalog_db"
+    },
+    {
+      "from": "cdc",
+      "to": "orders_db"
+    }
+  ],
+  "flows": [
+    {
+      "id": "migrated-order",
+      "title": "Place an order on the migrated path",
+      "summary": "A shopper in the 5% canary places an order. The orders service owns it, asks the monolith about customer and stock through the anti-corruption layer, and reverse CDC copies the order back to Oracle for the back office.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "dns",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "resolve shop.example.com",
+          "detail": "The hostname moved to the CDN once, at the start of the migration, so every later step is a routing change in the cloud and never a DNS change that caches would delay."
+        },
+        {
+          "from": "dns",
+          "to": "client",
+          "kind": "res",
+          "phase": "DNS",
+          "label": "CDN addresses",
+          "payload": "shop.example.com.  300  IN CNAME  d1x8example.cloudfront.net."
+        },
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /api/orders",
+          "detail": "Order calls are never cached; the CDN terminates TLS close to the shopper and forwards the call to the origin.",
+          "payload": "POST /api/orders\nCookie: session=8c1f...; AWSALBTG=...\nIdempotency-Key: 3b9e6d2a\n\n{ \"customer_id\": 4471902, \"cart_id\": \"c_77k2\",\n  \"items\": [ { \"sku\": \"SKU-1182\", \"qty\": 2 } ],\n  \"shipping\": \"standard\" }"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Route",
+          "label": "forward to origin",
+          "detail": "The CDN has a single origin, so all decisions about which side serves a path live in one place: the router."
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Route",
+          "label": "rule: POST /api/orders weighted 5 / 95",
+          "detail": "Weighted target groups send 5% of new orders to the orders service and 95% to the monolith; stickiness keeps a shopper on one side for an hour so a checkout does not bounce between them.",
+          "payload": "{ \"Conditions\": [\n    { \"Field\": \"path-pattern\", \"Values\": [\"/api/orders\"] },\n    { \"Field\": \"http-request-method\", \"HttpRequestMethodConfig\": { \"Values\": [\"POST\"] } } ],\n  \"Actions\": [ { \"Type\": \"forward\", \"ForwardConfig\": {\n    \"TargetGroups\": [\n      { \"TargetGroupArn\": \"tg-orders-svc\", \"Weight\": 5 },\n      { \"TargetGroupArn\": \"tg-monolith-onprem\", \"Weight\": 95 } ],\n    \"TargetGroupStickinessConfig\": { \"Enabled\": true, \"DurationSeconds\": 3600 } } } ] }"
+        },
+        {
+          "from": "lb",
+          "to": "orders",
+          "kind": "req",
+          "phase": "Route",
+          "label": "forward to orders service",
+          "detail": "This request drew the cloud side, so the new service will create and own the order."
+        },
+        {
+          "from": "orders",
+          "to": "acl",
+          "kind": "req",
+          "phase": "Validate via ACL",
+          "label": "check customer, reserve stock",
+          "detail": "Customers and stock are still owned by the monolith, so the orders service asks the anti-corruption layer in its own terms instead of reading Oracle tables, which would tie it to the old schema forever.",
+          "payload": "POST /acl/v1/reservations\n{ \"customer_id\": 4471902, \"lines\": [ { \"sku\": \"SKU-1182\", \"qty\": 2 } ] }"
+        },
+        {
+          "from": "acl",
+          "to": "hybrid",
+          "kind": "req",
+          "phase": "Validate via ACL",
+          "label": "SOAP call over the private link",
+          "detail": "The layer translates the request into the monolith's internal SOAP API and sends it over the private connection, paying one 4 ms round trip."
+        },
+        {
+          "from": "hybrid",
+          "to": "monolith",
+          "kind": "req",
+          "phase": "Validate via ACL",
+          "label": "ReserveStock(CUST_NO, ITEM_NO, QTY)",
+          "detail": "The reservation is a write to stock, which the monolith still owns, so it happens in the monolith's own transaction and nowhere else.",
+          "payload": "<soap:Body>\n  <ReserveStock>\n    <CUST_NO>0004471902</CUST_NO>\n    <ITEM_NO>1182</ITEM_NO><QTY>2</QTY>\n  </ReserveStock>\n</soap:Body>"
+        },
+        {
+          "from": "monolith",
+          "to": "hybrid",
+          "kind": "res",
+          "phase": "Validate via ACL",
+          "label": "CUST_STAT=A, RES_ID=R77310"
+        },
+        {
+          "from": "hybrid",
+          "to": "acl",
+          "kind": "res",
+          "phase": "Validate via ACL",
+          "label": "legacy response"
+        },
+        {
+          "from": "acl",
+          "to": "orders",
+          "kind": "res",
+          "phase": "Validate via ACL",
+          "label": "customer active, reservation r77310",
+          "detail": "The layer maps legacy codes such as CUST_STAT='A' and zero-padded numbers into the new model, so those quirks never leak into the new service.",
+          "payload": "{ \"customer\": { \"id\": 4471902, \"status\": \"active\", \"tier\": \"gold\" },\n  \"reservation\": { \"id\": \"r77310\", \"expires_at\": \"2026-11-10T14:20:00Z\" } }"
+        },
+        {
+          "from": "orders",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Persist",
+          "label": "INSERT order N-8F3K2 owner=CLOUD",
+          "detail": "Orders created here get ids starting with N- and owner CLOUD, so every row has exactly one writer and the router can send later changes to the right side by id.",
+          "payload": "INSERT INTO orders (order_id, customer_id, status, total_cents, reservation_id, owner, origin)\nVALUES ('N-8F3K2', 4471902, 'placed', 5998, 'r77310', 'CLOUD', 'CLOUD');"
+        },
+        {
+          "from": "orders_db",
+          "to": "orders",
+          "kind": "res",
+          "phase": "Persist",
+          "label": "COMMIT"
+        },
+        {
+          "from": "orders",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created N-8F3K2"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "order confirmed",
+          "payload": "HTTP/1.1 201 Created\n\n{ \"order_id\": \"N-8F3K2\", \"status\": \"placed\" }"
+        },
+        {
+          "from": "cdc",
+          "to": "orders_db",
+          "kind": "async",
+          "phase": "Replicate back",
+          "label": "read commit from the change log",
+          "detail": "Reverse CDC reads the commit from the cloud database's log, because fulfilment, returns and finance still read Oracle and must see the order within seconds."
+        },
+        {
+          "from": "cdc",
+          "to": "hybrid",
+          "kind": "async",
+          "phase": "Replicate back",
+          "label": "apply to Oracle over the link",
+          "detail": "Change data crosses the private link, not the internet, and is small: about 2 MB / s at peak."
+        },
+        {
+          "from": "hybrid",
+          "to": "onprem_db",
+          "kind": "async",
+          "phase": "Replicate back",
+          "label": "MERGE INTO ORDERS (ORIGIN='CLOUD')",
+          "detail": "The row keeps origin CLOUD, so forward capture skips it and the change does not loop back to the cloud.",
+          "payload": "MERGE INTO ORDERS o USING (SELECT 'N-8F3K2' AS ORDER_ID FROM DUAL) s\n  ON (o.ORDER_ID = s.ORDER_ID)\nWHEN NOT MATCHED THEN INSERT (ORDER_ID, CUST_NO, STATUS, TOTAL, OWNER, ORIGIN)\n  VALUES ('N-8F3K2', '0004471902', 'P', 59.98, 'CLOUD', 'CLOUD');"
+        }
+      ]
+    },
+    {
+      "id": "legacy-path",
+      "title": "Add to cart on a legacy path",
+      "summary": "Cart is not migrated yet. No rule matches, so the router's default sends the request over the private link to the monolith, which works exactly as before.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /cart/items",
+          "detail": "Shoppers use the same hostname for every page; they cannot tell which side serves which path.",
+          "payload": "POST /cart/items\nCookie: JSESSIONID=A1B2C3...\n\nsku=SKU-1182&qty=2"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin",
+          "detail": "Cart changes are per shopper and never cached, so the CDN passes them to the router."
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Route",
+          "label": "no migrated rule matches: default",
+          "detail": "The default action forwards to the monolith target group, whose targets are the private IPs of the on-premises load balancer, reachable only over the hybrid link.",
+          "payload": "{ \"Priority\": \"default\",\n  \"Actions\": [ { \"Type\": \"forward\", \"TargetGroupArn\": \"tg-monolith-onprem\" } ] }\n\ntg-monolith-onprem: TargetType=ip, targets 10.8.20.11:443, 10.8.20.12:443 (on-premises, AvailabilityZone=all)"
+        },
+        {
+          "from": "lb",
+          "to": "hybrid",
+          "kind": "req",
+          "phase": "Cross the link",
+          "label": "to 10.8.20.11:443 over the link",
+          "detail": "The request leaves the VPC through the transit gateway onto the dedicated connection, adding one 4 ms round trip; the router reuses connections so it does not pay a TLS handshake each time."
+        },
+        {
+          "from": "hybrid",
+          "to": "monolith",
+          "kind": "req",
+          "phase": "Cross the link",
+          "label": "POST /cart/items",
+          "detail": "The data centre firewall admits only the router's and the services' subnets, so the monolith is not exposed more widely than before."
+        },
+        {
+          "from": "monolith",
+          "to": "onprem_db",
+          "kind": "req",
+          "phase": "Legacy work",
+          "label": "INSERT CART_ITEM, SELECT PRICE",
+          "detail": "The monolith reads the price from its PRODUCTS table, which is now a read-only copy fed by reverse CDC from the cloud catalog, so legacy code keeps working without knowing the catalog moved.",
+          "payload": "SELECT PRICE, CURRENCY FROM PRODUCTS WHERE ITEM_NO = 1182;\nINSERT INTO CART_ITEM (CART_ID, ITEM_NO, QTY, UNIT_PRICE) VALUES (77012, 1182, 2, 29.99);"
+        },
+        {
+          "from": "onprem_db",
+          "to": "monolith",
+          "kind": "res",
+          "phase": "Legacy work",
+          "label": "1 row, COMMIT"
+        },
+        {
+          "from": "monolith",
+          "to": "hybrid",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 cart"
+        },
+        {
+          "from": "hybrid",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 cart"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 cart"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "cart with 2 items",
+          "payload": "HTTP/1.1 200 OK\n\n{ \"cart_id\": 77012, \"items\": 2, \"subtotal\": \"59.98\" }"
+        }
+      ]
+    },
+    {
+      "id": "forward-cdc",
+      "title": "CDC keeps the cloud copy in sync",
+      "summary": "The monolith still creates 95% of orders and owns them. Change data capture reads Oracle's redo log and applies each committed change to the cloud copy within seconds, idempotently and in commit order.",
+      "steps": [
+        {
+          "from": "monolith",
+          "to": "onprem_db",
+          "kind": "req",
+          "phase": "Legacy write",
+          "label": "INSERT INTO ORDERS (owner MONOLITH)",
+          "detail": "The monolith owns this order, so only the monolith writes it; the cloud copy must follow for order history and for the final cutover.",
+          "payload": "INSERT INTO ORDERS (ORDER_ID, CUST_NO, STATUS, TOTAL, OWNER, ORIGIN)\nVALUES ('48812209', '0003390114', 'P', 120.50, 'MONOLITH', 'MONOLITH');\nCOMMIT;"
+        },
+        {
+          "from": "onprem_db",
+          "to": "monolith",
+          "kind": "res",
+          "phase": "Legacy write",
+          "label": "COMMIT at SCN 918273645"
+        },
+        {
+          "from": "cdc",
+          "to": "hybrid",
+          "kind": "req",
+          "phase": "Capture",
+          "label": "read redo since SCN 918273600",
+          "detail": "Capture reads Oracle's redo and archived logs instead of polling tables, so it sees every committed change in commit order and adds almost no load to hot tables."
+        },
+        {
+          "from": "hybrid",
+          "to": "onprem_db",
+          "kind": "req",
+          "phase": "Capture",
+          "label": "LogMiner / redo reader session",
+          "detail": "The capture user has only the log reading privileges it needs, and supplemental logging makes the redo carry full keys for every update."
+        },
+        {
+          "from": "onprem_db",
+          "to": "hybrid",
+          "kind": "res",
+          "phase": "Capture",
+          "label": "committed changes"
+        },
+        {
+          "from": "hybrid",
+          "to": "cdc",
+          "kind": "res",
+          "phase": "Capture",
+          "label": "committed changes"
+        },
+        {
+          "from": "cdc",
+          "to": "cdc",
+          "kind": "local",
+          "phase": "Transform",
+          "label": "skip ORIGIN=CLOUD, map types",
+          "detail": "It drops rows that came from the cloud through reverse CDC to stop loops, and maps Oracle NUMBER, DATE and one-letter status codes to the cloud schema.",
+          "payload": "{ \"table\": \"ORDERS\", \"op\": \"INSERT\", \"scn\": 918273645,\n  \"after\": { \"ORDER_ID\": \"48812209\", \"CUST_NO\": \"0003390114\", \"STATUS\": \"P\", \"TOTAL\": 120.50, \"ORIGIN\": \"MONOLITH\" },\n  \"mapped\": { \"order_id\": \"48812209\", \"customer_id\": 3390114, \"status\": \"placed\", \"total_cents\": 12050 } }"
+        },
+        {
+          "from": "cdc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Apply",
+          "label": "UPSERT guarded by source SCN",
+          "detail": "Apply is an upsert that only moves a row forward in SCN order, so replaying a batch after a restart cannot overwrite newer data.",
+          "payload": "INSERT INTO orders (order_id, customer_id, status, total_cents, owner, origin, src_scn)\nVALUES ('48812209', 3390114, 'placed', 12050, 'MONOLITH', 'MONOLITH', 918273645)\nON CONFLICT (order_id) DO UPDATE SET status = EXCLUDED.status, total_cents = EXCLUDED.total_cents, src_scn = EXCLUDED.src_scn\nWHERE orders.src_scn < EXCLUDED.src_scn;"
+        },
+        {
+          "from": "orders_db",
+          "to": "cdc",
+          "kind": "res",
+          "phase": "Apply",
+          "label": "applied, lag 1.8 s"
+        },
+        {
+          "from": "cdc",
+          "to": "cdc",
+          "kind": "local",
+          "phase": "Checkpoint",
+          "label": "save last applied SCN",
+          "detail": "The checkpoint is saved after the apply commits; after a crash or a link outage capture resumes from here, as long as Oracle still has the archived logs."
+        }
+      ]
+    },
+    {
+      "id": "rollback",
+      "title": "Canary misbehaves: orders go back to the monolith",
+      "summary": "The orders service starts failing. The router stops sending it new orders within seconds; the orders it already owns are drained to Oracle by reverse CDC before the monolith takes them over, so no order is lost or written by two systems.",
+      "steps": [
+        {
+          "from": "orders",
+          "to": "orders",
+          "kind": "local",
+          "phase": "Detect",
+          "label": "5xx 4.1% vs monolith 0.3%",
+          "detail": "The canary is judged against the monolith over the same minutes, not against an absolute number, so a bad day for everyone does not trigger a rollback."
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Stop new writes",
+          "label": "weights: orders 0, monolith 100",
+          "detail": "An alarm action changes the rule's weights, so new orders go to the monolith within seconds with no deploy and no DNS change.",
+          "payload": "aws elbv2 modify-rule --rule-arn <orders-post-rule> --actions '[{\"Type\":\"forward\",\"ForwardConfig\":{\"TargetGroups\":[{\"TargetGroupArn\":\"tg-orders-svc\",\"Weight\":0},{\"TargetGroupArn\":\"tg-monolith-onprem\",\"Weight\":100}]}}]'"
+        },
+        {
+          "from": "cdc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Drain reverse CDC",
+          "label": "read remaining N- changes",
+          "detail": "Orders the canary already created are still owned by the cloud; before the monolith may change them, every one of them must be in Oracle."
+        },
+        {
+          "from": "orders_db",
+          "to": "cdc",
+          "kind": "res",
+          "phase": "Drain reverse CDC",
+          "label": "last 312 changes"
+        },
+        {
+          "from": "cdc",
+          "to": "hybrid",
+          "kind": "req",
+          "phase": "Drain reverse CDC",
+          "label": "apply to Oracle",
+          "detail": "The drain goes over the same private link; at about 2 MB / s of changes, a backlog of minutes clears in seconds."
+        },
+        {
+          "from": "hybrid",
+          "to": "onprem_db",
+          "kind": "req",
+          "phase": "Drain reverse CDC",
+          "label": "MERGE INTO ORDERS (ORIGIN='CLOUD')",
+          "detail": "Each change is applied in commit order, so Oracle ends with the same final state of every N- order as the cloud database."
+        },
+        {
+          "from": "onprem_db",
+          "to": "hybrid",
+          "kind": "res",
+          "phase": "Drain reverse CDC",
+          "label": "COMMIT"
+        },
+        {
+          "from": "hybrid",
+          "to": "cdc",
+          "kind": "res",
+          "phase": "Drain reverse CDC",
+          "label": "reverse lag 0"
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Hand back ownership",
+          "label": "route /api/orders/N-* to monolith",
+          "detail": "Only when reverse lag is 0 does the owner of the N- rows flip to MONOLITH and the rule for changes to those orders point at the monolith, so there is never a moment with two writers.",
+          "payload": "UPDATE ORDERS SET OWNER = 'MONOLITH' WHERE ORDER_ID LIKE 'N-%' AND OWNER = 'CLOUD';\n-- then: rule path-pattern /api/orders/N-* forward to tg-monolith-onprem"
+        },
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Served by monolith",
+          "label": "POST /api/orders",
+          "detail": "The next order from the same shopper is placed exactly as it was before the migration started."
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Served by monolith",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "hybrid",
+          "kind": "req",
+          "phase": "Served by monolith",
+          "label": "weight 100 to monolith",
+          "detail": "The monolith's order code was kept deployed and tested with synthetic orders during the canary, so the old path is warm and needs no redeploy."
+        },
+        {
+          "from": "hybrid",
+          "to": "monolith",
+          "kind": "req",
+          "phase": "Served by monolith",
+          "label": "POST /api/orders"
+        },
+        {
+          "from": "monolith",
+          "to": "onprem_db",
+          "kind": "req",
+          "phase": "Served by monolith",
+          "label": "INSERT INTO ORDERS (owner MONOLITH)",
+          "detail": "Forward CDC keeps copying these orders to the cloud, so the canary can restart later from a complete copy."
+        },
+        {
+          "from": "onprem_db",
+          "to": "monolith",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "COMMIT"
+        },
+        {
+          "from": "monolith",
+          "to": "hybrid",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "201 Created"
+        },
+        {
+          "from": "hybrid",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "201 Created"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "201 Created"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "order 48812210 confirmed",
+          "payload": "HTTP/1.1 201 Created\n\n{ \"order_id\": \"48812210\", \"status\": \"placed\" }"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "tradeoff",
+      "text": "Strangler fig instead of a big-bang rewrite: every step is small, reversible and delivers value, and the monolith keeps the business running. The cost is a long period of running two systems: a router, a hybrid link, CDC in both directions and an anti-corruption layer that all go away at the end. Set a decommission date for each piece, or the in-between state becomes permanent."
+    },
+    {
+      "target": "cdc",
+      "kind": "tradeoff",
+      "text": "One writer per entity, never dual writes. If a service wrote to both databases, a crash between the two writes, or two writes arriving in different orders, leaves copies that disagree with no way to tell which is right. Instead the owner writes only its own database and CDC copies from the owner's log. Ownership moves per entity (catalog), or per row with an owner column and an id prefix (orders during the canary), and every row has exactly one owner at a time."
+    },
+    {
+      "target": "hybrid",
+      "kind": "failure",
+      "text": "If one dedicated connection fails, BGP moves traffic to the other within seconds, so each must run under 50%. If both fail, traffic falls back to the IPsec VPN at about 1.25 Gbps per tunnel, which cannot carry the 1.5 Gbps peak, so the router sheds or queues legacy traffic. Migrated catalog pages keep working; orders and cart stop. CDC pauses and resumes from its checkpoint when the link returns, provided Oracle kept the archived logs, so retain at least 24 hours of them."
+    },
+    {
+      "target": "acl",
+      "kind": "scaling",
+      "text": "Latency, not bandwidth, is what the hybrid link punishes. One proxied page pays 4 ms once, but a page that makes 200 SQL calls across the link pays 800 ms, which is why the monolith stays next to its database and each new service moves together with its data. Keep calls through the anti-corruption layer coarse (one call per request, batch lookups) and cache stable reference data such as customer tier."
+    },
+    {
+      "target": "hybrid",
+      "kind": "security",
+      "text": "A dedicated connection is private but not encrypted: use MACsec on the 10 Gbps ports or run IPsec over it. Plan IP ranges so the VPC (10.64.0.0/16) does not overlap the data centre (10.8.0.0/14), allow only the router and service subnets through the data centre firewall, and give the CDC user only log reading rights on Oracle and write rights on the replicated tables. Card data stays with the on-premises payment module until payments migrate, which keeps the cloud out of PCI scope for now."
+    },
+    {
+      "target": "onprem_db",
+      "kind": "note",
+      "text": "Moving data from Oracle to PostgreSQL is a heterogeneous migration: convert the schema and stored procedures first (with a schema conversion tool, then by hand), run a full load of each table, then start CDC from the SCN the load was consistent at. Validate with row counts and checksums before any traffic depends on the copy, and keep reconciliation running until the Oracle tables are retired."
+    }
+  ],
+  "questions": [
+    {
+      "id": "seven-rs",
+      "q": "Walk through the 7 Rs. Which would you apply to the parts of this system, and why not refactor everything?",
+      "a": "Retire what discovery shows nobody uses, retain what cannot move yet (the payment module tied to a card terminal network), rehost (lift and shift to VMs) when a data centre exit date matters more than improvement, relocate (VMware Cloud on AWS or Google Cloud VMware Engine) to move whole VMware estates in weeks, repurchase where SaaS fits such as site search or email, replatform for small changes with managed gains such as Oracle to a managed database or the app onto containers, and refactor only where scaling or speed of change pays for it. Here catalog and orders are refactored because they change and scale the most, while back office modules may be rehosted or retired. Refactoring everything takes years and risk for modules whose only problem is where they run.",
+      "topic": "tradeoffs",
+      "targets": [
+        "monolith",
+        "onprem_db",
+        "catalog",
+        "orders"
+      ]
+    },
+    {
+      "id": "sequencing",
+      "q": "Why catalog first and orders second? What do you leave until last?",
+      "a": "Start with a capability that has a clear seam, few writers and low risk: catalog is read-heavy, edited by a few merchandisers, easy to verify and benefits immediately from the CDN, and it proves the router, CDC and deploy pipeline. Orders come next because they have high value and their writes can be split by row, but they depend on customers and stock, hence the anti-corruption layer. Leave until last the modules that share transactions across many tables, such as checkout, payments and stock, and find seams by mapping which modules read and write which tables from database audit data rather than from the code's package structure.",
+      "topic": "requirements",
+      "targets": [
+        "catalog",
+        "orders",
+        "acl",
+        "onprem_db"
+      ]
+    },
+    {
+      "id": "dual-write",
+      "q": "During the transition, why not have the orders service simply write each order to both its own database and Oracle?",
+      "a": "Two writes to two databases are not atomic: a crash between them, a timeout on one, or two concurrent updates applied in different orders leaves copies that disagree, and nothing tells you which one is right. The design keeps one writer per row (owner column and N- id prefix) and lets CDC copy from the owner's commit log, which preserves commit order and retries safely because applies are guarded by the source SCN. The price is replication lag of a few seconds, so reads that must see their own write go to the owner, and origin tags stop forward and reverse CDC from looping.",
+      "topic": "consistency",
+      "targets": [
+        "orders",
+        "cdc",
+        "orders_db",
+        "onprem_db"
+      ]
+    },
+    {
+      "id": "cutover",
+      "q": "Walk me through taking orders from 5% to 100% on the cloud with minimal downtime.",
+      "a": "Before any traffic, run a full load and forward CDC, reconcile counts and checksums, and shadow-read so the new service's answers match the monolith's. Then ramp new orders 5, 25, 50, 100% on canary metrics while the monolith still owns its existing orders. To finish, move ownership of the remaining monolith orders: briefly block updates to them (seconds, at a quiet hour), wait for forward lag to reach 0, flip their owner to CLOUD, point every order route at the new service and keep reverse CDC running so the monolith's back office and a rollback still work.",
+      "topic": "operations",
+      "targets": [
+        "lb",
+        "orders",
+        "cdc",
+        "orders_db"
+      ]
+    },
+    {
+      "id": "late-rollback",
+      "q": "A data bug in the new orders service is found two days after it reached 100%. Can you still roll back?",
+      "a": "Yes, as long as reverse CDC kept Oracle current and the monolith's order code stayed deployed: set the weights back, drain reverse lag to 0, flip ownership to MONOLITH, and fix the bad rows with a correction script run against whichever side is the owner. That is only possible if the new schema stayed reverse-mappable, so the rule is to make only additive schema changes until the old path is retired. The point of no return is when reverse CDC is switched off, so do that deliberately, weeks after 100%, and keep backups of both databases from the cutover.",
+      "topic": "reliability",
+      "targets": [
+        "lb",
+        "cdc",
+        "onprem_db",
+        "monolith"
+      ]
+    },
+    {
+      "id": "link-cost",
+      "q": "What does the hybrid link cost in latency and money, and how does that shape the design?",
+      "a": "Two dedicated 10 Gbps connections cost about 3,300 USD a month in port fees on AWS (similar on Google Cloud), plus cross-connect and carrier circuit fees, and data leaving the cloud over them is about 0.02 USD per GB against roughly 0.09 USD over the internet, with inbound free. Bandwidth is rarely the limit; the 4 ms round trip is, so services move together with their data, calls through the anti-corruption layer stay coarse, and the monolith stays next to Oracle. A site-to-site VPN is cheaper and quick to set up but slower and limited per tunnel, so it serves as the backup or as a stopgap while the dedicated circuits are ordered.",
+      "topic": "performance",
+      "targets": [
+        "hybrid",
+        "acl",
+        "lb"
+      ]
+    }
+  ]
+}

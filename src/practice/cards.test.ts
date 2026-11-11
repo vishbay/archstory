@@ -48,7 +48,7 @@ describe('what to drill', () => {
     const deck: Deck = { [cardKey(extra.id, extra.questions[0])]: { box: 3, due: today, seen: 2, last: 'got' } }
     expect(deckStats(all, deck, today)).toMatchObject({ total: deckStats(LIBRARY, {}, today).total + 2, seen: 1, due: 1, learned: 1 })
     expect(deckStats(LIBRARY, deck, today)).toMatchObject({ seen: 0, due: 0 })
-    expect(dueCards(all, deck, today, 100).some(c => c.design.id === 'mine-1' && c.question.id === extra.questions[1].id)).toBe(true)
+    expect(dueCards(all, deck, today, 1000).some(c => c.design.id === 'mine-1' && c.question.id === extra.questions[1].id)).toBe(true)
   })
   it('ignores junk in storage', () => {
     expect(cleanDeck({ x: { box: 'a' }, y: { box: 9, due: 1, seen: 2, last: 'got' }, z: null })).toEqual({ y: { box: INTERVALS.length - 1, due: 1, seen: 2, last: 'got' } })

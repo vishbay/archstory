@@ -1,0 +1,1155 @@
+{
+  "schema": "archstory/v1",
+  "id": "enterprise-integration",
+  "meta": {
+    "title": "Enterprise Integration Backbone",
+    "summary": "Replace brittle point-to-point scripts between an ERP, a CRM, an online shop and a warehouse system with managed APIs, canonical business events on a shared backbone, one connector per system, and the retries, dedup and replay that keep an order from being lost or booked twice.",
+    "tags": [
+      "integration",
+      "event-driven",
+      "api-management",
+      "idempotency",
+      "canonical-model",
+      "erp"
+    ],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Send every online and partner order to the ERP, the warehouse system and the CRM without point-to-point scripts",
+      "Propagate customer changes between the CRM, the ERP and the shop, following which system owns which field",
+      "Publish inventory adjustments from the warehouse system to the shop and the ERP",
+      "Expose versioned synchronous APIs (create order, order status) to partners and internal apps, with auth and quotas",
+      "Retry failed deliveries, dead-letter what cannot be delivered, and let an operator replay it safely",
+      "Follow any order across all systems by one correlation id"
+    ],
+    "nonFunctional": [
+      "An order reaches the ERP, WMS and CRM within 5 minutes for 99% of orders; any order missing from the ERP after 15 minutes raises an alert",
+      "No lost orders and no duplicate sales orders, across retries, redeliveries, replays and outages",
+      "Events for one business key (order, customer, SKU) are applied in the order they happened",
+      "Partner APIs: 99.9% availability and < 300 ms p99",
+      "Ride out a 6-hour ERP maintenance window with no data loss and no manual re-entry",
+      "A schema change never breaks an existing consumer"
+    ],
+    "scale": [
+      {
+        "label": "Orders",
+        "value": "~20,000/day average, 100,000 on peak days (~3.5/s in the busiest hour)"
+      },
+      {
+        "label": "Business events",
+        "value": "~400,000/day (≈5/s average): order lifecycle 120k, inventory adjustments 200k, customer 30k, product and price 50k"
+      },
+      {
+        "label": "Peak event rate",
+        "value": "~300/s during Black Friday hours and warehouse wave releases; backbone sized for 1,000/s"
+      },
+      {
+        "label": "Partner API",
+        "value": "~2M calls/day from ~15 partners and internal apps, 200 requests/s peak"
+      },
+      {
+        "label": "ERP outage backlog",
+        "value": "6 h window ≈ 5,000 orders plus 7,500 customer and price events; drained at 20/s in ~10 min"
+      },
+      {
+        "label": "Salesforce API budget",
+        "value": "100,000 calls per 24 h plus 1,000 per user licence; integration may use 60% of it"
+      }
+    ]
+  },
+  "network": {
+    "cidr": "10.20.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      {
+        "id": "public",
+        "label": "Public",
+        "public": true,
+        "tiers": [
+          "entry"
+        ],
+        "cidr": "10.20.0.0/20"
+      },
+      {
+        "id": "app",
+        "label": "App",
+        "tiers": [
+          "services",
+          "async"
+        ],
+        "cidr": "10.20.16.0/20"
+      },
+      {
+        "id": "data",
+        "label": "Data",
+        "tiers": [
+          "data"
+        ],
+        "cidr": "10.20.32.0/20"
+      }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "order-propagation",
+        "name": "Orders reach every system",
+        "kind": "freshness",
+        "sli": "Orders whose tracking row has ERP, WMS and CRM timestamps within the threshold of OrderPlaced, divided by all orders, from the order tracking table",
+        "target": 99,
+        "threshold": "< 5 min"
+      },
+      {
+        "id": "partner-api-availability",
+        "name": "Partner API availability",
+        "kind": "availability",
+        "sli": "Partner and internal API requests answered without a 5xx, divided by all requests, at API management",
+        "target": 99.9
+      },
+      {
+        "id": "order-integrity",
+        "name": "Every order booked exactly once",
+        "kind": "correctness",
+        "sli": "Shop orders that match exactly one ERP sales order by external reference, divided by all shop orders, in the nightly reconciliation",
+        "target": 100
+      }
+    ],
+    "alerts": [
+      {
+        "id": "stale-orders",
+        "severity": "page",
+        "when": "Any order placed more than 15 minutes ago with no ERP booking, outside an announced maintenance window",
+        "why": "This is the symptom the business feels: the warehouse may ship it but finance never invoices it, or nobody ships it at all. It catches failures that no technical metric shows, such as a mapping that silently drops orders.",
+        "target": "ops",
+        "slo": "order-propagation"
+      },
+      {
+        "id": "partner-api-burn",
+        "severity": "page",
+        "when": "Partner API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Partners cannot place or track orders, and their own systems start retrying on top of the outage.",
+        "target": "apim",
+        "slo": "partner-api-availability"
+      },
+      {
+        "id": "erp-consumer-lag",
+        "severity": "ticket",
+        "when": "ERP connector lag above 2,000 events or oldest unprocessed event older than 10 minutes, for 10 minutes",
+        "why": "Lag is the cause that comes before stale orders. A ticket, because inside a maintenance window it is expected and the stale order alert pages if it matters.",
+        "target": "erp_conn",
+        "slo": "order-propagation"
+      },
+      {
+        "id": "dlq-new",
+        "severity": "ticket",
+        "when": "Any new message on a dead-letter topic, or any dead-letter message older than 24 hours",
+        "why": "Every dead-lettered message is a business record that did not arrive somewhere, and it also blocks later events for the same key.",
+        "target": "bus"
+      },
+      {
+        "id": "crm-api-budget",
+        "severity": "ticket",
+        "when": "Salesforce API usage above 70% of the rolling 24-hour allowance",
+        "why": "When the allowance runs out, every integration and every user tool calling the API fails until the window rolls, so slow down and batch before that happens.",
+        "target": "crm_conn"
+      },
+      {
+        "id": "recon-mismatch",
+        "severity": "ticket",
+        "when": "Nightly reconciliation finds a shop order with no ERP sales order, or with more than one",
+        "why": "A missing order is lost revenue and a duplicate is a double shipment or double invoice. Both mean a dedup or tracking bug that must be found before it repeats.",
+        "target": "ops",
+        "slo": "order-integrity"
+      }
+    ],
+    "signals": [
+      {
+        "target": "erp_conn",
+        "name": "Lag and circuit state",
+        "metric": "kafka_consumergroup_lag{group=erp-connector,partition}, circuit_state{target=sap}",
+        "why": "Shows whether the connector is behind because SAP is slow, down, or one partition is stuck on a single key."
+      },
+      {
+        "target": "crm_conn",
+        "name": "Salesforce API allowance left",
+        "metric": "sfdc_api_usage_ratio (from the Sforce-Limit-Info response header)",
+        "why": "The org-wide limit is shared with every other tool, so read it on every response rather than counting your own calls."
+      },
+      {
+        "target": "commerce",
+        "name": "Mapping failures by reason",
+        "metric": "mapping_failures_total{source,reason=unknown_sku|unknown_customer|schema}",
+        "why": "An unknown SKU usually means a product was created in the shop before the ERP, which is a master data process problem, not a code bug."
+      },
+      {
+        "target": "bus",
+        "name": "Dead-letter depth per consumer",
+        "metric": "dlq_messages{consumer_group}, dlq_oldest_age_seconds",
+        "why": "Tells you which connector is failing and for how long."
+      },
+      {
+        "target": "store",
+        "name": "Dedup outcomes",
+        "metric": "dedup_outcomes_total{consumer,outcome=new|duplicate|in_doubt|stale_version}",
+        "why": "A rise in duplicates means redeliveries or replays; in_doubt means a side effect whose result was lost and had to be looked up in the target."
+      },
+      {
+        "target": "bus",
+        "name": "Rejected schema changes",
+        "metric": "schema_compat_failures_total{subject}",
+        "why": "A producer trying to register a breaking change is caught here, before any consumer sees it."
+      }
+    ],
+    "debug": [
+      {
+        "symptom": "A customer says order SHOP-1002 was confirmed but never shipped",
+        "steps": [
+          "Look up SHOP-1002 in the order tracking table: it shows the correlation id and which systems have stamped it (received, ERP, WMS, CRM) and when.",
+          "For the first missing stage, check that connector's dead-letter topic and its parked keys for the order id, and its consumer lag on the order's partition.",
+          "If nothing is parked, search the logs and traces of every connector by the correlation id to see the last hop that handled it.",
+          "Ask the target system directly by the external reference (PurchaseOrderByCustomer in SAP, clientOrderRef in the WMS): the order may exist with the tracking update lost.",
+          "Fix the cause, then replay the parked event to that one consumer, never to the main topic."
+        ]
+      },
+      {
+        "symptom": "ERP connector lag keeps growing although SAP is up",
+        "steps": [
+          "Check whether the lag is on every partition or on one: one partition means one key is blocked or one message is slow.",
+          "Look at the circuit state and SAP response times; rising latency means SAP work processes are saturated, so lower the drain rate rather than adding consumers.",
+          "Check for a parked key at the head of the stuck partition and whether its fix needs a replay.",
+          "Only add consumers if partitions outnumber them, since one partition is processed by one consumer at a time."
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "partners",
+      "label": "Partner and Internal Apps",
+      "kind": "client",
+      "description": "B2B partners and marketplaces, the customer service portal, the integration support console"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points api.acme.example (partner APIs, webhooks, ops API) at API management",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "apim",
+      "label": "API Management",
+      "kind": "api_gateway",
+      "description": "Partner and internal APIs: OAuth, API keys, per-partner quotas, versioned routes; the public endpoint for webhooks",
+      "cloud": {
+        "aws": "API Gateway",
+        "gcp": "Apigee"
+      }
+    },
+    {
+      "id": "commerce",
+      "label": "Commerce Adapter",
+      "kind": "service",
+      "description": "Shop webhooks and partner order APIs in, canonical OrderPlaced out; pushes customer and stock changes back to the shop",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "ops",
+      "label": "Integration Ops",
+      "kind": "service",
+      "description": "Business monitor (stale orders every 5 min), nightly reconciliation, dead-letter browser and replay API",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "store",
+      "label": "Integration Store",
+      "kind": "sql_db",
+      "description": "processed_events (dedup), id_xref (ids across systems), order_tracking, applied_versions, parked_keys",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
+      "id": "bus",
+      "label": "Event Backbone",
+      "kind": "stream",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "Canonical topics (OrderPlaced, CustomerUpdated, InventoryAdjusted) keyed by business id, 12 partitions, 7-day retention; retry and dead-letter topics per consumer; schema registry alongside (Glue Schema Registry on AWS) with BACKWARD compatibility enforced",
+      "cloud": {
+        "aws": "MSK (Kafka)",
+        "gcp": "Managed Service for Apache Kafka"
+      }
+    },
+    {
+      "id": "erp_conn",
+      "label": "ERP Connector",
+      "kind": "worker",
+      "description": "Consumer group erp-connector: books sales orders and updates business partners in SAP over OData, with a circuit breaker",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "wms_conn",
+      "label": "WMS Connector",
+      "kind": "worker",
+      "description": "Consumer group wms-connector: creates outbound orders; publishes InventoryAdjusted from the warehouse",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "crm_conn",
+      "label": "CRM Connector",
+      "kind": "worker",
+      "description": "Subscribes to Salesforce Change Data Capture and publishes CustomerUpdated; upserts orders into Salesforce by external id",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "shop",
+      "label": "E-commerce Platform",
+      "kind": "external_api",
+      "description": "SaaS shop (for example Shopify or Adobe Commerce): sends signed webhooks, accepts admin API calls"
+    },
+    {
+      "id": "erp",
+      "label": "ERP (SAP S/4HANA)",
+      "kind": "external_api",
+      "description": "System of record for products, prices, billing and credit; sales orders become invoices here"
+    },
+    {
+      "id": "wms",
+      "label": "Warehouse System",
+      "kind": "external_api",
+      "description": "Owns stock on hand and shipping: picks, packs and ships outbound orders"
+    },
+    {
+      "id": "crm",
+      "label": "CRM (Salesforce)",
+      "kind": "external_api",
+      "description": "Owns customer contact details, consent and sales activity"
+    }
+  ],
+  "groups": [],
+  "edges": [
+    {
+      "from": "partners",
+      "to": "dns"
+    },
+    {
+      "from": "partners",
+      "to": "apim"
+    },
+    {
+      "from": "shop",
+      "to": "apim",
+      "label": "webhooks"
+    },
+    {
+      "from": "apim",
+      "to": "commerce"
+    },
+    {
+      "from": "apim",
+      "to": "ops"
+    },
+    {
+      "from": "commerce",
+      "to": "store"
+    },
+    {
+      "from": "commerce",
+      "to": "bus"
+    },
+    {
+      "from": "commerce",
+      "to": "shop"
+    },
+    {
+      "from": "ops",
+      "to": "store"
+    },
+    {
+      "from": "ops",
+      "to": "bus"
+    },
+    {
+      "from": "bus",
+      "to": "erp_conn",
+      "async": true
+    },
+    {
+      "from": "bus",
+      "to": "wms_conn",
+      "async": true
+    },
+    {
+      "from": "bus",
+      "to": "crm_conn",
+      "async": true
+    },
+    {
+      "from": "erp_conn",
+      "to": "store"
+    },
+    {
+      "from": "wms_conn",
+      "to": "store"
+    },
+    {
+      "from": "crm_conn",
+      "to": "store"
+    },
+    {
+      "from": "erp_conn",
+      "to": "erp"
+    },
+    {
+      "from": "wms_conn",
+      "to": "wms"
+    },
+    {
+      "from": "crm_conn",
+      "to": "crm"
+    }
+  ],
+  "flows": [
+    {
+      "id": "order",
+      "title": "Online order reaches ERP, WMS and CRM",
+      "summary": "The shop's webhook becomes one canonical OrderPlaced event keyed by order id. Three connectors consume it independently, each deduplicating and booking the order in its own system with the order id as the external reference.",
+      "steps": [
+        {
+          "from": "shop",
+          "to": "apim",
+          "kind": "req",
+          "phase": "Webhook in",
+          "label": "POST /hooks/shop/orders-create",
+          "detail": "The shop pushes the new order as a signed webhook instead of the old script polling it every 15 minutes, so the order enters the backbone within seconds.",
+          "payload": "POST /hooks/shop/orders-create HTTP/1.1\nX-Shopify-Topic: orders/create\nX-Shopify-Webhook-Id: b54557e4-bdd9-4b37-8a5f-bf7d70bcd043\nX-Shopify-Hmac-Sha256: XWmrwMey6OsLMeiZKwP4FppHH3cmAiiJJAweH5Jo4bM=\n\n{ \"id\": 820982911946154508, \"name\": \"#1001\", \"email\": \"ana@example.com\", \"currency\": \"EUR\", \"total_price\": \"129.90\",\n  \"line_items\": [ { \"sku\": \"TSHIRT-BLK-M\", \"quantity\": 2, \"price\": \"39.95\" }, { \"sku\": \"HOODIE-GRY-L\", \"quantity\": 1, \"price\": \"50.00\" } ] }"
+        },
+        {
+          "from": "apim",
+          "to": "commerce",
+          "kind": "req",
+          "phase": "Webhook in",
+          "label": "forward raw body",
+          "detail": "The gateway applies a size limit and a rate limit but passes the body through byte for byte, because the signature is computed over the raw bytes."
+        },
+        {
+          "from": "commerce",
+          "to": "commerce",
+          "kind": "local",
+          "phase": "Validate and map",
+          "label": "verify HMAC signature",
+          "detail": "An HMAC with the shop's shared secret, loaded from the secrets manager, proves the shop sent it. Anything unsigned is rejected before it can become a business event."
+        },
+        {
+          "from": "commerce",
+          "to": "store",
+          "kind": "req",
+          "phase": "Validate and map",
+          "label": "look up ids, start tracking",
+          "detail": "The cross-reference table turns the shop's customer and SKUs into canonical ids, and the tracking row is the start of the order's trail across systems. The upsert makes a repeated webhook harmless.",
+          "payload": "SELECT system_id, canonical_id FROM id_xref\nWHERE system = 'shop' AND entity IN ('customer', 'sku')\n  AND system_id IN ('7408005', 'TSHIRT-BLK-M', 'HOODIE-GRY-L');\n\nINSERT INTO order_tracking (order_id, correlation_id, received_at)\nVALUES ('SHOP-1001', 'SHOP-1001', now())\nON CONFLICT (order_id) DO NOTHING;"
+        },
+        {
+          "from": "store",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Validate and map",
+          "label": "cus_58213, 2 SKUs known"
+        },
+        {
+          "from": "commerce",
+          "to": "commerce",
+          "kind": "local",
+          "phase": "Validate and map",
+          "label": "map to canonical OrderPlaced",
+          "detail": "Prices become integer minor units, SKUs and the customer become canonical ids, and only the fields other systems need are kept. Shop-only details such as theme or discount script ids stay out of the canonical event."
+        },
+        {
+          "from": "commerce",
+          "to": "commerce",
+          "kind": "local",
+          "phase": "Publish",
+          "label": "serialize with OrderPlaced v3 (schema 47)",
+          "detail": "The Avro serializer looks the schema id up in the registry once and caches it, and the id travels in every message so consumers can decode it. Registering a breaking change fails here, in the producer, before any consumer sees it."
+        },
+        {
+          "from": "commerce",
+          "to": "bus",
+          "kind": "req",
+          "phase": "Publish",
+          "label": "produce key=SHOP-1001, acks=all",
+          "detail": "Keying by order id puts every event for this order on one partition, so OrderCancelled can never overtake OrderPlaced. The event id is derived from the shop's order id, so a repeated webhook produces the same id and consumers drop it.",
+          "payload": "topic: orders.order-placed   key: SHOP-1001\nheaders: ce_id=evt-shop-820982911946154508-placed, ce_type=OrderPlaced, ce_source=shop,\n         correlation_id=SHOP-1001, traceparent=00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\nvalue (Avro, schema 47):\n{ \"orderId\": \"SHOP-1001\", \"customerId\": \"cus_58213\", \"channel\": \"web\", \"currency\": \"EUR\", \"totalMinor\": 12990,\n  \"lines\": [ { \"sku\": \"TSHIRT-BLK-M\", \"qty\": 2, \"unitPriceMinor\": 3995 }, { \"sku\": \"HOODIE-GRY-L\", \"qty\": 1, \"unitPriceMinor\": 5000 } ],\n  \"placedAt\": \"2026-11-10T09:14:03Z\" }"
+        },
+        {
+          "from": "bus",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Publish",
+          "label": "partition 7, offset 88213",
+          "detail": "acks=all means the event is on three brokers before the adapter answers the shop."
+        },
+        {
+          "from": "commerce",
+          "to": "apim",
+          "kind": "res",
+          "phase": "Ack",
+          "label": "200 OK",
+          "detail": "Answer only after the backbone has the event. If anything failed, a 5xx makes the shop retry for hours, so the shop's retry is the safety net for this hop."
+        },
+        {
+          "from": "apim",
+          "to": "shop",
+          "kind": "res",
+          "phase": "Ack",
+          "label": "200 OK"
+        },
+        {
+          "from": "bus",
+          "to": "erp_conn",
+          "kind": "async",
+          "phase": "Book in ERP",
+          "label": "OrderPlaced (group erp-connector)",
+          "detail": "Each connector is its own consumer group with its own offsets, so a slow or down ERP never holds up the warehouse."
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Book in ERP",
+          "label": "claim event id",
+          "detail": "The unique key on (consumer, event id) turns at-least-once delivery into effectively-once processing for this connector.",
+          "payload": "INSERT INTO processed_events (consumer, event_id, status, started_at)\nVALUES ('erp-connector', 'evt-shop-820982911946154508-placed', 'in_progress', now())\nON CONFLICT (consumer, event_id) DO NOTHING\nRETURNING status;"
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Book in ERP",
+          "label": "new"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Book in ERP",
+          "label": "POST A_SalesOrder",
+          "detail": "The shop order id goes into PurchaseOrderByCustomer, so the order can always be found in SAP by our reference. The connector authenticates with an OAuth client credentials token for a technical user that may only create sales orders and change business partners.",
+          "payload": "POST /sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder\nAuthorization: Bearer eyJhbGci... (client credentials, scope API_SALES_ORDER_SRV)\n\n{ \"SalesOrderType\": \"OR\", \"SalesOrganization\": \"1010\", \"DistributionChannel\": \"10\", \"OrganizationDivision\": \"00\",\n  \"SoldToParty\": \"17100001\", \"PurchaseOrderByCustomer\": \"SHOP-1001\",\n  \"to_Item\": [ { \"Material\": \"100045\", \"RequestedQuantity\": \"2\" }, { \"Material\": \"100212\", \"RequestedQuantity\": \"1\" } ] }"
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Book in ERP",
+          "label": "201, SalesOrder 4500012345"
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Book in ERP",
+          "label": "mark done, save xref, stamp tracking",
+          "detail": "Recording the SAP number lets later events (cancel, return) find the sales order, and the tracking stamp is what the business monitor watches.",
+          "payload": "BEGIN;\nUPDATE processed_events SET status = 'done' WHERE consumer = 'erp-connector' AND event_id = 'evt-shop-...-placed';\nINSERT INTO id_xref (entity, canonical_id, system, system_id) VALUES ('order', 'SHOP-1001', 'sap', '4500012345');\nUPDATE order_tracking SET erp_booked_at = now() WHERE order_id = 'SHOP-1001';\nCOMMIT;"
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Book in ERP",
+          "label": "COMMIT"
+        },
+        {
+          "from": "erp_conn",
+          "to": "bus",
+          "kind": "async",
+          "phase": "Book in ERP",
+          "label": "commit offset 88213",
+          "detail": "The offset is committed after the side effect, never before. A crash in between means the event comes again, and the done row makes the repeat a no-op."
+        },
+        {
+          "from": "bus",
+          "to": "wms_conn",
+          "kind": "async",
+          "phase": "Ship from WMS",
+          "label": "OrderPlaced (group wms-connector)",
+          "detail": "The warehouse gets the order in parallel with the ERP. That is choreography: nobody waits for the ERP before picking can start."
+        },
+        {
+          "from": "wms_conn",
+          "to": "wms",
+          "kind": "req",
+          "phase": "Ship from WMS",
+          "label": "POST /outbound-orders",
+          "detail": "The WMS rejects a second order with the same client reference with 409, so a redelivered event cannot create a second shipment.",
+          "payload": "POST /api/v1/outbound-orders\nAuthorization: Bearer eyJhbGci...\n\n{ \"clientOrderRef\": \"SHOP-1001\", \"shipTo\": { \"name\": \"Ana Ruiz\", \"postcode\": \"28013\", \"country\": \"ES\" },\n  \"lines\": [ { \"sku\": \"TSHIRT-BLK-M\", \"qty\": 2 }, { \"sku\": \"HOODIE-GRY-L\", \"qty\": 1 } ] }"
+        },
+        {
+          "from": "wms",
+          "to": "wms_conn",
+          "kind": "res",
+          "phase": "Ship from WMS",
+          "label": "201, wave planned"
+        },
+        {
+          "from": "wms_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Ship from WMS",
+          "label": "mark done, stamp wms_at"
+        },
+        {
+          "from": "bus",
+          "to": "crm_conn",
+          "kind": "async",
+          "phase": "Record in CRM",
+          "label": "OrderPlaced (group crm-connector)",
+          "detail": "Sales and service teams see the order on the customer's record, which the old nightly export showed a day late."
+        },
+        {
+          "from": "crm_conn",
+          "to": "crm",
+          "kind": "req",
+          "phase": "Record in CRM",
+          "label": "upsert Order by Shop_Order_Id__c",
+          "detail": "An upsert keyed by an external id field is idempotent by design: a repeat updates the same record instead of inserting a second one.",
+          "payload": "PATCH /services/data/v61.0/sobjects/Order/Shop_Order_Id__c/SHOP-1001\nAuthorization: Bearer 00D...\n\n{ \"AccountId\": \"001Hn00001xYzAbIAK\", \"EffectiveDate\": \"2026-11-10\", \"Status\": \"Draft\", \"Order_Total__c\": 129.90 }"
+        },
+        {
+          "from": "crm",
+          "to": "crm_conn",
+          "kind": "res",
+          "phase": "Record in CRM",
+          "label": "201 Created"
+        },
+        {
+          "from": "crm_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Record in CRM",
+          "label": "mark done, stamp crm_at",
+          "detail": "With all three stamps set about 4 seconds after the webhook, the order counts as propagated for the SLO."
+        }
+      ]
+    },
+    {
+      "id": "customer",
+      "title": "Customer update in the CRM propagates in order",
+      "summary": "A sales rep changes a customer's email in Salesforce. Change Data Capture feeds the CRM connector, which publishes only the fields the CRM owns, keyed by customer id, and each target applies it only if it is newer than what it already has.",
+      "steps": [
+        {
+          "from": "crm",
+          "to": "crm_conn",
+          "kind": "async",
+          "phase": "Change captured",
+          "label": "AccountChangeEvent (Pub/Sub API)",
+          "detail": "The connector holds a subscription to Salesforce Change Data Capture and stores the last replay id, so after a restart it resumes where it stopped instead of polling for changes.",
+          "payload": "{ \"ChangeEventHeader\": { \"entityName\": \"Account\", \"changeType\": \"UPDATE\",\n    \"recordIds\": [\"001Hn00001xYzAbIAK\"], \"changedFields\": [\"PersonEmail\", \"LastModifiedDate\"],\n    \"commitUser\": \"005Hn000004RepAAA\", \"commitNumber\": 11850391245013, \"commitTimestamp\": 1762766100000 },\n  \"PersonEmail\": \"ana.ruiz@example.com\" }"
+        },
+        {
+          "from": "crm_conn",
+          "to": "crm_conn",
+          "kind": "local",
+          "phase": "Change captured",
+          "label": "drop echoes, keep owned fields",
+          "detail": "Changes made by the integration's own user are dropped, otherwise an ERP update written into Salesforce would come straight back as a new event and loop forever. Only fields the CRM owns (email, phone, consent) go on; a billing address edited here is ignored because the ERP owns it."
+        },
+        {
+          "from": "crm_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Map",
+          "label": "xref Salesforce id to canonical id",
+          "detail": "Every system has its own customer id. The cross-reference table is what lets one event address the same customer in all of them.",
+          "payload": "SELECT canonical_id FROM id_xref\nWHERE entity = 'customer' AND system = 'salesforce' AND system_id = '001Hn00001xYzAbIAK';"
+        },
+        {
+          "from": "store",
+          "to": "crm_conn",
+          "kind": "res",
+          "phase": "Map",
+          "label": "cus_58213"
+        },
+        {
+          "from": "crm_conn",
+          "to": "crm_conn",
+          "kind": "local",
+          "phase": "Map",
+          "label": "serialize with CustomerUpdated v2",
+          "detail": "Serializing against the registered schema means a field renamed in a connector deploy fails here, in the producer, instead of in three consumers."
+        },
+        {
+          "from": "crm_conn",
+          "to": "bus",
+          "kind": "async",
+          "phase": "Publish",
+          "label": "produce key=cus_58213",
+          "detail": "Keyed by canonical customer id, so two quick edits to the same customer land on one partition in commit order. The source version travels with the event for the targets' stale check.",
+          "payload": "topic: customers.customer-updated   key: cus_58213\nheaders: ce_type=CustomerUpdated, ce_source=salesforce, correlation_id=cus_58213\nvalue (Avro, schema 52):\n{ \"customerId\": \"cus_58213\", \"sourceVersion\": 11850391245013,\n  \"changed\": { \"email\": \"ana.ruiz@example.com\" }, \"changedAt\": \"2026-11-10T09:15:00Z\" }"
+        },
+        {
+          "from": "bus",
+          "to": "erp_conn",
+          "kind": "async",
+          "phase": "Apply in ERP",
+          "label": "CustomerUpdated cus_58213"
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Apply in ERP",
+          "label": "last applied version for cus_58213",
+          "detail": "Partition order covers normal delivery, but a replay or a retry topic can bring an older change after a newer one. Comparing versions makes applying it again or late harmless."
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Apply in ERP",
+          "label": "11850391198770 (older): apply"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Apply in ERP",
+          "label": "PATCH business partner email",
+          "detail": "Only the changed field is sent, so the update cannot overwrite fields SAP owns, such as credit limit or billing address.",
+          "payload": "PATCH /sap/opu/odata/sap/API_BUSINESS_PARTNER/A_AddressEmailAddress(AddressID='24561',Person='',OrdinalNumber='1')\nAuthorization: Bearer eyJhbGci...\n\n{ \"EmailAddress\": \"ana.ruiz@example.com\" }"
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Apply in ERP",
+          "label": "204 No Content"
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Apply in ERP",
+          "label": "save applied version",
+          "payload": "UPDATE applied_versions SET version = 11850391245013\nWHERE consumer = 'erp-connector' AND entity_key = 'cus_58213' AND version < 11850391245013;"
+        },
+        {
+          "from": "bus",
+          "to": "commerce",
+          "kind": "async",
+          "phase": "Apply in shop",
+          "label": "CustomerUpdated cus_58213",
+          "detail": "The commerce adapter is also the shop's inbound connector, so the email the customer logs in with matches the CRM."
+        },
+        {
+          "from": "commerce",
+          "to": "store",
+          "kind": "req",
+          "phase": "Apply in shop",
+          "label": "version check, shop customer id",
+          "detail": "Same stale check as the ERP, plus the shop's own id for this customer."
+        },
+        {
+          "from": "store",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Apply in shop",
+          "label": "apply, shop id 7408005"
+        },
+        {
+          "from": "commerce",
+          "to": "shop",
+          "kind": "req",
+          "phase": "Apply in shop",
+          "label": "PUT customer 7408005",
+          "detail": "The shop will fire a customers/update webhook for this change. The adapter recognises its own write by comparing against the values it just sent and does not publish it again.",
+          "payload": "PUT /admin/api/2024-10/customers/7408005.json\nX-Shopify-Access-Token: shpat_...\n\n{ \"customer\": { \"id\": 7408005, \"email\": \"ana.ruiz@example.com\" } }"
+        },
+        {
+          "from": "shop",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Apply in shop",
+          "label": "200 OK"
+        }
+      ]
+    },
+    {
+      "id": "erp-outage",
+      "title": "ERP down for maintenance: retry, dead-letter, replay",
+      "summary": "SAP goes into a planned 4-hour window while an order is in flight. The connector retries, dead-letters the one order whose outcome is unknown, pauses so the rest wait safely in the backbone, and after SAP returns an operator replays the order, which the connector finds already booked.",
+      "steps": [
+        {
+          "from": "bus",
+          "to": "erp_conn",
+          "kind": "async",
+          "phase": "ERP goes down",
+          "label": "OrderPlaced SHOP-1002",
+          "detail": "02:00:00, the announced SAP maintenance window starts while the connector is working through the order topic."
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "ERP goes down",
+          "label": "claim event id"
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "ERP goes down",
+          "label": "new (in_progress)"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "ERP goes down",
+          "label": "POST A_SalesOrder SHOP-1002",
+          "detail": "Same call as the happy path, with SHOP-1002 as PurchaseOrderByCustomer."
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "ERP goes down",
+          "label": "timeout after 30 s",
+          "detail": "A timeout is not a failure. SAP may have saved the order just before shutting down, so the outcome is unknown."
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp_conn",
+          "kind": "local",
+          "phase": "Retry",
+          "label": "back off 5 s, 30 s, 2 min with jitter",
+          "detail": "Short outages and deploys clear within these retries. Jitter stops every connector instance from hitting SAP at the same moment when it comes back."
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Retry",
+          "label": "GET by PurchaseOrderByCustomer",
+          "detail": "After an unknown outcome, every retry looks for the order before creating it. Creating blindly is how duplicate sales orders happen."
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Retry",
+          "label": "503 after the last attempt"
+        },
+        {
+          "from": "erp_conn",
+          "to": "bus",
+          "kind": "async",
+          "phase": "Dead-letter",
+          "label": "produce to orders.erp-connector.dlq",
+          "detail": "The message moves aside with its full context, so the partition is not blocked by one order and an operator can see exactly what failed and why.",
+          "payload": "topic: orders.erp-connector.dlq   key: SHOP-1002\nheaders: ce_id=evt-shop-820982911947201133-placed, correlation_id=SHOP-1002,\n         dlq_source=orders.order-placed/7/88540, dlq_error=SocketTimeout, dlq_attempts=4,\n         dlq_first_failed=2026-11-11T02:00:31Z, dlq_outcome=unknown\nvalue: (original bytes, unchanged)"
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Dead-letter",
+          "label": "park key SHOP-1002",
+          "detail": "While SHOP-1002 is parked, any later event for the same order, such as OrderCancelled, is parked behind it. Otherwise the cancel would reach SAP before the order exists."
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Dead-letter",
+          "label": "parked"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp_conn",
+          "kind": "local",
+          "phase": "Pause",
+          "label": "circuit opens: pause partitions",
+          "detail": "The next calls fail fast with 503, so the breaker opens and the connector stops consuming instead of dead-lettering every order. Events pile up in Kafka with offsets uncommitted: about 3,500 orders and customer changes over 4 hours, well inside 7 days of retention."
+        },
+        {
+          "from": "ops",
+          "to": "store",
+          "kind": "req",
+          "phase": "Pause",
+          "label": "orders not in ERP after 15 min",
+          "detail": "The business monitor sees the backlog. Inside the announced window it opens a ticket instead of paging, and after the window ends any stale order pages.",
+          "payload": "SELECT order_id, received_at FROM order_tracking\nWHERE erp_booked_at IS NULL AND received_at < now() - interval '15 minutes'\nORDER BY received_at;"
+        },
+        {
+          "from": "store",
+          "to": "ops",
+          "kind": "res",
+          "phase": "Pause",
+          "label": "2,410 stale, window active"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "ERP back",
+          "label": "half-open probe: GET $metadata",
+          "detail": "Once a minute the breaker lets one cheap call through to test whether SAP is back."
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "ERP back",
+          "label": "200 at 06:02"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp_conn",
+          "kind": "local",
+          "phase": "ERP back",
+          "label": "resume, drain at 20 orders/s",
+          "detail": "The backlog drains in about 3 minutes. The cap protects SAP's limited work processes, which a burst of thousands of parallel calls right after maintenance would overload."
+        },
+        {
+          "from": "partners",
+          "to": "dns",
+          "kind": "req",
+          "phase": "Replay",
+          "label": "resolve api.acme.example",
+          "detail": "The support console finds API management by name; resolvers cache the answer, so this is rare."
+        },
+        {
+          "from": "dns",
+          "to": "partners",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "API management address"
+        },
+        {
+          "from": "partners",
+          "to": "apim",
+          "kind": "req",
+          "phase": "Replay",
+          "label": "POST /ops/v1/replays",
+          "detail": "An integration engineer replays the dead-lettered order from the support console after checking the cause has gone.",
+          "payload": "POST /ops/v1/replays HTTP/2\nAuthorization: Bearer eyJhbGci... (scope integration.replay)\n\n{ \"consumer\": \"erp-connector\", \"dlqTopic\": \"orders.erp-connector.dlq\", \"keys\": [\"SHOP-1002\"],\n  \"reason\": \"SAP maintenance 2026-11-11, outcome unknown\" }"
+        },
+        {
+          "from": "apim",
+          "to": "ops",
+          "kind": "req",
+          "phase": "Replay",
+          "label": "forward, scope checked",
+          "detail": "Replay can create business records, so only tokens with the replay scope get through, and every replay is written to an audit log with who, what and why."
+        },
+        {
+          "from": "ops",
+          "to": "bus",
+          "kind": "req",
+          "phase": "Replay",
+          "label": "republish to orders.erp-connector.retry",
+          "detail": "The order goes to a retry topic that only the ERP connector reads, never back onto the main topic, where the WMS and CRM would receive it a second time. The original event id and headers are kept."
+        },
+        {
+          "from": "bus",
+          "to": "ops",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "1 message republished"
+        },
+        {
+          "from": "ops",
+          "to": "apim",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "202 replay rp_311"
+        },
+        {
+          "from": "apim",
+          "to": "partners",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "bus",
+          "to": "erp_conn",
+          "kind": "async",
+          "phase": "Re-deliver and dedupe",
+          "label": "OrderPlaced SHOP-1002 (replay)"
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Re-deliver and dedupe",
+          "label": "claim event id",
+          "detail": "The claim finds the row from 02:00 still in_progress, so the connector knows an earlier attempt may have reached SAP."
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Re-deliver and dedupe",
+          "label": "in doubt since 02:00"
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Re-deliver and dedupe",
+          "label": "GET by PurchaseOrderByCustomer",
+          "detail": "Ask SAP, the system of record, rather than trust our own bookkeeping.",
+          "payload": "GET /sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder?$filter=PurchaseOrderByCustomer eq 'SHOP-1002'&$select=SalesOrder,CreationDate"
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Re-deliver and dedupe",
+          "label": "found 4500012399",
+          "detail": "SAP had saved the order at 02:00:04, just before it shut down. A blind POST here would have created a duplicate order, a second invoice and possibly a second shipment."
+        },
+        {
+          "from": "erp_conn",
+          "to": "store",
+          "kind": "req",
+          "phase": "Re-deliver and dedupe",
+          "label": "mark done, save xref, unpark key",
+          "detail": "Unparking releases any events that queued behind SHOP-1002, which now apply in order."
+        },
+        {
+          "from": "store",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Re-deliver and dedupe",
+          "label": "COMMIT"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "bus",
+      "kind": "tradeoff",
+      "text": "At 5 events/s average this is not a throughput problem, so Kafka is chosen for per-key ordering, days of retention and replay from an offset, not speed. EventBridge or Pub/Sub without ordering keys would be simpler to run and is fine where order does not matter, but neither gives ordered replay of one key's history. Pub/Sub with ordering keys and seek is the closest managed middle ground on GCP."
+    },
+    {
+      "kind": "note",
+      "text": "Master data ownership is decided per field, not per record: the CRM owns customer contact details and consent, the ERP owns billing address, credit, tax, products and prices, the WMS owns stock on hand, and the shop owns the order until the ERP books it. Every connector writes only the fields its target owns, and producers publish only fields their system owns, which is also what prevents update loops."
+    },
+    {
+      "target": "commerce",
+      "kind": "tradeoff",
+      "text": "The canonical model covers only the handful of events many systems share (OrderPlaced, CustomerUpdated, InventoryAdjusted), with N adapters to one model instead of N times N mappings. It is kept thin and versioned in the registry. A flow between exactly one producer and one consumer, such as warehouse labels to a carrier, maps directly; forcing it through an enterprise-wide model adds a committee and two mappings for no reuse."
+    },
+    {
+      "target": "erp_conn",
+      "kind": "failure",
+      "text": "A target that is down should pause its consumer and let lag build, because every message would fail the same way. The dead-letter topic is for messages that are wrong or whose outcome is unknown, not for a whole outage. Dead-lettering a message must also park its key, or later events for that key overtake it and break ordering."
+    },
+    {
+      "target": "bus",
+      "kind": "scaling",
+      "text": "BACKWARD compatibility (new readers can read old data) lets consumers upgrade first and is the usual default: adding an optional field with a default is allowed, renaming or removing a required field is rejected. A truly breaking change gets a new topic (orders.order-placed.v2) that the producer writes alongside the old one until every consumer has moved."
+    },
+    {
+      "target": "apim",
+      "kind": "security",
+      "text": "Partners get OAuth client credentials with per-partner scopes and quotas at API management. Inside, every connector has its own identity: its own OAuth client in SAP and Salesforce with a technical user limited to the objects it touches, its own Kafka ACLs (read its topics, write its retry and dead-letter topics), and its own secrets in Secrets Manager or Secret Manager, rotated automatically. One leaked credential then exposes one system, not all four."
+    }
+  ],
+  "questions": [
+    {
+      "id": "orchestration-choreography",
+      "q": "Should the order process be choreographed through events, or orchestrated by a central workflow?",
+      "a": "Choreography fits here because the ERP, WMS and CRM react to OrderPlaced independently, and adding a fourth consumer needs no change to the producer. When steps depend on each other, such as the WMS needing the ERP delivery number or a refund that must undo several steps, an orchestrator (Step Functions, Workflows, Camunda) makes the sequence, timeouts and compensations explicit in one place. The cost of choreography is that nobody owns the end-to-end process, so you need business monitoring like the stale order check to see it.",
+      "topic": "tradeoffs",
+      "targets": [
+        "bus",
+        "erp_conn",
+        "wms_conn",
+        "crm_conn"
+      ]
+    },
+    {
+      "id": "topology",
+      "q": "Why not keep point-to-point integrations, or put everything through a central ESB hub?",
+      "a": "Point-to-point is simplest for two systems but grows toward N times N links, each with its own mapping, retries and credentials, which is how the brittle scripts happened. A central ESB hub fixes the wiring but tends to collect business logic and become a bottleneck team that every change waits on. An event backbone with thin connectors, often called an event mesh when it spans brokers or clouds, keeps routing and delivery in the platform and business logic in the systems, with synchronous needs served separately through API management.",
+      "topic": "tradeoffs",
+      "targets": [
+        "bus",
+        "apim",
+        "commerce"
+      ]
+    },
+    {
+      "id": "canonical-model",
+      "q": "What does a canonical data model buy you, and when would you not use one?",
+      "a": "It turns N times N mappings into N adapters to one shared model, gives events a stable contract that survives replacing a system, and lets the schema registry enforce compatibility. The risk is a bloated model that tries to hold every field of every system and needs a committee for each change. Keep it to the few widely shared business events with the fields consumers actually need, and map directly for flows with one producer and one consumer.",
+      "topic": "data",
+      "targets": [
+        "commerce",
+        "crm_conn",
+        "bus"
+      ]
+    },
+    {
+      "id": "exactly-once",
+      "q": "Kafka supports exactly-once semantics. Why do the connectors still need dedup keys?",
+      "a": "Kafka's exactly-once covers reading from and writing to Kafka in one transaction; it cannot cover the side effect in SAP or Salesforce, and a timeout leaves that side effect unknown. So delivery is at least once and every consumer makes processing idempotent: a dedup row per event id, a natural key in the target (PurchaseOrderByCustomer, an external id upsert, a client order reference), and a lookup before creating whenever an earlier attempt is in doubt. Commit the offset only after the side effect, so a crash causes a repeat rather than a loss.",
+      "topic": "consistency",
+      "targets": [
+        "erp_conn",
+        "store",
+        "bus"
+      ]
+    },
+    {
+      "id": "saas-rate-limit",
+      "q": "On Black Friday the CRM connector starts hitting Salesforce API limits. What do you do?",
+      "a": "Read the remaining allowance from the Sforce-Limit-Info header and throttle with a token bucket set below it, because the org limit is shared with every other tool and user. Batch writes with the Composite or sObject Collections APIs (up to 200 records per call) or the Bulk API for large backfills, and drop low-value updates, such as coalescing several changes to one customer into one write. Since the work is queued in Kafka, slowing down only adds lag to the CRM, while the ERP and WMS are unaffected.",
+      "topic": "performance",
+      "targets": [
+        "crm_conn",
+        "crm"
+      ]
+    },
+    {
+      "id": "lost-order",
+      "q": "A customer service agent says order SHOP-1002 is missing. How do you find it across five systems?",
+      "a": "Every event carries the order id as correlation id plus a W3C trace context, and every connector stamps the order tracking table when it succeeds, so one query shows which systems have it and when. The first missing stamp points to one connector: check its dead-letter topic and parked keys, its lag, then its logs by correlation id, and finally ask the target by external reference in case only the tracking update was lost. The 15-minute stale order alert should have found it before the customer did.",
+      "topic": "operations",
+      "targets": [
+        "ops",
+        "store",
+        "erp_conn",
+        "bus"
+      ]
+    }
+  ]
+}

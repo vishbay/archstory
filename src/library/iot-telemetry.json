@@ -1,0 +1,660 @@
+{
+  "schema": "archstory/v1",
+  "id": "iot-telemetry",
+  "meta": {
+    "title": "IoT Telemetry Platform",
+    "summary": "Collect readings from 2 million smart meters over MQTT, show them live and historically, raise threshold alerts, and send commands and firmware to devices that are often offline.",
+    "tags": ["iot", "mqtt", "time-series", "stream-processing", "device-identity"],
+    "difficulty": "medium"
+  },
+  "requirements": {
+    "functional": [
+      "Ingest readings from 2M devices (smart energy meters) every 10 to 60 s over MQTT with TLS",
+      "Live dashboards (the last hours, seconds old) and history (up to 2 years at reduced resolution) per device and per group",
+      "Threshold alert rules per device group, sent by SMS, email or pager, deduplicated so a flapping reading alerts once",
+      "Send a command or a configuration change to one device or a group and see when each device has applied it; offline devices get it when they reconnect",
+      "Roll out firmware in waves, halting automatically when a wave looks unhealthy",
+      "Give every device its own identity at manufacture, and revoke a single device without touching the rest"
+    ],
+    "nonFunctional": [
+      "A reading appears on dashboards within 10 s of the device sending it (p99)",
+      "A threshold alert is sent within 30 s of the reading (p99)",
+      "No reading the broker has acknowledged is lost: every one reaches the raw archive",
+      "99.9% of connect attempts from healthy devices succeed; the platform survives losing one availability zone",
+      "A device can publish and subscribe only on its own topics",
+      "After a regional network outage the fleet reconnects within 15 minutes without overloading anything"
+    ],
+    "scale": [
+      { "label": "Devices", "value": "2M, about 1.9M connected at any time, each holding one long-lived TLS connection" },
+      { "label": "Readings", "value": "One per 30 s on average: about 67k messages/s, 5.8B per day; up to 200k/s if every device reports every 10 s" },
+      { "label": "Message size", "value": "About 200 B of JSON payload (12 fields), about 300 B on the wire with topic and MQTT and TLS framing" },
+      { "label": "Raw volume", "value": "67k/s x 200 B = 13 MB/s, about 1.2 TB/day of JSON; about 120 GB/day as compressed Parquet" },
+      { "label": "Hot store", "value": "Raw points 7 days (about 1 TB compressed), 5-minute rollups 90 days (about 3 TB), hourly rollups 2 years (about 2 TB)" },
+      { "label": "Archive", "value": "Raw Parquet kept 7 years: about 44 TB per year, moved to an archive storage class after 90 days" },
+      { "label": "Commands and firmware", "value": "About 100k commands per day; a full firmware rollout is 2M x 2 MB = 4 TB of downloads" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "devices",
+      "label": "Devices (2M meters)",
+      "kind": "client",
+      "description": "Smart meters with a private key in a secure element, an X.509 certificate issued at the factory, and a flash buffer for readings taken while offline"
+    },
+    {
+      "id": "console",
+      "label": "Operator Console",
+      "kind": "web_client",
+      "description": "Dashboards, alert rules, commands and firmware campaigns for the operations team"
+    },
+    {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Resolves the device endpoint and the console hostname",
+      "cloud": { "aws": "Route 53", "gcp": "Cloud DNS" }
+    },
+    {
+      "id": "nlb",
+      "label": "Network Load Balancer (L4)",
+      "kind": "network_load_balancer",
+      "description": "TCP passthrough on port 8883 so TLS, and the device certificate, reach the broker. On GCP this is an external passthrough load balancer in front of the EMQX nodes. On AWS there is nothing to run: the IoT Core device endpoint does this inside the managed service",
+      "cloud": { "gcp": "External passthrough Network Load Balancer" }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "description": "TLS termination and HTTP routing for the console and the Device API",
+      "cloud": { "aws": "ALB", "gcp": "External Application Load Balancer" }
+    },
+    {
+      "id": "broker",
+      "label": "MQTT Broker",
+      "kind": "websocket_gateway",
+      "subnet": "app",
+      "description": "Holds about 2M persistent MQTT sessions with mutual TLS, enforces per-device topic policies, queues QoS 1 messages for offline devices and runs the rules that route messages onward. AWS IoT Core is fully managed. Google Cloud IoT Core was retired in August 2023, so on GCP this is a self-run EMQX cluster on GKE (HiveMQ is the other common choice): 12 nodes across 3 zones at about 170k connections each",
+      "cloud": { "aws": "AWS IoT Core", "gcp": "EMQX on GKE" }
+    },
+    {
+      "id": "api",
+      "label": "Device API",
+      "kind": "service",
+      "description": "Serves dashboard queries, accepts commands and firmware campaigns, owns the device twin, and receives command results and connect events from the broker",
+      "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" }
+    },
+    {
+      "id": "registry",
+      "label": "Device Registry",
+      "kind": "sql_db",
+      "description": "One row per device: model, group, owner, certificate fingerprint and status, firmware version and rollout wave; also alert rules per group",
+      "cloud": { "aws": "Aurora PostgreSQL", "gcp": "Cloud SQL Postgres" }
+    },
+    {
+      "id": "shadow",
+      "label": "Device Twin",
+      "kind": "nosql_db",
+      "description": "Per device: desired state, last reported state, their versions and pending commands. Written only by the Device API, so one place decides what a device still needs",
+      "cloud": { "aws": "DynamoDB", "gcp": "Bigtable" }
+    },
+    {
+      "id": "tsdb",
+      "label": "Time-series Store",
+      "kind": "nosql_db",
+      "description": "Recent readings at full resolution plus 5-minute and hourly rollups, keyed by device then time. Sharded by device id hash across instances on AWS; one Bigtable instance on GCP with row key device_id#time bucket",
+      "cloud": { "aws": "Timestream for InfluxDB", "gcp": "Bigtable" }
+    },
+    {
+      "id": "archive",
+      "label": "Object Storage",
+      "kind": "object_store",
+      "description": "Raw readings as Parquet partitioned by date and hour (the system of record), a quarantine prefix for invalid messages, and signed firmware images that devices download over HTTPS",
+      "cloud": { "aws": "S3", "gcp": "Cloud Storage" }
+    },
+    {
+      "id": "stream",
+      "label": "Telemetry Stream",
+      "kind": "stream",
+      "description": "Buffers every reading for 24 hours, partitioned by device id so each device's readings stay in order",
+      "cloud": { "aws": "Kinesis Data Streams", "gcp": "Pub/Sub" }
+    },
+    {
+      "id": "processor",
+      "label": "Stream Processor",
+      "kind": "worker",
+      "description": "Validates and deduplicates readings, evaluates threshold rules, builds event-time windows for rollups, and writes the hot store and the archive",
+      "cloud": { "aws": "Managed Service for Apache Flink", "gcp": "Dataflow" }
+    },
+    {
+      "id": "notify",
+      "label": "Notifications (SMS, email, pager)",
+      "kind": "notification_provider",
+      "description": "Delivers threshold alerts to operators and field crews"
+    }
+  ],
+  "edges": [
+    { "from": "devices", "to": "dns", "protocol": "DNS" },
+    { "from": "devices", "to": "nlb", "label": "MQTT over TLS", "protocol": "MQTT 5, TCP 8883" },
+    { "from": "devices", "to": "archive", "label": "firmware download", "protocol": "HTTPS (presigned URL)" },
+    { "from": "console", "to": "dns", "protocol": "DNS" },
+    { "from": "console", "to": "lb", "protocol": "HTTPS" },
+    { "from": "nlb", "to": "broker", "protocol": "TCP passthrough" },
+    { "from": "lb", "to": "api", "protocol": "HTTP" },
+    { "from": "broker", "to": "registry", "label": "cert status, policy" },
+    { "from": "broker", "to": "stream", "label": "telemetry rule", "async": true },
+    { "from": "api", "to": "broker", "label": "commands out, events in", "protocol": "MQTT publish / HTTPS rule action" },
+    { "from": "api", "to": "registry" },
+    { "from": "api", "to": "shadow" },
+    { "from": "api", "to": "tsdb", "label": "dashboard queries" },
+    { "from": "stream", "to": "processor" },
+    { "from": "processor", "to": "tsdb", "async": true },
+    { "from": "processor", "to": "archive", "async": true },
+    { "from": "processor", "to": "notify", "async": true }
+  ],
+  "flows": [
+    {
+      "id": "reading",
+      "title": "Reading to dashboard and alert",
+      "summary": "A meter publishes a reading on its open connection. The broker routes it to the stream and acknowledges it; the processor checks thresholds, writes the hot store and the archive, and an operator sees it on a dashboard seconds later.",
+      "steps": [
+        {
+          "from": "devices", "to": "nlb", "kind": "req", "phase": "Publish",
+          "label": "PUBLISH dt/meter/m-0012345/telemetry QoS 1",
+          "detail": "The meter's TLS connection has been open for days, so a reading costs one small MQTT packet with no DNS lookup and no handshake.",
+          "payload": "PUBLISH topic=dt/meter/m-0012345/telemetry qos=1 packetId=4711\n\n{ \"ts\": 1762790400, \"seq\": 88123, \"fw\": \"3.4.1\",\n  \"v\": { \"kwh\": 18234.567, \"kw\": 2.31, \"volt\": 251.2, \"amp\": 9.7, \"pf\": 0.98, \"temp_c\": 41.2 } }"
+        },
+        {
+          "from": "nlb", "to": "broker", "kind": "req", "phase": "Publish",
+          "label": "forward on the existing TCP flow",
+          "detail": "The L4 load balancer passes bytes through without terminating TLS, so the broker sees the device certificate and every packet of a connection reaches the same broker node."
+        },
+        {
+          "from": "broker", "to": "broker", "kind": "local", "phase": "Route",
+          "label": "check topic policy, match rule",
+          "detail": "The device may only publish under its own id (the policy uses the certificate's thing name as a variable), and the telemetry rule selects the message for the stream.",
+          "payload": "SELECT *, topic(3) AS device_id, timestamp() AS received_at\nFROM 'dt/meter/+/telemetry'"
+        },
+        {
+          "from": "broker", "to": "stream", "kind": "async", "phase": "Route",
+          "label": "PutRecord, partition key m-0012345",
+          "detail": "Using the device id as partition key keeps one device's readings in order on one shard, which the deduplication and windowing rely on.",
+          "payload": "PutRecord { StreamName: \"telemetry\", PartitionKey: \"m-0012345\",\n  Data: { device_id: \"m-0012345\", ts: 1762790400, seq: 88123, received_at: 1762790401.2, v: {...} } }"
+        },
+        {
+          "from": "broker", "to": "nlb", "kind": "res", "phase": "Acknowledge",
+          "label": "PUBACK 4711",
+          "detail": "The broker acknowledges once it has accepted the message, not once the rule action has finished, so the rule needs an error action (for example to a bucket) or a broken stream would lose readings silently."
+        },
+        {
+          "from": "nlb", "to": "devices", "kind": "res", "phase": "Acknowledge",
+          "label": "PUBACK 4711",
+          "detail": "Only now does the meter drop the reading from its buffer. Without a PUBACK it resends with the DUP flag, which is where duplicates come from."
+        },
+        {
+          "from": "stream", "to": "processor", "kind": "async", "phase": "Process",
+          "label": "read shard from checkpoint",
+          "detail": "The processor reads every shard and checkpoints its position; the stream keeps 24 hours of records, so a crashed or redeployed job resumes where it stopped."
+        },
+        {
+          "from": "processor", "to": "processor", "kind": "local", "phase": "Process",
+          "label": "validate, dedupe, threshold, window",
+          "detail": "It checks the schema and value ranges, drops a repeat of (device, seq), applies the group's rule with hysteresis (alert above 250 V for 3 readings in a row, clear below 245 V), and adds the reading to 1-minute and 5-minute event-time windows."
+        },
+        {
+          "from": "processor", "to": "tsdb", "kind": "async", "phase": "Store",
+          "label": "batched write, 5,000 points",
+          "detail": "Writes are batched by count or every second, because at 67k readings per second the per-request overhead, not the bytes, limits a time-series store.",
+          "payload": "meter,device=m-0012345,group=g-north kwh=18234.567,kw=2.31,volt=251.2,amp=9.7,pf=0.98,temp_c=41.2 1762790400000000000"
+        },
+        {
+          "from": "processor", "to": "archive", "kind": "async", "phase": "Store",
+          "label": "append to Parquet, flush every 5 min",
+          "detail": "Raw readings land in object storage partitioned by date and hour: the copy that outlives the hot store, and the source to replay from if a processing bug corrupts the rollups.",
+          "payload": "s3://telemetry-raw/dt=2026-11-10/hour=16/part-00042-processor-7.parquet"
+        },
+        {
+          "from": "processor", "to": "notify", "kind": "async", "phase": "Alert",
+          "label": "alert: overvoltage on m-0012345",
+          "detail": "The third reading in a row above the limit opens one alert for this device and rule; later readings update it instead of sending a new message every 30 s.",
+          "payload": "{ \"alert_id\": \"al-77f\", \"rule\": \"overvoltage\", \"device\": \"m-0012345\",\n  \"value\": 251.2, \"limit\": 250, \"since\": \"2026-11-10T16:39:00Z\", \"to\": [\"oncall-north\"] }"
+        },
+        {
+          "from": "console", "to": "lb", "kind": "req", "phase": "Dashboard",
+          "label": "GET /v1/devices/m-0012345/readings?from=-1h",
+          "detail": "The operator follows the alert to the meter's dashboard, which asks for the last hour of voltage.",
+          "payload": "GET /v1/devices/m-0012345/readings?field=volt&from=-1h&step=10s\nAuthorization: Bearer <operator token>"
+        },
+        {
+          "from": "lb", "to": "api", "kind": "req", "phase": "Dashboard",
+          "label": "forward to any API instance",
+          "detail": "TLS ends at the L7 load balancer and the API is stateless, so any instance can serve the query."
+        },
+        {
+          "from": "api", "to": "tsdb", "kind": "req", "phase": "Dashboard",
+          "label": "query raw points, 10 s buckets",
+          "detail": "The API picks the resolution from the time range: raw points for hours, 5-minute rollups for weeks, hourly rollups for years, so a chart never pulls more than about a thousand points.",
+          "payload": "SELECT mean(\"volt\") FROM \"meter\"\nWHERE \"device\" = 'm-0012345' AND time > now() - 1h\nGROUP BY time(10s)"
+        },
+        { "from": "tsdb", "to": "api", "kind": "res", "phase": "Respond", "label": "360 points" },
+        { "from": "api", "to": "lb", "kind": "res", "phase": "Respond", "label": "200 OK" },
+        {
+          "from": "lb", "to": "console", "kind": "res", "phase": "Respond",
+          "label": "200 OK, chart data",
+          "payload": "HTTP/1.1 200 OK\n\n{ \"device\": \"m-0012345\", \"field\": \"volt\", \"step\": \"10s\",\n  \"points\": [[1762786800, 238.9], [1762786810, 239.1], ...] }"
+        }
+      ]
+    },
+    {
+      "id": "command",
+      "title": "Command to an offline device",
+      "summary": "An operator changes a meter's reporting interval while the meter is offline. The intent is written to the twin first, the broker queues the command in the meter's persistent session, and the meter applies and confirms it when it comes back. If it stays away longer than the session lasts, the connect event makes the API republish from the twin.",
+      "steps": [
+        {
+          "from": "console", "to": "lb", "kind": "req", "phase": "Request",
+          "label": "POST /v1/devices/m-0012345/commands",
+          "detail": "The idempotency key stops a double click or a retried request from creating two commands.",
+          "payload": "POST /v1/devices/m-0012345/commands\nIdempotency-Key: 3b9d21\n\n{ \"type\": \"set_config\", \"config\": { \"report_interval_s\": 60 }, \"expires_in_s\": 604800 }"
+        },
+        {
+          "from": "lb", "to": "api", "kind": "req", "phase": "Request",
+          "label": "forward to any API instance",
+          "detail": "Any stateless API instance can take the command."
+        },
+        {
+          "from": "api", "to": "registry", "kind": "req", "phase": "Check",
+          "label": "SELECT status, group FROM devices",
+          "detail": "Confirms the device exists and is active (not revoked or quarantined) and that this operator may command its group.",
+          "payload": "SELECT status, group_id, model, fw_version FROM devices WHERE device_id = 'm-0012345'"
+        },
+        { "from": "registry", "to": "api", "kind": "res", "phase": "Check", "label": "active, group g-north" },
+        {
+          "from": "api", "to": "shadow", "kind": "req", "phase": "Record intent",
+          "label": "set desired, add pending c-889",
+          "detail": "The desired state is written before anything is sent, so the intent survives even if the device stays offline longer than the broker keeps its session. The version check stops two operators overwriting each other.",
+          "payload": "UpdateItem device_id = 'm-0012345'\n  SET desired.report_interval_s = 60, desired_version = 42,\n      pending.c889 = { type: 'set_config', status: 'PENDING', expires: 1763395200 }\n  CONDITION desired_version = 41"
+        },
+        { "from": "shadow", "to": "api", "kind": "res", "phase": "Record intent", "label": "version 42" },
+        {
+          "from": "api", "to": "broker", "kind": "req", "phase": "Publish",
+          "label": "PUBLISH cmd/m-0012345/req QoS 1",
+          "detail": "The command goes to the device's own command topic with QoS 1, carrying the command id and the desired version so the device can tell a repeat from a new command.",
+          "payload": "PUBLISH topic=cmd/m-0012345/req qos=1\n\n{ \"cmd_id\": \"c-889\", \"type\": \"set_config\", \"desired_version\": 42,\n  \"config\": { \"report_interval_s\": 60 }, \"expires\": 1763395200 }"
+        },
+        {
+          "from": "broker", "to": "broker", "kind": "local", "phase": "Publish",
+          "label": "device offline: queue in its session",
+          "detail": "The meter connected with clean start 0 and a 7-day session expiry (AWS IoT Core defaults to 1 hour and allows up to 7 days), so the broker keeps its subscription and queues the QoS 1 message, up to a per-session limit."
+        },
+        { "from": "broker", "to": "api", "kind": "res", "phase": "Publish", "label": "accepted" },
+        { "from": "api", "to": "lb", "kind": "res", "phase": "Respond", "label": "202 Accepted" },
+        {
+          "from": "lb", "to": "console", "kind": "res", "phase": "Respond",
+          "label": "202 c-889 pending",
+          "payload": "HTTP/1.1 202 Accepted\n\n{ \"cmd_id\": \"c-889\", \"status\": \"PENDING\", \"device_online\": false }"
+        },
+        {
+          "from": "devices", "to": "dns", "kind": "req", "phase": "Reconnect",
+          "label": "resolve iot.example.com",
+          "detail": "Hours later the meter's power returns; it looks the endpoint up again because the broker's addresses can change between connections."
+        },
+        { "from": "dns", "to": "devices", "kind": "res", "phase": "Reconnect", "label": "endpoint IPs" },
+        {
+          "from": "devices", "to": "nlb", "kind": "req", "phase": "Reconnect",
+          "label": "TLS with client cert, CONNECT clean start 0",
+          "detail": "Reconnecting with the same client id and clean start 0 asks the broker for the session it kept, including the subscription to cmd/m-0012345/req and the queued messages.",
+          "payload": "CONNECT clientId=m-0012345 cleanStart=0 keepAlive=300\n  properties: sessionExpiryInterval=604800"
+        },
+        {
+          "from": "nlb", "to": "broker", "kind": "req", "phase": "Reconnect",
+          "label": "TCP passthrough",
+          "detail": "The connection may land on a different broker node than before; the cluster moves the session to it."
+        },
+        {
+          "from": "broker", "to": "registry", "kind": "req", "phase": "Reconnect",
+          "label": "certificate status and policy",
+          "detail": "The TLS handshake proved the certificate chains to the fleet CA; the registry adds whether this certificate has been revoked or the device quarantined."
+        },
+        { "from": "registry", "to": "broker", "kind": "res", "phase": "Reconnect", "label": "active" },
+        { "from": "broker", "to": "nlb", "kind": "res", "phase": "Reconnect", "label": "CONNACK session present=1" },
+        { "from": "nlb", "to": "devices", "kind": "res", "phase": "Reconnect", "label": "CONNACK session present=1" },
+        {
+          "from": "broker", "to": "nlb", "kind": "req", "phase": "Deliver",
+          "label": "PUBLISH cmd/m-0012345/req (queued)",
+          "detail": "Right after CONNACK the broker sends the queued command on the restored session."
+        },
+        {
+          "from": "nlb", "to": "devices", "kind": "req", "phase": "Deliver",
+          "label": "PUBLISH cmd/m-0012345/req (queued)",
+          "detail": "The command reaches the meter over its own TLS connection; the broker never connects to devices."
+        },
+        {
+          "from": "devices", "to": "devices", "kind": "local", "phase": "Deliver",
+          "label": "apply unless c-889 already seen",
+          "detail": "The meter keeps recent command ids and its applied desired version, so a redelivered QoS 1 message, or a republish by the API, is applied once."
+        },
+        { "from": "devices", "to": "nlb", "kind": "res", "phase": "Deliver", "label": "PUBACK" },
+        { "from": "nlb", "to": "broker", "kind": "res", "phase": "Deliver", "label": "PUBACK" },
+        {
+          "from": "devices", "to": "nlb", "kind": "req", "phase": "Confirm",
+          "label": "PUBLISH cmd/m-0012345/res",
+          "detail": "The meter reports the result and its new reported version on its result topic, so the operator knows it was applied, not just delivered.",
+          "payload": "{ \"cmd_id\": \"c-889\", \"status\": \"DONE\", \"reported_version\": 42, \"report_interval_s\": 60 }"
+        },
+        {
+          "from": "nlb", "to": "broker", "kind": "req", "phase": "Confirm",
+          "label": "TCP passthrough",
+          "detail": "Same connection, same broker node."
+        },
+        {
+          "from": "broker", "to": "api", "kind": "async", "phase": "Confirm",
+          "label": "rule HTTPS action: command result",
+          "detail": "A second rule sends command results, state reports and connect events to the Device API over HTTPS. They are low volume and need the twin, not the time-series pipeline. For a device away longer than its session, this connect event is what makes the API republish pending commands."
+        },
+        {
+          "from": "api", "to": "shadow", "kind": "req", "phase": "Confirm",
+          "label": "reported version 42, c-889 DONE",
+          "detail": "Desired and reported versions now match, so the twin shows nothing left to deliver.",
+          "payload": "UpdateItem device_id = 'm-0012345'\n  SET reported.report_interval_s = 60, reported_version = 42, pending.c889.status = 'DONE'"
+        },
+        { "from": "shadow", "to": "api", "kind": "res", "phase": "Confirm", "label": "ok" }
+      ]
+    },
+    {
+      "id": "reconnect-storm",
+      "title": "Fleet reconnect storm after an outage",
+      "summary": "A cellular carrier outage drops 600k meters at once. When the network returns they reconnect with jittered backoff, the broker admits them at a rate it can handle, and the readings they buffered arrive as late data that must not fire stale alerts.",
+      "steps": [
+        {
+          "from": "devices", "to": "devices", "kind": "local", "phase": "Outage",
+          "label": "connection lost, buffer readings",
+          "detail": "Meters keep sampling and buffer up to 24 hours of readings in flash, each with its own timestamp and sequence number."
+        },
+        {
+          "from": "devices", "to": "devices", "kind": "local", "phase": "Backoff",
+          "label": "sleep random(0, min(300 s, 2 s x 2^n))",
+          "detail": "Full jitter spreads 600k reconnects over minutes. Without it every meter retries on the same schedule, and the broker sees waves of hundreds of thousands of TLS handshakes in the same second."
+        },
+        {
+          "from": "devices", "to": "dns", "kind": "req", "phase": "Reconnect",
+          "label": "resolve iot.example.com",
+          "detail": "Each meter resolves the endpoint again before it reconnects."
+        },
+        { "from": "dns", "to": "devices", "kind": "res", "phase": "Reconnect", "label": "endpoint IPs" },
+        {
+          "from": "devices", "to": "nlb", "kind": "req", "phase": "Reconnect",
+          "label": "TLS handshake, CONNECT",
+          "detail": "The TLS handshake with certificate verification is the expensive part of a connection for the broker, far more than the readings that follow."
+        },
+        {
+          "from": "nlb", "to": "broker", "kind": "req", "phase": "Reconnect",
+          "label": "TCP passthrough",
+          "detail": "The load balancer spreads new connections across broker nodes in all zones."
+        },
+        {
+          "from": "broker", "to": "broker", "kind": "local", "phase": "Admission",
+          "label": "node over its connect rate",
+          "detail": "Each broker node admits a fixed number of new connections per second and refuses the rest at once. Refusing fast is better than accepting everything and letting handshakes time out, which would make every device retry and add load. AWS IoT Core enforces the same idea through account-level connect quotas."
+        },
+        { "from": "broker", "to": "nlb", "kind": "res", "phase": "Admission", "label": "CONNACK 0x9F connection rate exceeded" },
+        { "from": "nlb", "to": "devices", "kind": "res", "phase": "Admission", "label": "CONNACK 0x9F" },
+        {
+          "from": "devices", "to": "devices", "kind": "local", "phase": "Admission",
+          "label": "back off again, next attempt",
+          "detail": "The refusal counts as a failed attempt, so the device's next wait doubles its ceiling and keeps its jitter."
+        },
+        {
+          "from": "devices", "to": "nlb", "kind": "req", "phase": "Admitted",
+          "label": "CONNECT (retry)",
+          "detail": "A later attempt arrives when the node has capacity."
+        },
+        {
+          "from": "nlb", "to": "broker", "kind": "req", "phase": "Admitted",
+          "label": "TCP passthrough",
+          "detail": "The connection reaches a node with room under its rate limit."
+        },
+        {
+          "from": "broker", "to": "registry", "kind": "req", "phase": "Admitted",
+          "label": "certificate status (cache miss)",
+          "detail": "The broker caches certificate status and policy for a few minutes, so the registry sees a few thousand lookups per second rather than 600k at once."
+        },
+        { "from": "registry", "to": "broker", "kind": "res", "phase": "Admitted", "label": "active" },
+        { "from": "broker", "to": "nlb", "kind": "res", "phase": "Admitted", "label": "CONNACK session present=1" },
+        { "from": "nlb", "to": "devices", "kind": "res", "phase": "Admitted", "label": "CONNACK" },
+        {
+          "from": "devices", "to": "nlb", "kind": "req", "phase": "Backfill",
+          "label": "PUBLISH buffered readings, 50 per message",
+          "detail": "Each meter drains its buffer at a capped rate with many readings per message, so 600k meters replaying hours of data add a modest, steady load instead of multiplying the peak.",
+          "payload": "PUBLISH topic=dt/meter/m-0012345/telemetry qos=1\n\n{ \"batch\": [ { \"ts\": 1762761600, \"seq\": 87150, \"v\": {...} }, ... 49 more ] }"
+        },
+        {
+          "from": "nlb", "to": "broker", "kind": "req", "phase": "Backfill",
+          "label": "TCP passthrough",
+          "detail": "Backfill uses the same connection and topic as live readings."
+        },
+        {
+          "from": "broker", "to": "stream", "kind": "async", "phase": "Backfill",
+          "label": "PutRecord with original timestamps",
+          "detail": "The rule keeps each reading's device timestamp; the time the broker received it is added as a separate field."
+        },
+        {
+          "from": "stream", "to": "processor", "kind": "async", "phase": "Late data",
+          "label": "read shard",
+          "detail": "The stream absorbs the burst; the processor works through it at its own pace and scales out on consumer lag."
+        },
+        {
+          "from": "processor", "to": "processor", "kind": "local", "phase": "Late data",
+          "label": "event time: older than watermark + 2 min",
+          "detail": "Windows use the reading's own timestamp. Readings older than the watermark plus the allowed lateness skip live alert rules, so a voltage spike from 6 hours ago does not page anyone now, but they still update history. Messages that fail validation (NaN values, a 1970 timestamp from a reset clock) are set aside, not dropped."
+        },
+        {
+          "from": "processor", "to": "tsdb", "kind": "async", "phase": "Late data",
+          "label": "write raw points, recompute rollups",
+          "detail": "Late points are written with their original timestamps, and the 5-minute and hourly buckets they fall into are recomputed so history is complete."
+        },
+        {
+          "from": "processor", "to": "archive", "kind": "async", "phase": "Late data",
+          "label": "raw to archive, invalid to quarantine/",
+          "detail": "Invalid messages go to a quarantine prefix with the device id, so a meter with corrupt firmware is found and fixed instead of silently skewing the data.",
+          "payload": "s3://telemetry-raw/quarantine/dt=2026-11-10/device=m-0450981/part-0001.json"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "broker",
+      "kind": "tradeoff",
+      "text": "Managed broker or self-run. AWS IoT Core removes broker operations and includes certificate auth, rules and persistent sessions, but bills every message and connection-minute and has account quotas (connects per second, publishes per second) that must be raised before launch. Google Cloud IoT Core was retired in August 2023, so on GCP you run EMQX or HiveMQ on GKE (or buy their managed offering): cheaper per message at this volume, but you own upgrades, session clustering and capacity."
+    },
+    {
+      "target": "broker",
+      "kind": "scaling",
+      "text": "Each connection is a TLS session plus MQTT session state, a few tens of KB of memory. Plan about 250k connections per EMQX node, well under benchmark figures, and run 12 nodes across 3 zones at about 170k each so losing a zone leaves 8 nodes at 250k. The L4 load balancer must be passthrough: an L7 load balancer would terminate TLS, hide the client certificate and add a proxy to every long-lived connection."
+    },
+    {
+      "target": "shadow",
+      "kind": "tradeoff",
+      "text": "On AWS the built-in IoT Device Shadow already tracks desired and reported state and publishes the delta to the device. This design keeps its own twin table instead, so it works the same on EMQX, can be queried across the fleet (all meters still on version 41) and is not limited to the 8 KB shadow document. The cost is writing the delta logic yourself."
+    },
+    {
+      "target": "tsdb",
+      "kind": "scaling",
+      "text": "Downsampling is what keeps the hot store affordable: raw points for 7 days, 5-minute rollups (min, max, mean, count) for 90 days, hourly for 2 years, then the Parquet archive. On Bigtable the row key is device_id#hour bucket so writes spread across tablets; a key that starts with the timestamp would send all 67k writes per second to one tablet."
+    },
+    {
+      "target": "processor",
+      "kind": "failure",
+      "text": "Delivery is at least once end to end: QoS 1 resends, rule retries and stream retries can all repeat a reading. The processor deduplicates on (device id, seq) and writes are keyed by device and timestamp, so a repeat overwrites itself. The processor checkpoints its stream position, and a crash replays a few seconds of records, which the same keys make harmless."
+    },
+    {
+      "target": "api",
+      "kind": "security",
+      "text": "Firmware rollouts go in waves (1% canary, then 10%, 50%, 100%), each gated on crash and reconnect rates and on the new version reporting healthy telemetry, with an automatic halt. Images are signed and the bootloader verifies the signature and keeps an A/B partition, so a bad image rolls back on the device without a truck visit. Devices download from presigned URLs that expire, never a public bucket."
+    }
+  ],
+  "network": {
+    "cidr": "10.40.0.0/16",
+    "zones": 3,
+    "egress": "nat",
+    "subnets": [
+      { "id": "public", "label": "Public", "public": true, "tiers": ["entry"], "cidr": "10.40.0.0/20" },
+      { "id": "app", "label": "App", "tiers": ["services", "async"], "cidr": "10.40.16.0/20" },
+      { "id": "data", "label": "Data", "tiers": ["data"], "cidr": "10.40.32.0/20" }
+    ]
+  },
+  "observability": {
+    "slos": [
+      {
+        "id": "dashboard-freshness",
+        "name": "Readings reach dashboards quickly",
+        "kind": "freshness",
+        "sli": "Readings written to the time-series store within the threshold of the broker receiving them, divided by all readings received live (backfill after an outage excluded)",
+        "target": 99,
+        "threshold": "< 10 s"
+      },
+      {
+        "id": "alert-latency",
+        "name": "Alerts are sent quickly",
+        "kind": "latency",
+        "sli": "Threshold alerts handed to the notification provider within the threshold of the triggering reading reaching the broker, divided by all alerts from live readings",
+        "target": 99,
+        "threshold": "< 30 s"
+      },
+      {
+        "id": "connect-success",
+        "name": "Devices can connect",
+        "kind": "availability",
+        "sli": "Successful CONNECTs from devices with an active certificate, divided by all their CONNECT attempts, refusals for rate limiting included, measured at the broker",
+        "target": 99.9
+      },
+      {
+        "id": "no-lost-readings",
+        "name": "No acknowledged reading lost",
+        "kind": "durability",
+        "sli": "Readings acknowledged by the broker that are present in the raw archive within 1 hour, divided by all acknowledged readings, measured by a daily count per device and hour",
+        "target": 99.999
+      }
+    ],
+    "alerts": [
+      {
+        "id": "freshness-burn",
+        "severity": "page",
+        "when": "More than 1% of readings take over 10 s to reach the time-series store, for 10 minutes and over 1 hour",
+        "why": "Operators are watching stale dashboards, so they may act on old data or miss a live problem.",
+        "target": "processor",
+        "slo": "dashboard-freshness"
+      },
+      {
+        "id": "alert-delay",
+        "severity": "page",
+        "when": "Alert latency p99 above 30 s for 10 minutes",
+        "why": "Overvoltage or overheating alerts that arrive late defeat the purpose of the platform.",
+        "target": "processor",
+        "slo": "alert-latency"
+      },
+      {
+        "id": "connect-burn",
+        "severity": "page",
+        "when": "Connect success below 99.9%, burning the error budget 14 times too fast over 5 minutes and 1 hour, or connected devices dropping by more than 5% in 5 minutes",
+        "why": "Devices cannot report or receive commands. A sudden drop in connected devices is often the first sign of an outage that will be followed by a reconnect storm.",
+        "target": "broker",
+        "slo": "connect-success"
+      },
+      {
+        "id": "rule-errors",
+        "severity": "ticket",
+        "when": "Rule action failures (readings sent to the error action instead of the stream) above 0.01% for 15 minutes",
+        "why": "Readings were acknowledged but did not reach the stream. They are safe in the error bucket, but must be replayed before the archive count shows them missing.",
+        "target": "broker",
+        "slo": "no-lost-readings"
+      },
+      {
+        "id": "consumer-lag",
+        "severity": "ticket",
+        "when": "Oldest unprocessed record in the stream older than 60 s for 15 minutes, outside a known backfill",
+        "why": "The processor is short of capacity or stuck on a bad record. It comes before freshness burns.",
+        "target": "stream",
+        "slo": "dashboard-freshness"
+      },
+      {
+        "id": "tsdb-throttle",
+        "severity": "ticket",
+        "when": "Time-series write latency p99 above 500 ms or any throttled writes for 15 minutes",
+        "why": "A hot shard or an undersized instance. Writes back up into the processor and then into stream lag.",
+        "target": "tsdb"
+      }
+    ],
+    "signals": [
+      { "target": "broker", "name": "Connected devices", "metric": "mqtt_connections_active{node}", "why": "The fleet's heartbeat. A sharp drop means an outage; the slope of recovery shows how a reconnect storm is going." },
+      { "target": "broker", "name": "Connects refused for rate", "metric": "mqtt_connack_total{reason=\"0x9F\"}", "why": "Admission control at work. Steady refusals long after an outage mean the limit is too tight for the fleet size." },
+      { "target": "broker", "name": "Queued messages per session", "metric": "mqtt_session_queue_len", "why": "Commands waiting for offline devices. Sessions at the queue limit are dropping commands, which the twin must then redeliver." },
+      { "target": "stream", "name": "Consumer lag", "metric": "stream_iterator_age_seconds", "why": "Separates slow processing from slow ingestion when dashboards are stale." },
+      { "target": "processor", "name": "Late and invalid readings", "metric": "readings_late_total, readings_invalid_total{model,fw}", "why": "Late readings rise after outages; invalid readings grouped by firmware version point at a bad release." },
+      { "target": "shadow", "name": "Oldest pending command", "metric": "commands_pending_age_seconds", "why": "Commands that never get a result, from devices that are offline or ignoring them." }
+    ],
+    "debug": [
+      {
+        "symptom": "Dashboards show readings minutes old",
+        "steps": [
+          "Check stream consumer lag: if it is growing, the delay is in processing, not in the devices or the broker.",
+          "If lag is high, look at processor checkpoints and backpressure: a slow time-series sink (throttled writes, a hot shard) shows up as backpressure on the write step.",
+          "If lag is low, compare device timestamps with broker receive times: a large gap means devices are buffering, usually a network problem on their side or a backfill in progress.",
+          "Check rule action errors: readings sent to the error action never reach the stream at all."
+        ]
+      },
+      {
+        "symptom": "Connected devices stay well below normal after an outage",
+        "steps": [
+          "Look at refused connects by reason: rate refusals mean admission control is the bottleneck, authentication failures mean a certificate or registry problem.",
+          "Check broker CPU per node: TLS handshakes are the main cost, and a node at its limit refuses connects regardless of configuration.",
+          "Check registry latency and the broker's certificate cache hit rate: a cold cache can turn the registry into the bottleneck.",
+          "Sample device logs or reported backoff attempts to confirm devices use jitter; synchronised retries show as spikes every few seconds in connect attempts."
+        ]
+      }
+    ]
+  },
+  "questions": [
+    {
+      "id": "mqtt-vs-http",
+      "q": "Why MQTT rather than devices POSTing readings over HTTPS?",
+      "a": "MQTT keeps one connection open, so a reading costs a few bytes of framing instead of HTTP headers and, often, a new TLS handshake, which matters for power and cellular data on millions of devices. The open connection also lets the server push commands without devices polling, and the protocol brings QoS, persistent sessions for offline devices and a last will message. HTTPS still fits devices that report once an hour or day, where holding a connection costs more than reconnecting, and bulk transfers such as firmware downloads.",
+      "topic": "tradeoffs",
+      "targets": ["devices", "broker"]
+    },
+    {
+      "id": "qos-duplicates",
+      "q": "Which MQTT QoS level would you use for readings and for commands, and how do you handle duplicates?",
+      "a": "QoS 0 can lose messages, QoS 1 delivers at least once and can duplicate when a PUBACK is lost, and QoS 2 is exactly once only between one client and the broker (AWS IoT Core does not support it). I use QoS 1 for both, because the rules, the stream and the processor can each repeat a message anyway, so end to end dedupe is needed regardless. Readings carry a per-device sequence number and are stored under (device, timestamp), and commands carry an id the device remembers, so a repeat is harmless.",
+      "topic": "consistency",
+      "targets": ["devices", "broker", "processor"]
+    },
+    {
+      "id": "hot-cold",
+      "q": "How do you store 5.8 billion readings a day while keeping dashboards fast?",
+      "a": "Split by age and resolution: raw points in the time-series store for 7 days, 5-minute rollups for 90 days and hourly rollups for 2 years, with every raw reading also written to object storage as Parquet, which costs a small fraction per GB and can be queried with Athena or BigQuery. The API picks the resolution from the query's time range, so a one-year chart reads about 8,760 hourly points instead of a million raw ones. Rollups keep min, max, mean and count, because averaging alone hides the spikes operators care about.",
+      "topic": "data",
+      "targets": ["tsdb", "archive", "processor"]
+    },
+    {
+      "id": "reconnect-storm",
+      "q": "A carrier outage disconnects 600k devices at once. What happens when the network comes back?",
+      "a": "Without care they all reconnect in the same second, and since TLS handshakes are the expensive part, broker nodes saturate, handshakes time out and the retries make it worse. Devices use exponential backoff with full jitter, the broker admits a fixed connect rate per node and refuses the rest fast with a reason code, and the registry is protected by caching certificate status. Buffered readings are sent at a capped rate and processed by event time, so they fill history without firing stale alerts.",
+      "topic": "reliability",
+      "targets": ["devices", "broker", "registry", "processor"]
+    },
+    {
+      "id": "device-credentials",
+      "q": "How do you issue, rotate and revoke credentials for 2 million devices?",
+      "a": "Each device generates its key pair in a secure element at the factory and gets a certificate signed by our private CA (AWS Private CA or Google Certificate Authority Service), so no shared secret exists that one stolen device could reveal. Topic policies use the certificate's device id as a variable, so a compromised meter can only publish as itself. Rotation happens over MQTT before expiry: the device sends a CSR, receives a new certificate, confirms it works, and only then is the old one deactivated; revocation marks the certificate revoked in the registry and the broker disconnects the device and refuses it from then on.",
+      "topic": "security",
+      "targets": ["devices", "broker", "registry"]
+    },
+    {
+      "id": "cost",
+      "q": "What does this cost at 2 million devices, and what would you change to bring it down?",
+      "a": "At one reading every 30 s the fleet sends about 170 billion messages a month, so per-message charges dominate: on AWS IoT Core list prices that is roughly $120k a month in messaging plus about $50k in rule triggers and actions, against about $7k for connectivity. The levers are sending telemetry through Basic Ingest topics, which skip the messaging charge, batching several readings per message (messages are metered in 5 KB units, so ten 200 B readings cost the same as one), a compact binary encoding, and reporting less often where the business allows. At this volume a self-run EMQX cluster of a dozen nodes is far cheaper per message, which is the main argument for taking on its operations.",
+      "topic": "tradeoffs",
+      "targets": ["broker", "stream", "devices"]
+    }
+  ]
+}

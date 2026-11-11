@@ -10,7 +10,7 @@ Explore real architectures and watch each request travel through them hop by hop
 
 ## Features
 
-- **Explore** 16 built-in designs with step-by-step request flows: URL shortener, news feed, ride hailing, chat, video streaming, checkout, ticket booking, file storage and sync, multi-tenant SaaS, autocomplete, rate limiter, notifications, web crawler, distributed key-value store, payment ledger and job scheduler.
+- **Explore** 22 built-in designs with step-by-step request flows: URL shortener, news feed, ride hailing, chat, video streaming, checkout, ticket booking, file storage and sync, multi-tenant SaaS, autocomplete, rate limiter, notifications, web crawler, distributed key-value store, payment ledger and job scheduler, plus solutions architect scenarios: multi-region active-active app, monolith to cloud migration, RAG knowledge assistant, data platform, IoT telemetry and enterprise integration.
 - **Any cloud**: switch between cloud-neutral names, AWS and GCP, with official icons.
 - **Network and zones**: VPCs, subnets and availability-zone failure drills.
 - **Regions and disaster recovery**: for designs with a `regions` section, a Regions view and a region failure drill with RTO, RPO, cross-region replication and the gaps in the plan.
@@ -18,7 +18,7 @@ Explore real architectures and watch each request travel through them hop by hop
 - **Practice**: draw your own design (type `/` to add components, start from a skeleton), record its flows and get automatic checks against a reference. Save attempts and track your progress.
 - **Timed interviews**: the usual phases on a 30, 45 or 60 minute clock, with a checklist for each.
 - **Estimate calculator**: requests per second, storage, bandwidth and cache size, with the arithmetic shown, plus a rough monthly cloud cost with editable prices and the usual ways to cut it.
-- **Follow-up questions**: 96 questions interviewers ask next, with model answers and a daily spaced-repetition drill.
+- **Follow-up questions**: 132 questions interviewers ask next, with model answers and a daily spaced-repetition drill.
 - **AI interviewer** (optional, your own API key): a mock interview that asks one question at a time about your design, by text or voice.
 - **Review with your own AI**: ArchStory writes the prompt and its findings appear on your design. Paste it into any assistant, or optionally connect your own API key (Anthropic, OpenAI, Gemini, or a local server such as Ollama) to send it from the app.
 - **Any question, not just the built-in ones**: import any other system design question as JSON, or have your own AI write one. An imported design gets everything the built-in ones do: Explore, Practice with automatic checks, timed interviews, AI review and the follow-up drill. No AI or server of its own, no account. An API key stays in your browser and goes only to the provider you pick.
