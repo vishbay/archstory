@@ -7,7 +7,7 @@ import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
 import { COMPACT_BELOW, panelInsets, store, usePlayer, useTheme, useViewportWidth } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
-import { AvailabilityMenu, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep } from './CanvasToolbar'
+import { AvailabilityMenu, ExportImageButton, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
@@ -187,6 +187,7 @@ export function App() {
         </aside>
       )}
 
+      <ReactFlowProvider>
       <main className="stage">
         <Toolbar>
           <Seg label="View" value={view} onChange={setView}
@@ -204,18 +205,19 @@ export function App() {
                 failed={failedZone} onFailed={setFailed} home={homeZone} onHome={setHome} />
             )}
           </>}
+          <ToolbarSpacer />
+          <ExportImageButton title={design.meta.title} disabled={view !== 'canvas'} />
         </Toolbar>
         <div className="stage-body">
           {view === 'timeline' && flow
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
-            : <ReactFlowProvider>
-                <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
+            : <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
                   zonesView={zonesView} zone={zone} insets={insets} captionDetail={!rightOpen || viewport <= 900}
-                  onSelect={select} colorMode={theme.resolved} />
-              </ReactFlowProvider>}
+                  onSelect={select} colorMode={theme.resolved} />}
         </div>
         <PlayerBar flows={design.flows} flow={flow} onFlow={setFlowId} player={player} />
       </main>
+      </ReactFlowProvider>
 
       {rightOpen && (
         <aside className="right">

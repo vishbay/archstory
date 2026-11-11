@@ -7,7 +7,7 @@ import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
 import { addNode, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
-import { Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
+import { ExportImageButton, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
@@ -271,6 +271,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
         </aside>
       )}
 
+      <ReactFlowProvider>
       <main className="stage">
         <Toolbar>
           <Seg label="View" value={view} onChange={setView}
@@ -287,6 +288,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
             )}
           </>}
           <ToolbarSpacer />
+          <ExportImageButton title={shown.meta.title} disabled={view !== 'canvas' || !shown.nodes.length} />
           {!showRef && <>
             {saved !== 'idle' && <span className={`save-state ${saved}`} role="status" aria-label={saved === 'saved' ? 'Saved' : undefined} title={saved === 'saved' ? 'Your answer is saved in this browser' : undefined}>{saved === 'saved' ? <span className="tb-txt">Saved</span> : 'Not saved: browser storage is blocked'}</span>}
             <button className="tb-btn" title="Undo (⌘Z / Ctrl+Z)" aria-label="Undo" disabled={!hist.past.length} onClick={() => setHist(undo)}><span aria-hidden>↶</span><span className="tb-txt"> Undo</span></button>
@@ -316,16 +318,14 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
           onDrop={e => { setDropping(false); const k = e.dataTransfer.getData('application/x-kind'); if (k) { e.preventDefault(); add(k) } }}>
           {view === 'timeline' && flow?.steps.length
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
-            : <ReactFlowProvider>
-                <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
+            : <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
                   monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={!showRef && session && session.endedAt === null ? { ...insets, top: 56 } : insets} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={showRef ? undefined : {
                     onConnect: (a, b) => setAttempt(connect(attempt, a, b)),
                     onEdgeClick: (from, to) => { if (recording || connecting) return; setPicked({ from, to }); setSelected(null); setTab('build') },
                     pickedEdge: picked ? edgeId(picked) : null, flagged, marks, recordingFrom: recording ? recFrom : connecting ? connFrom : null,
                     mode: recording ? 'record' : connecting ? 'connect' : null,
-                  }} />
-              </ReactFlowProvider>}
+                  }} />}
           {!showRef && attempt.nodes.length === 0 && (
             <div className="empty-hint">
               <b>Design: {ref.meta.title}</b>
@@ -341,6 +341,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
         </div>
         <PlayerBar flows={shown.flows.filter(f => f.steps.length)} flow={flow?.steps.length ? flow : undefined} onFlow={setFlowId} player={player} picker />
       </main>
+      </ReactFlowProvider>
 
       {quickAdd && <QuickAdd connectFrom={selected ? attempt.nodes.find(n => n.id === selected)?.label ?? null : null} onPick={quickPick} onClose={() => setQuickAdd(false)} />}
       {showKeys && <Shortcuts onClose={() => setShowKeys(false)} />}
