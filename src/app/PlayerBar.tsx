@@ -3,6 +3,7 @@ import type { Flow } from '../model/schema'
 import type { Player } from './hooks'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
 import { nextScenario } from './scenarios'
+import { ScenarioPicker } from './ScenarioPicker'
 
 export function PlayerBar({ flows, flow, onFlow, player, picker = false }: {
   flows: Flow[]; flow: Flow | undefined; onFlow: (id: string) => void; player: Player
@@ -29,9 +30,7 @@ export function PlayerBar({ flows, flow, onFlow, player, picker = false }: {
   return (
     <div className="player">
       {picker && (
-        <select value={flow.id} onChange={e => onFlow(e.target.value)} aria-label="Request flow">
-          {flows.map(f => <option key={f.id} value={f.id}>{f.title}</option>)}
-        </select>
+        <ScenarioPicker flows={flows} current={flow.id} onPick={onFlow} variant="bar" />
       )}
       <div className="player-buttons">
         <button className="icon" title="Restart" aria-label="Restart" onClick={() => jump(-1)}>⏮</button>

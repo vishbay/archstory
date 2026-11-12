@@ -41,11 +41,12 @@ function TbMenu({ label, on, alert, title, dialog, children }: { label: string; 
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent | KeyboardEvent) => {
+    const close = (e: PointerEvent | KeyboardEvent) => {
       if (e instanceof KeyboardEvent ? e.key === 'Escape' : !box.current?.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', close); document.addEventListener('keydown', close)
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close) }
+    // capture phase, so a click on the canvas (which stops pointer events bubbling) still closes the panel
+    document.addEventListener('pointerdown', close, true); document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('pointerdown', close, true); document.removeEventListener('keydown', close) }
   }, [open])
   return (
     <div className="tb-menu" ref={box}>

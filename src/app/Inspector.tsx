@@ -1,4 +1,5 @@
 import { isOnPrem, type Design, type Flow } from '../model/schema'
+import { ScenarioPicker } from './ScenarioPicker'
 import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
@@ -94,12 +95,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
         {shown === 'step' && flow && (
           <>
             {design.flows.length > 1 ? (
-              <div className="scenario-head">
-                <span className="scenario-label">Scenario {design.flows.findIndex(f => f.id === flow.id) + 1} of {design.flows.length}</span>
-                <select className="scenario-pick" value={flow.id} onChange={e => onFlow(e.target.value)} aria-label="Choose scenario" title="Choose which scenario to watch">
-                  {design.flows.map(f => <option key={f.id} value={f.id}>{f.title}</option>)}
-                </select>
-              </div>
+              <ScenarioPicker flows={design.flows} current={flow.id} onPick={onFlow} variant="heading" />
             ) : <h3>{flow.title}</h3>}
             {flow.summary && <p className="muted">{flow.summary}</p>}
             {cur ? (

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ReactFlow, Background, Controls, BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, getBezierPath, ConnectionMode, ControlButton, useReactFlow,
+  ReactFlow, Background, BackgroundVariant, Controls, BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, getBezierPath, ConnectionMode, ControlButton, useReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps,
 } from '@xyflow/react'
 import { edgeId, findEdge, type Design, type DNode, type Flow, type StepKind, type Tier } from '../model/schema'
@@ -367,7 +367,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
       onNodeClick={(_, n) => onSelect(n.type === 'component' && !(n.data as NodeData).telemetry ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
       fitView fitViewOptions={{ padding: pad(24, 24, 24) }}
       minZoom={0.2} maxZoom={1.3} proOptions={{ hideAttribution: true }}>
-      <Background gap={24} color="var(--grid)" />
+      <Background variant={BackgroundVariant.Lines} gap={40} color="var(--grid-line)" />
       <Controls showInteractive={false} position="top-right">
         <ControlButton onClick={toggleFollow} title={follow ? 'Camera follows the request (on)' : 'Camera follows the request (off)'}
           className={follow ? 'follow-on' : ''} aria-pressed={follow}>◎</ControlButton>
