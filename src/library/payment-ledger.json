@@ -140,7 +140,7 @@
       {
         "id": "ledger-imbalance",
         "severity": "page",
-        "when": "Any transaction whose entries do not sum to zero, or any wallet whose stored balance differs from the sum of its entries",
+        "when": "Any transaction whose entries do not sum to zero, any wallet whose stored balance differs from the sum of its entries, or any wallet below zero",
         "why": "Money was created or destroyed by a bug. Freeze the affected accounts and stop the writer before more postings build on a wrong balance.",
         "target": "ledger_db",
         "slo": "ledger-balanced"
@@ -152,6 +152,22 @@
         "why": "Users cannot move their money.",
         "target": "gw",
         "slo": "transfer-availability"
+      },
+      {
+        "id": "transfer-slow-burn",
+        "severity": "ticket",
+        "when": "Transfer errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak that would use up the month's budget in ten days.",
+        "target": "gw",
+        "slo": "transfer-availability"
+      },
+      {
+        "id": "transfer-slow",
+        "severity": "page",
+        "when": "Slow transfers burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Slow transfers make apps time out and retry, which adds load to the primary.",
+        "target": "gw",
+        "slo": "transfer-latency"
       },
       {
         "id": "lock-waits",
@@ -182,6 +198,27 @@
         "why": "An unexplained difference between the ledger and the provider is either lost money or a ledger bug, and finance needs it explained before month end.",
         "target": "recon",
         "slo": "recon-freshness"
+      },
+      {
+        "id": "payouts-unknown",
+        "severity": "ticket",
+        "when": "More than 500 payouts in UNKNOWN, or any older than 3 days",
+        "why": "Users' money is stuck in clearing until reconciliation or support settles it.",
+        "target": "payout_worker"
+      },
+      {
+        "id": "payout-lag",
+        "severity": "ticket",
+        "when": "Payout worker consumer lag above 10 minutes, or any event in its dead-letter topic",
+        "why": "Payouts are not reaching the provider; the funds are safe in clearing but users wait.",
+        "target": "payout_worker"
+      },
+      {
+        "id": "replica-lag",
+        "severity": "ticket",
+        "when": "Ledger read replica lag above 30 seconds for 10 minutes",
+        "why": "History screens show stale balances, and reconciliation must wait for the replica to catch up.",
+        "target": "ledger_replica"
       }
     ],
     "signals": [
@@ -220,6 +257,18 @@
         "name": "Decline rate by rule",
         "metric": "risk_decisions_total{rule,decision}",
         "why": "A sudden jump in one rule is either an attack or a bad rule change."
+      },
+      {
+        "target": "ledger_svc",
+        "name": "Money moved",
+        "metric": "ledger_posted_minor_total{kind,currency}",
+        "why": "The business view: a sudden drop in volume with no errors usually means a client or gateway problem."
+      },
+      {
+        "target": "ledger_svc",
+        "name": "Idempotency keys stuck in started",
+        "metric": "idempotency_keys_started_older_than_60s",
+        "why": "Each one is a request that crashed midway; a steady rise points at timeouts inside the posting path."
       }
     ],
     "debug": [
@@ -261,20 +310,41 @@
       }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACL on the gateway: managed rules, bot control, rate rules; provider IP allowlist on the webhook path",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
+    },
+    {
       "id": "gw",
       "label": "API Gateway",
       "kind": "api_gateway",
-      "description": "TLS, user auth, rate limits; also the public endpoint for provider webhooks",
+      "description": "TLS, user auth, rate limits; also the public endpoint for provider webhooks; reaches the service through a private integration",
       "cloud": {
         "aws": "API Gateway",
         "gcp": "API Gateway"
       }
     },
     {
+      "id": "ilb",
+      "label": "Internal Load Balancer",
+      "kind": "load_balancer",
+      "subnet": "app",
+      "description": "Private L7 load balancer in front of the Ledger Service fleet, with health checks across 3 zones",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "Internal Application Load Balancer"
+      }
+    },
+    {
       "id": "ledger_svc",
       "label": "Ledger Service",
       "kind": "service",
-      "description": "The only writer of ledger tables: idempotency, balance checks, posting entries",
+      "description": "The only writer of ledger tables: idempotency, balance checks, posting entries. Internal callers reach it through service discovery",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -336,7 +406,7 @@
       "kind": "stream",
       "subnet": "data",
       "ha": "quorum",
-      "description": "TransferPosted, PayoutRequested, PayoutPaid; keyed by account id so each account's events stay in order",
+      "description": "TransferPosted, PayoutRequested, PayoutPaid; keyed by account id so each account's events stay in order; a retry and a dead-letter topic per consumer",
       "cloud": {
         "aws": "MSK (Kafka)",
         "gcp": "Managed Service for Apache Kafka"
@@ -346,7 +416,7 @@
       "id": "payout_worker",
       "label": "Payout Worker",
       "kind": "worker",
-      "description": "Submits payouts to the provider with the payout id as the idempotency key",
+      "description": "Submits payouts to the provider through the NAT gateway, with the payout id as the idempotency key",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -387,11 +457,11 @@
     },
     {
       "from": "client",
-      "to": "gw"
+      "to": "waf"
     },
     {
       "from": "gw",
-      "to": "ledger_svc"
+      "to": "ilb"
     },
     {
       "from": "ledger_svc",
@@ -428,7 +498,7 @@
     },
     {
       "from": "psp",
-      "to": "gw",
+      "to": "waf",
       "label": "webhooks"
     },
     {
@@ -445,6 +515,14 @@
     },
     {
       "from": "recon",
+      "to": "ledger_svc"
+    },
+    {
+      "from": "waf",
+      "to": "gw"
+    },
+    {
+      "from": "ilb",
       "to": "ledger_svc"
     }
   ],
@@ -472,12 +550,28 @@
         },
         {
           "from": "client",
-          "to": "gw",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/transfers",
           "detail": "The app generates the idempotency key once, when Alice taps Send, and reuses it on every retry. The amount is an integer in minor units (cents), never a float.",
           "payload": "POST /v1/transfers HTTP/2\nAuthorization: Bearer eyJhbGci...\nIdempotency-Key: 7f3c9a2e-5b1d-4e8a-9c6f-0d2b4a8e1f37\n\n{ \"from\": \"acc_alice\", \"to\": \"acc_bob\", \"amount_minor\": 2500, \"currency\": \"USD\", \"memo\": \"dinner\" }"
+        },
+        {
+          "from": "waf",
+          "to": "waf",
+          "kind": "local",
+          "phase": "Request in",
+          "label": "managed rules, bot + rate rules",
+          "detail": "The web ACL drops known exploit patterns, challenges scripted clients and caps requests per IP before the gateway spends any work, which blunts credential stuffing and card-testing style abuse of the money endpoints."
+        },
+        {
+          "from": "waf",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward",
+          "detail": "Only requests the web ACL allows reach the gateway."
         },
         {
           "from": "gw",
@@ -489,11 +583,20 @@
         },
         {
           "from": "gw",
+          "to": "ilb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "create transfer (VPC Link)",
+          "detail": "The gateway reaches the private load balancer through a VPC Link, so the service is never on the internet. It starts the trace: traceparent goes with every hop and into the outbox event.",
+          "payload": "POST /internal/transfers HTTP/1.1\ntraceparent: 00-6e0c63257de34c926f9efcd03927272e-4c721bf33e3caf8f-01\nX-User-Id: u_alice\nIdempotency-Key: 7f3c9a2e-5b1d-4e8a-9c6f-0d2b4a8e1f37"
+        },
+        {
+          "from": "ilb",
           "to": "ledger_svc",
           "kind": "req",
           "phase": "Request in",
-          "label": "create transfer",
-          "detail": "Routed to any Ledger Service instance: the service is stateless and all state lives in the database."
+          "label": "to a healthy instance",
+          "detail": "Any healthy instance will do: the service is stateless and all state lives in the database. Instances failing health checks stop getting traffic."
         },
         {
           "from": "ledger_svc",
@@ -501,7 +604,7 @@
           "kind": "req",
           "phase": "Claim key",
           "label": "INSERT idempotency key",
-          "detail": "The primary key on (user, key) makes the claim atomic: exactly one request with this key gets the row. The request hash catches a client reusing a key for a different transfer.",
+          "detail": "The primary key on (user, key) makes the claim atomic: exactly one request with this key gets the row. The request hash catches a client reusing a key for a different transfer. Keys are kept for 7 days, longer than any client retries.",
           "payload": "INSERT INTO idempotency_keys (user_id, key, request_hash, status, created_at)\nVALUES ('u_alice', '7f3c9a2e-...', 'sha256:91be...', 'started', now())\nON CONFLICT (user_id, key) DO NOTHING\nRETURNING key;"
         },
         {
@@ -510,7 +613,7 @@
           "kind": "res",
           "phase": "Claim key",
           "label": "1 row: new key",
-          "detail": "Zero rows would mean a retry of an earlier request: see the retry flow."
+          "detail": "Zero rows would mean a retry of an earlier request: see the retry flow. A key stuck in started for over a minute (its first attempt crashed before posting) may be taken over by the retry, which is safe because nothing is posted without marking the key done in the same transaction."
         },
         {
           "from": "ledger_svc",
@@ -518,7 +621,7 @@
           "kind": "req",
           "phase": "Risk check",
           "label": "check 2500 USD acc_alice to acc_bob",
-          "detail": "Limits and fraud rules run before the posting transaction opens, so no row locks are held during a network call."
+          "detail": "Limits and fraud rules run before the posting transaction opens, so no row locks are held during a network call. If the risk service or its counters are down, transfers between wallets fall back to the hard limits checked in the ledger, and payouts wait (fail closed)."
         },
         {
           "from": "risk_svc",
@@ -549,8 +652,8 @@
           "kind": "req",
           "phase": "Post entries",
           "label": "one transaction: entries, balances, outbox, response",
-          "detail": "Locking both accounts in id order prevents deadlocks, and the balance check under the lock prevents overdraft. Entries, balances, the outbox event and the stored response commit together or not at all.",
-          "payload": "BEGIN;\nSELECT id, balance_minor FROM accounts\n  WHERE id IN ('acc_alice', 'acc_bob') ORDER BY id FOR UPDATE;\n-- abort unless acc_alice.balance_minor >= 2500\nINSERT INTO transactions (id, kind, idempotency_key) VALUES ('tx_8841', 'transfer', '7f3c9a2e-...');\nINSERT INTO entries (tx_id, account_id, direction, amount_minor, currency) VALUES\n  ('tx_8841', 'acc_alice', 'debit', 2500, 'USD'),\n  ('tx_8841', 'acc_bob', 'credit', 2500, 'USD');\nUPDATE accounts SET balance_minor = balance_minor - 2500, version = version + 1 WHERE id = 'acc_alice';\nUPDATE accounts SET balance_minor = balance_minor + 2500, version = version + 1 WHERE id = 'acc_bob';\nINSERT INTO outbox (topic, key, payload) VALUES ('ledger', 'acc_alice', '{\"type\":\"TransferPosted\",\"tx\":\"tx_8841\"}');\nUPDATE idempotency_keys SET status = 'done', response_code = 201, response_body = '{\"tx\":\"tx_8841\"}'\n  WHERE user_id = 'u_alice' AND key = '7f3c9a2e-...';\nCOMMIT;"
+          "detail": "Locking both accounts in id order prevents deadlocks, and the balance check under the lock prevents overdraft. Entries, balances, the outbox event and the stored response commit together or not at all; the unique idempotency key on transactions and the started guard on the key row mean a slow duplicate can never post twice.",
+          "payload": "BEGIN;\nSELECT id, balance_minor FROM accounts\n  WHERE id IN ('acc_alice', 'acc_bob') ORDER BY id FOR UPDATE;\n-- abort unless acc_alice.balance_minor >= 2500 and today's outflow stays under the hard daily limit\nINSERT INTO transactions (id, kind, idempotency_key) VALUES ('tx_8841', 'transfer', '7f3c9a2e-...');  -- UNIQUE (idempotency_key)\nINSERT INTO entries (tx_id, account_id, direction, amount_minor, currency) VALUES\n  ('tx_8841', 'acc_alice', 'debit', 2500, 'USD'),\n  ('tx_8841', 'acc_bob', 'credit', 2500, 'USD');\nUPDATE accounts SET balance_minor = balance_minor - 2500, version = version + 1 WHERE id = 'acc_alice';\nUPDATE accounts SET balance_minor = balance_minor + 2500, version = version + 1 WHERE id = 'acc_bob';\nINSERT INTO outbox (event_id, topic, key, payload, traceparent) VALUES ('ev_51f0', 'ledger', 'acc_alice', '{\"type\":\"TransferPosted\",\"tx\":\"tx_8841\"}', '00-6e0c6325…');\nUPDATE idempotency_keys SET status = 'done', response_code = 201, response_body = '{\"tx\":\"tx_8841\"}'\n  WHERE user_id = 'u_alice' AND key = '7f3c9a2e-...' AND status = 'started';  -- must be 1 row\nCOMMIT;"
         },
         {
           "from": "ledger_db",
@@ -558,18 +661,32 @@
           "kind": "res",
           "phase": "Post entries",
           "label": "COMMIT",
-          "detail": "A deferred constraint trigger has checked that the debits equal the credits for tx_8841 before the commit succeeds."
+          "detail": "A deferred constraint trigger has checked that the debits equal the credits for tx_8841, and CHECK (balance_minor >= 0) on wallet accounts, before the commit succeeds."
         },
         {
           "from": "ledger_svc",
-          "to": "gw",
+          "to": "ilb",
           "kind": "res",
           "phase": "Respond",
           "label": "201 Created",
           "payload": "HTTP/2 201\n\n{ \"transaction_id\": \"tx_8841\", \"status\": \"posted\", \"balance_minor\": 47500, \"currency\": \"USD\" }"
         },
         {
+          "from": "ilb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created"
+        },
+        {
           "from": "gw",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "Sent $25.00 to Bob"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -581,8 +698,8 @@
           "kind": "async",
           "phase": "Publish event",
           "label": "poll outbox",
-          "detail": "The relay only ever sees committed rows, so it can never announce a transfer that rolled back. SKIP LOCKED lets several relay instances share the work.",
-          "payload": "SELECT id, topic, key, payload FROM outbox\nWHERE published_at IS NULL ORDER BY id\nLIMIT 500 FOR UPDATE SKIP LOCKED;"
+          "detail": "The relay only ever sees committed rows, so it can never announce a transfer that rolled back. Rows are split into a fixed number of slices by a hash of the key, and each relay instance owns some slices: work is shared, yet one account's events are always published in order by one relay.",
+          "payload": "SELECT id, topic, key, payload FROM outbox\nWHERE published_at IS NULL AND slice = 7  -- this relay owns slice 7\nORDER BY id LIMIT 500;"
         },
         {
           "from": "ledger_db",
@@ -608,7 +725,7 @@
       "steps": [
         {
           "from": "client",
-          "to": "gw",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/transfers (retry)",
@@ -616,11 +733,26 @@
           "payload": "POST /v1/transfers HTTP/2\nIdempotency-Key: 7f3c9a2e-5b1d-4e8a-9c6f-0d2b4a8e1f37\n\n{ \"from\": \"acc_alice\", \"to\": \"acc_bob\", \"amount_minor\": 2500, \"currency\": \"USD\", \"memo\": \"dinner\" }"
         },
         {
+          "from": "waf",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward",
+          "detail": "Retries pass the same web ACL; rate rules are set well above a normal app's retry pattern."
+        },
+        {
           "from": "gw",
-          "to": "ledger_svc",
+          "to": "ilb",
           "kind": "req",
           "phase": "Request in",
           "label": "create transfer"
+        },
+        {
+          "from": "ilb",
+          "to": "ledger_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "to a healthy instance"
         },
         {
           "from": "ledger_svc",
@@ -648,7 +780,7 @@
         },
         {
           "from": "ledger_svc",
-          "to": "gw",
+          "to": "ilb",
           "kind": "res",
           "phase": "Replay",
           "label": "201 (replayed)",
@@ -656,7 +788,21 @@
           "payload": "HTTP/2 201\nIdempotent-Replayed: true\n\n{ \"transaction_id\": \"tx_8841\", \"status\": \"posted\", \"balance_minor\": 47500, \"currency\": \"USD\" }"
         },
         {
+          "from": "ilb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "201 (replayed)"
+        },
+        {
           "from": "gw",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "Sent $25.00 to Bob (once)"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Replay",
@@ -671,7 +817,7 @@
       "steps": [
         {
           "from": "client",
-          "to": "gw",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/payouts",
@@ -679,12 +825,26 @@
           "payload": "POST /v1/payouts HTTP/2\nIdempotency-Key: c41d8e02-9a7b-4f3e-b6a1-5e9d2c7f8a10\n\n{ \"account\": \"acc_alice\", \"amount_minor\": 10000, \"currency\": \"USD\", \"destination\": \"ba_tok_3381\" }"
         },
         {
+          "from": "waf",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward"
+        },
+        {
           "from": "gw",
-          "to": "ledger_svc",
+          "to": "ilb",
           "kind": "req",
           "phase": "Request in",
           "label": "create payout",
           "detail": "The key is claimed exactly as in the transfer flow before anything else happens."
+        },
+        {
+          "from": "ilb",
+          "to": "ledger_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "to a healthy instance"
         },
         {
           "from": "ledger_svc",
@@ -708,7 +868,7 @@
           "phase": "Hold funds",
           "label": "move funds to payouts_in_flight",
           "detail": "The money leaves the wallet now, into a clearing account, so Alice cannot spend it twice while the bank transfer is under way. The payout row is a mutable status record; the entries stay immutable.",
-          "payload": "BEGIN;\nSELECT balance_minor FROM accounts WHERE id = 'acc_alice' FOR UPDATE;  -- needs >= 10000\nINSERT INTO transactions (id, kind) VALUES ('tx_9120', 'payout_hold');\nINSERT INTO entries (tx_id, account_id, direction, amount_minor, currency) VALUES\n  ('tx_9120', 'acc_alice', 'debit', 10000, 'USD'),\n  ('tx_9120', 'payouts_in_flight', 'credit', 10000, 'USD');\nUPDATE accounts SET balance_minor = balance_minor - 10000 WHERE id = 'acc_alice';\nUPDATE accounts SET balance_minor = balance_minor + 10000 WHERE id = 'payouts_in_flight';\nINSERT INTO payouts (id, account_id, amount_minor, status) VALUES ('po_77', 'acc_alice', 10000, 'PENDING');\nINSERT INTO outbox (topic, key, payload) VALUES ('ledger', 'acc_alice', '{\"type\":\"PayoutRequested\",\"payout\":\"po_77\"}');\nUPDATE idempotency_keys SET status = 'done', response_code = 202, response_body = '{\"payout\":\"po_77\"}' WHERE key = 'c41d8e02-...';\nCOMMIT;"
+          "payload": "BEGIN;\nSELECT balance_minor FROM accounts WHERE id = 'acc_alice' FOR UPDATE;  -- needs >= 10000\nINSERT INTO transactions (id, kind) VALUES ('tx_9120', 'payout_hold');\nINSERT INTO entries (tx_id, account_id, direction, amount_minor, currency) VALUES\n  ('tx_9120', 'acc_alice', 'debit', 10000, 'USD'),\n  ('tx_9120', 'payouts_in_flight', 'credit', 10000, 'USD');\nUPDATE accounts SET balance_minor = balance_minor - 10000 WHERE id = 'acc_alice';\nUPDATE accounts SET balance_minor = balance_minor + 10000 WHERE id = 'payouts_in_flight';\nINSERT INTO payouts (id, account_id, amount_minor, status) VALUES ('po_77', 'acc_alice', 10000, 'PENDING');\nINSERT INTO outbox (topic, key, payload) VALUES ('ledger', 'acc_alice', '{\"type\":\"PayoutRequested\",\"payout\":\"po_77\"}');\nUPDATE idempotency_keys SET status = 'done', response_code = 202, response_body = '{\"payout\":\"po_77\"}' \n  WHERE user_id = 'u_alice' AND key = 'c41d8e02-...' AND status = 'started';\nCOMMIT;"
         },
         {
           "from": "ledger_db",
@@ -719,7 +879,7 @@
         },
         {
           "from": "ledger_svc",
-          "to": "gw",
+          "to": "ilb",
           "kind": "res",
           "phase": "Respond",
           "label": "202 Accepted",
@@ -727,7 +887,21 @@
           "payload": "HTTP/2 202\n\n{ \"payout_id\": \"po_77\", \"status\": \"pending\" }"
         },
         {
+          "from": "ilb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "202 Accepted"
+        },
+        {
           "from": "gw",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "Payout on its way"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -769,7 +943,7 @@
           "kind": "req",
           "phase": "Call provider",
           "label": "create payout, key = po_77",
-          "detail": "Using our payout id as the provider's idempotency key means any retry, from a timeout or a duplicate event, returns the same provider payout instead of sending money twice.",
+          "detail": "Using our payout id as the provider's idempotency key means any retry, from a timeout or a duplicate event, returns the same provider payout instead of sending money twice. The call leaves through the NAT gateway with an API key read from the secrets manager.",
           "payload": "POST /v1/payouts\nIdempotency-Key: po_77\n\n{ \"amount\": 10000, \"currency\": \"usd\", \"destination\": \"ba_tok_3381\", \"metadata\": { \"payout_id\": \"po_77\" } }"
         },
         {
@@ -812,7 +986,7 @@
         },
         {
           "from": "psp",
-          "to": "gw",
+          "to": "waf",
           "kind": "req",
           "phase": "Webhook",
           "label": "POST /webhooks/provider payout.paid",
@@ -820,12 +994,35 @@
           "payload": "POST /webhooks/provider HTTP/1.1\nProvider-Signature: t=1731262000,v1=5f2a9c...\n\n{ \"id\": \"evt_31aa\", \"type\": \"payout.paid\", \"data\": { \"id\": \"tr_5Kq9\", \"amount\": 10000, \"metadata\": { \"payout_id\": \"po_77\" } } }"
         },
         {
+          "from": "waf",
+          "to": "waf",
+          "kind": "local",
+          "phase": "Webhook",
+          "label": "provider IP allowlist",
+          "detail": "A rule on /webhooks/provider only admits the provider's published address ranges. It cuts noise, but it is not the authentication: the signature check is."
+        },
+        {
+          "from": "waf",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Webhook",
+          "label": "allowed: forward",
+          "detail": "Allowed through to the gateway's webhook route."
+        },
+        {
           "from": "gw",
-          "to": "ledger_svc",
+          "to": "ilb",
           "kind": "req",
           "phase": "Webhook",
           "label": "forward webhook",
-          "detail": "The webhook route skips user auth; the signature check below is what authenticates it."
+          "detail": "The webhook route skips user auth; the signature check in the service is what authenticates it."
+        },
+        {
+          "from": "ilb",
+          "to": "ledger_svc",
+          "kind": "req",
+          "phase": "Webhook",
+          "label": "to a healthy instance"
         },
         {
           "from": "ledger_svc",
@@ -833,7 +1030,7 @@
           "kind": "local",
           "phase": "Webhook",
           "label": "verify signature + timestamp",
-          "detail": "An HMAC over the raw body with the shared secret proves the provider sent it, and rejecting old timestamps stops a captured webhook from being replayed."
+          "detail": "An HMAC over the raw body with the shared secret (kept in the secrets manager) proves the provider sent it, and rejecting old timestamps stops a captured webhook from being replayed."
         },
         {
           "from": "ledger_svc",
@@ -842,7 +1039,7 @@
           "phase": "Settle",
           "label": "dedupe event + post settlement",
           "detail": "Recording the provider event id and posting the entries in one transaction makes the webhook idempotent: a duplicate inserts nothing and changes nothing. The settlement entries move the money out of clearing.",
-          "payload": "BEGIN;\nINSERT INTO provider_events (event_id, type) VALUES ('evt_31aa', 'payout.paid')\n  ON CONFLICT (event_id) DO NOTHING;  -- 0 rows: duplicate, COMMIT and stop\nUPDATE payouts SET status = 'PAID' WHERE id = 'po_77' AND status IN ('SUBMITTED', 'UNKNOWN');\nINSERT INTO transactions (id, kind, payout_id) VALUES ('tx_9188', 'payout_settle', 'po_77');  -- unique (payout_id, kind)\nINSERT INTO entries (tx_id, account_id, direction, amount_minor, currency) VALUES\n  ('tx_9188', 'payouts_in_flight', 'debit', 10000, 'USD'),\n  ('tx_9188', 'cash_at_provider', 'credit', 10000, 'USD');\nUPDATE accounts SET ... ;  -- both materialized balances\nINSERT INTO outbox (topic, key, payload) VALUES ('ledger', 'acc_alice', '{\"type\":\"PayoutPaid\",\"payout\":\"po_77\"}');\nCOMMIT;"
+          "payload": "BEGIN;\nINSERT INTO provider_events (event_id, type) VALUES ('evt_31aa', 'payout.paid')\n  ON CONFLICT (event_id) DO NOTHING;  -- 0 rows: duplicate, COMMIT and stop\nUPDATE payouts SET status = 'PAID' WHERE id = 'po_77' AND status IN ('PENDING', 'SUBMITTED', 'UNKNOWN');  -- the webhook can beat the worker's SUBMITTED update\nINSERT INTO transactions (id, kind, payout_id) VALUES ('tx_9188', 'payout_settle', 'po_77');  -- unique (payout_id, kind)\nINSERT INTO entries (tx_id, account_id, direction, amount_minor, currency) VALUES\n  ('tx_9188', 'payouts_in_flight', 'debit', 10000, 'USD'),\n  ('tx_9188', 'cash_at_provider', 'credit', 10000, 'USD');\nUPDATE accounts SET ... ;  -- both materialized balances\nINSERT INTO outbox (topic, key, payload) VALUES ('ledger', 'acc_alice', '{\"type\":\"PayoutPaid\",\"payout\":\"po_77\"}');\nCOMMIT;"
         },
         {
           "from": "ledger_db",
@@ -853,6 +1050,13 @@
         },
         {
           "from": "ledger_svc",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Ack",
+          "label": "200 OK"
+        },
+        {
+          "from": "ilb",
           "to": "gw",
           "kind": "res",
           "phase": "Ack",
@@ -860,6 +1064,13 @@
         },
         {
           "from": "gw",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Ack",
+          "label": "200 OK"
+        },
+        {
+          "from": "waf",
           "to": "psp",
           "kind": "res",
           "phase": "Ack",
@@ -933,7 +1144,8 @@
           "kind": "req",
           "phase": "Park",
           "label": "UPDATE payouts UNKNOWN",
-          "payload": "UPDATE payouts SET status = 'UNKNOWN', last_error = 'timeout'\nWHERE id = 'po_78' AND status = 'PENDING';"
+          "payload": "BEGIN;\nUPDATE payouts SET status = 'PAID', provider_ref = 'tr_7Hc2', reconciled_at = now()\n  WHERE id = 'po_78' AND status = 'UNKNOWN';\nINSERT INTO transactions (id, kind, payout_id, source) VALUES ('tx_9302', 'payout_settle', 'po_78', 'reconciliation');\nINSERT INTO entries (...) VALUES\n  ('tx_9302', 'payouts_in_flight', 'debit', 4200, 'USD'),\n  ('tx_9302', 'cash_at_provider', 'credit', 4200, 'USD');\nUPDATE accounts SET ... ;  -- both materialized balances\nCOMMIT;",
+          "detail": "The same settle transaction the webhook uses. A unique constraint on (payout_id, kind) means that if the late webhook also arrives, only one of them posts: the other's insert fails and its whole transaction rolls back."
         },
         {
           "from": "ledger_db",
@@ -955,7 +1167,7 @@
           "kind": "req",
           "phase": "Fetch report",
           "label": "GET settlement report 2026-11-09",
-          "detail": "At 02:00 UTC the job downloads the provider's report of every movement it settled that day. This is the provider's book of record, independent of any webhook.",
+          "detail": "At 02:00 UTC the job downloads the provider's report of every movement it settled that day, through the NAT gateway. This is the provider's book of record, independent of any webhook.",
           "payload": "GET /v1/reports/settlements?date=2026-11-09&format=csv"
         },
         {
@@ -972,7 +1184,7 @@
           "kind": "req",
           "phase": "Fetch report",
           "label": "PUT raw file (object lock)",
-          "detail": "The untouched file is the evidence auditors ask for. Write-once storage means nobody can quietly edit it to make the numbers match."
+          "detail": "The untouched file is the evidence auditors ask for. Write-once storage means nobody can quietly edit it to make the numbers match. The job reaches the bucket through a VPC endpoint, not the internet."
         },
         {
           "from": "settlements",
@@ -986,9 +1198,9 @@
           "to": "ledger_replica",
           "kind": "req",
           "phase": "Match",
-          "label": "SELECT payouts for the day",
-          "detail": "Reading a replica keeps a heavy scan off the primary. Seconds of replica lag do not matter for a closed day, and the resolve step below is idempotent anyway.",
-          "payload": "SELECT p.id, p.status, p.amount_minor, p.currency, p.provider_ref\nFROM payouts p\nWHERE p.created_at >= '2026-11-08' AND p.status <> 'FAILED';"
+          "label": "SELECT open payouts",
+          "detail": "Reading a replica keeps a heavy scan off the primary. A payout can settle days after it was created, so the query takes every payout not yet matched over the last 10 days, not just yesterday's. Seconds of replica lag do not matter for a closed day, and the resolve step below is idempotent anyway.",
+          "payload": "SELECT p.id, p.status, p.amount_minor, p.currency, p.provider_ref\nFROM payouts p\nWHERE p.reconciled_at IS NULL AND p.status <> 'FAILED'\n  AND p.created_at >= date '2026-11-09' - interval '10 days';"
         },
         {
           "from": "ledger_replica",
@@ -1003,7 +1215,7 @@
           "kind": "local",
           "phase": "Match",
           "label": "match on payout id, compare amounts",
-          "detail": "Every line must match one payout with the same amount and currency, and the day's totals must agree. po_78 is paid at the provider but UNKNOWN in the ledger, so it can be resolved automatically. Anything that cannot goes to a break queue for finance."
+          "detail": "Every line must match one payout with the same amount and currency, and the day's totals must agree; the provider's fee on each line is posted to the fee account as its own entries. po_78 is paid at the provider but UNKNOWN in the ledger, so it can be resolved automatically. Anything that cannot goes to a break queue for finance."
         },
         {
           "from": "recon",
@@ -1047,7 +1259,7 @@
     {
       "target": "ledger_db",
       "kind": "tradeoff",
-      "text": "One relational primary with row locks gives the simplest strong guarantees: no overdraft, no lost update, atomic multi-row postings. The cost is a single write leader per shard. Locking the touched accounts in id order is cheaper than SERIALIZABLE isolation, which also works but aborts and retries more under contention."
+      "text": "One relational primary with row locks gives the simplest strong guarantees: no overdraft, no lost update, atomic multi-row postings. The cost is a single write leader, which at 5,000 transfers/s peak (about 10 statements each) is the ceiling to watch; sharding is the next step (see the scaling question). Aurora keeps every commit in three zones, so a zone failure costs a failover of about a minute but no posted money. Locking the touched accounts in id order is cheaper than SERIALIZABLE isolation, which also works but aborts and retries more under contention."
     },
     {
       "target": "ledger_db",
@@ -1067,7 +1279,12 @@
     {
       "target": "events",
       "kind": "tradeoff",
-      "text": "The outbox removes the dual-write problem: committing to the database and publishing to Kafka separately can fail halfway, but one transaction cannot. The relay is at least once, so every consumer deduplicates by event id; keying by account id keeps one account's events in order."
+      "text": "The outbox removes the dual-write problem: committing to the database and publishing to Kafka separately can fail halfway, but one transaction cannot. The relay is at least once, so every consumer deduplicates by event id; keying by account id, with one relay per outbox slice, keeps one account's events in order. A payout event that keeps failing goes to a dead-letter topic, and its funds stay safely in clearing."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The web ACL in front of the gateway runs managed rule sets, bot control and per-IP rate rules against credential stuffing and the scripted abuse money endpoints attract, and allowlists provider addresses on the webhook path. Secrets (the provider API key, the webhook signing secret, database credentials) live in the secrets manager, encrypted with KMS keys, and each is readable only by the one service that needs it."
     }
   ],
   "questions": [
@@ -1094,7 +1311,7 @@
     {
       "id": "idempotency",
       "q": "The app times out and retries a transfer. How do you guarantee the money moves only once?",
-      "a": "The client sends the same idempotency key on every retry, and the service claims it with a unique constraint before doing any work. The response is stored on the key row in the same transaction as the entries, so either both exist or neither does, and a retry replays the stored response. A key that is still in progress returns 409, and a key reused with a different body returns 422.",
+      "a": "The client sends the same idempotency key on every retry, and the service claims it with a unique constraint before doing any work. The response is stored on the key row in the same transaction as the entries, so either both exist or neither does, and a retry replays the stored response. A key still in progress returns 409 (or is taken over if its first attempt died), and a key reused with a different body returns 422.",
       "topic": "reliability",
       "targets": [
         "client",

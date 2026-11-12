@@ -25,17 +25,21 @@
     "scale": [
       {
         "label": "Traffic",
-        "value": "1M requests/s across 50 gateway instances"
+        "value": "~500k requests/s on average, 1M/s at peak"
+      },
+      {
+        "label": "Gateways",
+        "value": "75 instances at ~20k requests/s each: 50 carry the peak, the rest cover a lost zone"
       },
       {
         "label": "API keys",
-        "value": "5M"
+        "value": "5M, each a small hash in Redis while active"
       }
     ],
     "estimate": {
       "source": "volume",
-      "dau": 50000000,
-      "writesPerUser": 864,
+      "dau": 5000000,
+      "writesPerUser": 8640,
       "volume": 500000,
       "volumeUnit": "second",
       "readsPerWrite": 0,
@@ -90,7 +94,7 @@
         "id": "limiter-latency",
         "name": "Limiter overhead",
         "kind": "latency",
-        "sli": "Limit decisions made within the threshold, divided by all decisions",
+        "sli": "Limit decisions made within the threshold, divided by all decisions, timed inside the gateway",
         "target": 99.9,
         "threshold": "< 2 ms"
       },
@@ -98,14 +102,14 @@
         "id": "api-availability",
         "name": "API availability with the limiter",
         "kind": "availability",
-        "sli": "Requests that succeed divided by all requests, even when the limiter is degraded",
+        "sli": "Requests answered without a 5xx (429s count as good), divided by all requests, at the gateways, even when the limiter is degraded",
         "target": 99.99
       },
       {
         "id": "limit-accuracy",
         "name": "Limit accuracy",
         "kind": "correctness",
-        "sli": "Keys admitted within 5% of their configured rate, divided by all keys",
+        "sli": "Keys that hit their limit and were admitted within 5% of their configured rate, divided by all keys that hit their limit, from per-key decision counts sampled each minute",
         "target": 99
       }
     ],
@@ -117,6 +121,22 @@
         "why": "The limiter must never be the reason the API is down.",
         "target": "gw",
         "slo": "api-availability"
+      },
+      {
+        "id": "api-slow-burn",
+        "severity": "ticket",
+        "when": "API errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak that would use up the month's budget in ten days.",
+        "target": "gw",
+        "slo": "api-availability"
+      },
+      {
+        "id": "limiter-latency-burn",
+        "severity": "page",
+        "when": "Slow limit decisions burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Every API request pays this latency.",
+        "target": "gw",
+        "slo": "limiter-latency"
       },
       {
         "id": "redis-slow",
@@ -147,6 +167,14 @@
         "when": "Gateways running a limits table older than 5 minutes",
         "why": "Plan changes and overrides are not taking effect.",
         "target": "config"
+      },
+      {
+        "id": "redis-memory",
+        "severity": "ticket",
+        "when": "Counter Store memory above 80%, any evictions, or one shard's CPU above 70% while the others are below 40%",
+        "why": "Evictions reset buckets to full allowances; one busy shard means a hot key that needs the batching approach.",
+        "target": "counters",
+        "slo": "limit-accuracy"
       }
     ],
     "signals": [
@@ -167,6 +195,18 @@
         "name": "Allowed against rejected, by plan",
         "metric": "ratelimit_decisions_total{result,plan}",
         "why": "Shows whether limits match how customers really use the API."
+      },
+      {
+        "target": "counters",
+        "name": "Script calls per shard",
+        "metric": "redis_commands_total{cmd=evalsha,shard}",
+        "why": "Shows hot keys and how close each shard is to its limit."
+      },
+      {
+        "target": "gw",
+        "name": "Circuit breaker state",
+        "metric": "ratelimit_breaker_open",
+        "why": "Open means every decision on that gateway is local and approximate."
       }
     ],
     "debug": [
@@ -176,7 +216,7 @@
           "Check the limit the gateway has for that key: is the config table fresh?",
           "Look at that key's decisions over time: a burst or sustained traffic?",
           "Check counter store evictions and failovers: lost state changes the allowance.",
-          "Remember the Redis script uses server time, so gateway clock drift is not the cause."
+          "The script reads Redis TIME, so gateway clock drift is not the cause."
         ]
       }
     ]
@@ -211,12 +251,13 @@
       "id": "gw",
       "label": "Gateway + Limiter",
       "kind": "api_gateway",
-      "replicas": 50,
-      "description": "Rate-limit middleware runs in every gateway instance",
+      "replicas": 75,
+      "description": "Envoy fleet in private subnets; rate-limit middleware in every instance, plus L7 filtering (the NLB cannot carry a WAF)",
       "cloud": {
         "aws": "Envoy on ECS Fargate",
         "gcp": "Envoy on GKE"
-      }
+      },
+      "subnet": "app"
     },
     {
       "id": "api",
@@ -231,7 +272,7 @@
       "id": "counters",
       "label": "Counter Store",
       "kind": "cache",
-      "description": "Token buckets, sharded by API key",
+      "description": "Token buckets in a Redis cluster sharded by API key (about 10 shards plus headroom), each shard primary + replica in different zones",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -241,7 +282,7 @@
       "id": "config",
       "label": "Limits Config",
       "kind": "nosql_db",
-      "description": "plan → rate, burst; per-key overrides",
+      "description": "plan → rate, burst; per-key overrides; hashed API keys. Reached through a VPC endpoint",
       "cloud": {
         "aws": "DynamoDB",
         "gcp": "Firestore"
@@ -311,15 +352,15 @@
           "kind": "req",
           "phase": "Request in",
           "label": "any gateway",
-          "detail": "Requests from one key land on many gateways, which is why the count must be shared and not kept in local memory."
+          "detail": "Requests from one key land on many gateways, which is why the count must be shared and not kept in local memory. The NLB health-checks every Envoy instance and stops sending to failed ones."
         },
         {
           "from": "gw",
           "to": "gw",
           "kind": "local",
           "phase": "Check the limit",
-          "label": "limit for key_abc (cached)",
-          "detail": "Plan limits are cached in the gateway and refreshed in the background, so config is not on the hot path."
+          "label": "auth key_abc, limit (cached)",
+          "detail": "Envoy checks the key against the hashed keys and plan limits it caches in memory, refreshed in the background, so config is not on the hot path. A key it has never seen gets the free plan's limit until the next refresh. Envoy also runs the L7 filters a WAF would (request size, header and path rules), since an NLB cannot host one."
         },
         {
           "from": "gw",
@@ -327,8 +368,8 @@
           "kind": "req",
           "phase": "Check the limit",
           "label": "EVALSHA token_bucket",
-          "detail": "A Lua script runs atomically inside Redis: refill tokens for the time elapsed, then take one. No race between gateways, one network round trip.",
-          "payload": "-- KEYS[1]=tb:key_abc  ARGV: rate=100/s, burst=200, now\nlocal t = redis.call('HMGET', KEYS[1], 'tokens', 'ts')\nlocal tokens = math.min(burst, (t[1] or burst) + (now - (t[2] or now)) * rate)\nif tokens < 1 then return {0, tokens} end\nredis.call('HSET', KEYS[1], 'tokens', tokens - 1, 'ts', now)\nreturn {1, tokens - 1}"
+          "detail": "A Lua script runs atomically inside Redis: refill tokens for the time elapsed, then take one. It reads the clock with Redis TIME, so gateway clock skew cannot add tokens, and it sets an expiry so idle keys vanish once their bucket would be full again.",
+          "payload": "-- KEYS[1] = tb:key_abc   ARGV = rate per s, burst\nlocal rate, burst = tonumber(ARGV[1]), tonumber(ARGV[2])\nlocal t = redis.call('TIME')\nlocal now = t[1] + t[2] / 1e6\nlocal b = redis.call('HMGET', KEYS[1], 'tokens', 'ts')\nlocal tokens = math.min(burst, (tonumber(b[1]) or burst) + (now - (tonumber(b[2]) or now)) * rate)\nlocal ok = tokens >= 1\nif ok then tokens = tokens - 1 end\nredis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)\nredis.call('PEXPIRE', KEYS[1], math.ceil(burst / rate * 1000))\nreturn { ok and 1 or 0, tostring(tokens), tostring((1 - tokens) / rate) }  -- allowed, left, wait s"
         },
         {
           "from": "counters",
@@ -342,7 +383,9 @@
           "to": "api",
           "kind": "req",
           "phase": "Forward to the API",
-          "label": "forward"
+          "label": "forward",
+          "detail": "Envoy balances across the backend instances itself (least requests, active health checks, outlier ejection), so no extra load balancer sits here. It starts the trace and adds the key's id for the backend.",
+          "payload": "GET /v1/orders HTTP/1.1\ntraceparent: 00-9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f-1a2b3c4d5e6f7a8b-01\nX-Api-Key-Id: key_abc\nX-RateLimit-Plan: pro"
         },
         {
           "from": "api",
@@ -392,7 +435,8 @@
           "to": "counters",
           "kind": "req",
           "phase": "Check the limit",
-          "label": "EVALSHA token_bucket"
+          "label": "EVALSHA token_bucket",
+          "detail": "The same script; the bucket is empty, so it returns how long until one token refills."
         },
         {
           "from": "counters",
@@ -407,7 +451,7 @@
           "kind": "res",
           "phase": "Reject",
           "label": "429 Too Many Requests",
-          "detail": "The backend never sees the request; rejected traffic costs almost nothing.",
+          "detail": "The backend never sees the request. Retry-After is in whole seconds, so 0.4 s rounds up to 1.",
           "payload": "HTTP/2 429\nRetry-After: 1\nX-RateLimit-Remaining: 0"
         },
         {
@@ -444,15 +488,16 @@
           "to": "counters",
           "kind": "req",
           "phase": "Limiter unreachable",
-          "label": "EVALSHA token_bucket"
+          "label": "EVALSHA token_bucket",
+          "detail": "The call has a 5 ms timeout."
         },
         {
           "from": "gw",
           "to": "gw",
           "kind": "local",
           "phase": "Limiter unreachable",
-          "label": "timeout 5 ms → local fallback",
-          "detail": "Fail open with a coarse local limit (key limit ÷ number of gateways). Briefly over-admitting is better than rejecting all traffic."
+          "label": "timeout: breaker opens, local limit",
+          "detail": "Fail open with a coarse local limit (key limit ÷ number of gateways). After a few timeouts a circuit breaker stops calling Redis for a few seconds, so requests do not each wait 5 ms while it is down. Briefly over-admitting is better than rejecting all traffic."
         },
         {
           "from": "gw",
@@ -495,7 +540,7 @@
           "kind": "req",
           "phase": "Refresh",
           "label": "GET limits changed since t",
-          "detail": "Every ~30 s each gateway pulls changes. A customer upgrade takes effect within a minute."
+          "detail": "Every ~30 s each gateway reads changes from an index on updated_at, through a VPC endpoint. A customer upgrade takes effect within a minute; 75 gateways polling is trivial load."
         },
         {
           "from": "config",
@@ -523,12 +568,12 @@
     {
       "target": "counters",
       "kind": "scaling",
-      "text": "Shard Redis by API key so each key's bucket lives on one shard; one round trip per request at 1M/s needs a cluster, not a single node."
+      "text": "Shard Redis by API key so each key's bucket lives on one shard. A shard runs on the order of 100k small scripts a second, so 1M/s needs about 10 shards plus headroom; each shard has a replica in another zone. A single very hot key still lands on one shard (see the hybrid note)."
     },
     {
       "target": "counters",
       "kind": "tradeoff",
-      "text": "Redis keeps the timestamps, so gateway clock skew does not matter. A replica promoted after failover may have slightly old counts, which is acceptable for rate limiting."
+      "text": "The script reads Redis TIME, so gateway clock skew does not matter. Replication is asynchronous, so a replica promoted after failover may have slightly old counts, and an evicted bucket starts full: both briefly over-admit, which is acceptable for rate limiting."
     },
     {
       "target": "gw",
@@ -544,6 +589,11 @@
       "target": "dns",
       "kind": "note",
       "text": "Static IPs from the network load balancer let enterprise customers allowlist the API. Plan any IP change carefully: they cache and firewall these addresses."
+    },
+    {
+      "target": "lb",
+      "kind": "security",
+      "text": "There is no WAF component: AWS WAF cannot attach to a network load balancer. DDoS protection comes from Shield Advanced on the NLB (or Cloud Armor network edge policies on GCP), and L7 rules run in Envoy. Teams that need managed WAF rule sets put CloudFront or an ALB with AWS WAF in front, giving up the static IPs."
     }
   ],
   "questions": [
@@ -570,7 +620,7 @@
     {
       "id": "fail-open",
       "q": "The counter store goes down. Do you block all traffic or let everything through?",
-      "a": "Usually fail open: let requests through with a local, per-instance approximate limit, because rejecting everything turns a limiter outage into a full outage. Fail closed only for limits that protect money or security, such as login attempts. Alert either way.",
+      "a": "Usually fail open: let requests through with a local, per-instance approximate limit, and trip a circuit breaker so requests stop waiting on the dead store. Rejecting everything turns a limiter outage into a full outage. Fail closed only for limits that protect money or security, such as login attempts. Alert either way.",
       "topic": "reliability",
       "targets": [
         "gw",

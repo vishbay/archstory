@@ -27,11 +27,15 @@
     "scale": [
       {
         "label": "Concurrent drivers",
-        "value": "1M at peak"
+        "value": "1M at peak, ~400k on average"
       },
       {
         "label": "Location writes",
-        "value": "~250k/s (1M drivers / 4 s)"
+        "value": "~250k/s at peak (1M drivers / 4 s), ~100k/s averaged over the day"
+      },
+      {
+        "label": "Rider tracking",
+        "value": "about half of all updates come from drivers on a trip and are pushed to a rider"
       },
       {
         "label": "Trips",
@@ -122,6 +126,13 @@
         "kind": "correctness",
         "sli": "Completed trips charged exactly once, divided by completed trips, from nightly reconciliation",
         "target": 100
+      },
+      {
+        "id": "one-trip-per-driver",
+        "name": "One trip per driver",
+        "kind": "correctness",
+        "sli": "Drivers with at most one active trip, divided by drivers on a trip, from refused second assignments and an audit query; good means no driver ever has two",
+        "target": 100
       }
     ],
     "alerts": [
@@ -138,6 +149,14 @@
         "severity": "page",
         "when": "Trip API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Riders cannot request or complete trips.",
+        "target": "lb",
+        "slo": "trip-availability"
+      },
+      {
+        "id": "trip-slow-burn",
+        "severity": "ticket",
+        "when": "Trip API errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak that would use up the month's budget in ten days.",
         "target": "lb",
         "slo": "trip-availability"
       },
@@ -163,6 +182,37 @@
         "when": "WebSocket disconnects above 3 times the normal rate for 10 minutes",
         "why": "Usually a gateway deploy or a network problem. Drivers drop out of the pool.",
         "target": "ws"
+      },
+      {
+        "id": "double-assignment",
+        "severity": "page",
+        "when": "Any second assignment refused by the one-active-trip index, or the audit finds a driver on two trips",
+        "why": "A refused assignment means the busy flags failed (often a Redis failover); a driver on two trips means the guard failed too.",
+        "target": "trips_db",
+        "slo": "one-trip-per-driver"
+      },
+      {
+        "id": "tracker-lag",
+        "severity": "ticket",
+        "when": "Trip Tracker iterator age above 30 seconds for 5 minutes",
+        "why": "Riders see the car frozen on the map, and fares wait for traces.",
+        "target": "tracker"
+      },
+      {
+        "id": "payment-pending",
+        "severity": "ticket",
+        "when": "More than 1% of completed trips still payment pending after 1 hour",
+        "why": "The provider is failing or the retry job is stuck; unpaid trips are revenue at risk.",
+        "target": "trip_svc",
+        "slo": "charge-once"
+      },
+      {
+        "id": "maps-errors",
+        "severity": "ticket",
+        "when": "Maps provider errors above 2% or p99 above 1 s for 10 minutes",
+        "why": "Matching cannot rank by road ETA; fall back to straight-line distance.",
+        "target": "maps",
+        "slo": "match-time"
       }
     ],
     "signals": [
@@ -183,6 +233,18 @@
         "name": "Position updates per second against expected",
         "metric": "geo_updates_total",
         "why": "A sudden drop usually means an app or gateway problem, not drivers going offline."
+      },
+      {
+        "target": "trip_svc",
+        "name": "Requests against matches per city",
+        "metric": "trips_total{city,status=requested|matched|cancelled}",
+        "why": "The business view: match rate per city shows supply problems before riders complain."
+      },
+      {
+        "target": "tracker",
+        "name": "Stream lag",
+        "metric": "kinesis_iterator_age_seconds",
+        "why": "How far behind real time the rider's map and the trip traces are."
       }
     ],
     "debug": [
@@ -227,6 +289,18 @@
       }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "tier": "entry",
+      "subnet": "none",
+      "description": "Web ACL on the load balancer: managed rules, rate rules per IP, bot control; inspects WebSocket upgrades, not frames",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
+    },
+    {
       "id": "lb",
       "label": "Load Balancer (L7)",
       "kind": "load_balancer",
@@ -240,11 +314,12 @@
       "id": "ws",
       "label": "WebSocket Gateway",
       "kind": "websocket_gateway",
-      "description": "Holds one persistent connection per online driver and rider",
+      "description": "Holds one persistent connection per online driver and rider; records which instance holds each user in a connection registry",
       "cloud": {
-        "aws": "API Gateway WebSocket",
-        "gcp": "Cloud Run (WebSockets)"
-      }
+        "aws": "ECS Fargate",
+        "gcp": "GKE"
+      },
+      "subnet": "app"
     },
     {
       "id": "location_svc",
@@ -281,7 +356,7 @@
       "label": "Driver Geo Index",
       "kind": "geo_index",
       "ha": "primary-standby",
-      "description": "In-memory index of available drivers by location (Redis GEO or H3 cells)",
+      "description": "Redis, sharded by city: available drivers (GEO set), heartbeats, offer leases and busy flags, and the connection registry",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -291,7 +366,7 @@
       "id": "trips_db",
       "label": "Trips DB",
       "kind": "sql_db",
-      "description": "Trips, status, fares",
+      "description": "Trips, status, fares, GPS traces; at most one active trip per driver (partial unique index)",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -301,10 +376,20 @@
       "id": "events",
       "label": "Location Stream",
       "kind": "stream",
-      "description": "Every location ping, for trip tracking, ETA models and analytics",
+      "description": "Every location ping, partitioned by driver id; read by the Trip Tracker here, and by ETA-model and analytics pipelines outside this design",
       "cloud": {
         "aws": "Kinesis Data Streams",
         "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "tracker",
+      "label": "Trip Tracker",
+      "kind": "worker",
+      "description": "Reads the location stream: pushes on-trip drivers' positions to their rider and appends each trip's GPS trace",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
       }
     },
     {
@@ -326,14 +411,6 @@
   ],
   "groups": [],
   "edges": [
-    {
-      "from": "rider",
-      "to": "lb"
-    },
-    {
-      "from": "driver",
-      "to": "lb"
-    },
     {
       "from": "lb",
       "to": "ws"
@@ -390,6 +467,36 @@
     {
       "from": "driver",
       "to": "dns"
+    },
+    {
+      "from": "rider",
+      "to": "waf"
+    },
+    {
+      "from": "driver",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
+      "to": "lb"
+    },
+    {
+      "from": "ws",
+      "to": "geo_index"
+    },
+    {
+      "from": "events",
+      "to": "tracker"
+    },
+    {
+      "from": "tracker",
+      "to": "ws",
+      "async": true
+    },
+    {
+      "from": "tracker",
+      "to": "trips_db",
+      "async": true
     }
   ],
   "flows": [
@@ -400,19 +507,26 @@
       "steps": [
         {
           "from": "driver",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Send position",
           "label": "WS frame: location",
-          "detail": "Sent over an already-open WebSocket: no new connection or TLS handshake per update.",
+          "detail": "Sent over an already-open WebSocket: no new connection or TLS handshake per update. The WAF inspected the upgrade request when the connection opened (a valid token, rate rules per IP); frames on an open connection pass straight through.",
           "payload": "{ \"type\": \"loc\", \"driver_id\": \"d_7781\", \"lat\": 37.7793, \"lng\": -122.4192, \"heading\": 270, \"ts\": 1762601000 }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Send position",
+          "label": "same connection"
         },
         {
           "from": "lb",
           "to": "ws",
           "kind": "req",
           "phase": "Send position",
-          "label": "same connection",
+          "label": "pinned gateway",
           "detail": "The load balancer keeps each WebSocket pinned to the gateway instance that accepted it."
         },
         {
@@ -420,23 +534,24 @@
           "to": "location_svc",
           "kind": "req",
           "phase": "Send position",
-          "label": "update(d_7781, lat, lng)"
+          "label": "update(d_7781, lat, lng)",
+          "detail": "Location Service instances are stateless, so the gateway hands each update to any of them over a pooled internal connection."
         },
         {
           "from": "location_svc",
           "to": "geo_index",
           "kind": "req",
           "phase": "Update index",
-          "label": "GEOADD available:sf",
-          "detail": "Only the latest position matters, so this is an in-memory overwrite. ~250k writes/s fits a Redis cluster sharded by city; a disk-based database would struggle.",
-          "payload": "GEOADD drivers:available:sf -122.4192 37.7793 d_7781"
+          "label": "update position (script)",
+          "detail": "Only the latest position matters, so this is an in-memory overwrite: ~250k writes/s fits a Redis cluster sharded by city, where a disk-based database would struggle. One script keeps busy drivers out of the available set and refreshes a 30 s heartbeat, so a driver whose app goes silent drops out of matching.",
+          "payload": "EVALSHA update_pos 3 drivers:{sf}:available busy:{sf}:d_7781 hb:{sf}:d_7781 -122.4192 37.7793 d_7781\n-- if busy:{sf}:d_7781 exists: ZREM it from the available set, return its trip id\n-- else GEOADD drivers:{sf}:available -122.4192 37.7793 d_7781\n-- always SET hb:{sf}:d_7781 1 EX 30"
         },
         {
           "from": "geo_index",
           "to": "location_svc",
           "kind": "res",
           "phase": "Update index",
-          "label": "OK"
+          "label": "available (not busy)"
         },
         {
           "from": "location_svc",
@@ -444,7 +559,69 @@
           "kind": "async",
           "phase": "Record history",
           "label": "append location event",
-          "detail": "The full history goes to a stream for live trip tracking, ETA models and analytics. The geo index stays small and hot."
+          "detail": "The full history goes to a stream, partitioned by driver id and tagged with the trip id when the driver is busy. The geo index stays small and hot."
+        },
+        {
+          "from": "events",
+          "to": "tracker",
+          "kind": "async",
+          "phase": "Track trip",
+          "label": "d_4410 on t_548",
+          "detail": "Only updates from drivers on a trip matter here; the tracker skips the rest. Take a driver d_4410 who is driving rider r_19 on trip t_548."
+        },
+        {
+          "from": "tracker",
+          "to": "trips_db",
+          "kind": "async",
+          "phase": "Track trip",
+          "label": "append trace batch",
+          "detail": "Points are buffered per trip and written about every 30 s as one row, which keeps the database load to tens of thousands of small writes a second instead of 125k. The trace is what the fare is computed from."
+        },
+        {
+          "from": "tracker",
+          "to": "ws",
+          "kind": "async",
+          "phase": "Track trip",
+          "label": "push position to r_19",
+          "detail": "Any gateway instance can take the push."
+        },
+        {
+          "from": "ws",
+          "to": "geo_index",
+          "kind": "req",
+          "phase": "Track trip",
+          "label": "which gateway holds r_19?",
+          "detail": "Each gateway records its connections in the registry when a client connects, so a reconnect to another instance updates it at once.",
+          "payload": "HGET conn:{sf} r_19"
+        },
+        {
+          "from": "geo_index",
+          "to": "ws",
+          "kind": "res",
+          "phase": "Track trip",
+          "label": "ws-17"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "async",
+          "phase": "Track trip",
+          "label": "frame on r_19's connection",
+          "detail": "Forwarded to instance ws-17, which writes the frame on the rider's open WebSocket."
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "async",
+          "phase": "Track trip",
+          "label": "driver position"
+        },
+        {
+          "from": "waf",
+          "to": "rider",
+          "kind": "async",
+          "phase": "Track trip",
+          "label": "car moves on the map"
         }
       ]
     },
@@ -466,23 +643,41 @@
           "to": "rider",
           "kind": "res",
           "phase": "DNS",
-          "label": "ALB address (nearest region)",
+          "label": "load balancer address (city's region)",
           "payload": "api.rides.example.com.  60  IN A  203.0.113.10"
         },
         {
           "from": "rider",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /trips",
-          "payload": "POST /trips HTTP/2\nIdempotency-Key: 6f1c…\n\n{ \"pickup\": [37.7793, -122.4192], \"dropoff\": [37.8080, -122.4177], \"product\": \"standard\" }"
+          "payload": "POST /trips HTTP/2\nAuthorization: Bearer eyJhbGci…\nIdempotency-Key: 6f1c…\n\n{ \"quote_id\": \"q_88\", \"pickup\": [37.7793, -122.4192], \"dropoff\": [37.8080, -122.4177], \"product\": \"standard\" }",
+          "detail": "The quote the rider accepted fixes the price and surge multiplier they were shown."
+        },
+        {
+          "from": "waf",
+          "to": "waf",
+          "kind": "local",
+          "phase": "Request in",
+          "label": "managed rules + rate rules",
+          "detail": "The web ACL blocks exploit patterns, caps requests per IP and challenges scripted clients, which is where fake-account and promo-abuse traffic comes from."
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward"
         },
         {
           "from": "lb",
           "to": "trip_svc",
           "kind": "req",
           "phase": "Request in",
-          "label": "route"
+          "label": "route",
+          "detail": "The load balancer health-checks the Trip Service instances across three zones and starts the trace; the trace id goes with every hop to matching and the maps call.",
+          "payload": "POST /trips HTTP/1.1\ntraceparent: 00-3d2f1b9a8c7e4f60a1b2c3d4e5f60718-a1b2c3d4e5f60718-01"
         },
         {
           "from": "trip_svc",
@@ -490,7 +685,7 @@
           "kind": "req",
           "phase": "Create trip",
           "label": "INSERT trip REQUESTED",
-          "detail": "The idempotency key makes a retried tap return the same trip instead of creating two."
+          "detail": "The idempotency key makes a retried tap return the same trip instead of creating two. The trip stores the quote's price and surge."
         },
         {
           "from": "trips_db",
@@ -504,7 +699,8 @@
           "to": "matching",
           "kind": "req",
           "phase": "Find drivers",
-          "label": "match(t_552)"
+          "label": "match(t_552)",
+          "detail": "The rider's POST waits like a long poll, capped at about 30 s. If no driver has accepted by then, it returns 202 and the result reaches the rider app over its WebSocket."
         },
         {
           "from": "matching",
@@ -512,7 +708,8 @@
           "kind": "req",
           "phase": "Find drivers",
           "label": "GEOSEARCH 2 km",
-          "payload": "GEOSEARCH drivers:available:sf FROMLONLAT -122.4192 37.7793 BYRADIUS 2 km ASC COUNT 10"
+          "payload": "GEOSEARCH drivers:{sf}:available FROMLONLAT -122.4192 37.7793 BYRADIUS 2 km ASC COUNT 10",
+          "detail": "Candidates whose heartbeat key has expired are skipped (and a sweep removes them from the set), so drivers whose app died are not offered trips."
         },
         {
           "from": "geo_index",
@@ -542,8 +739,9 @@
           "to": "geo_index",
           "kind": "req",
           "phase": "Lock a driver",
-          "label": "SET lock:d_7781 NX EX 15",
-          "detail": "Atomic claim. Two matchers serving two riders can never offer the same driver at once. The 15 s expiry frees the driver if they ignore the offer."
+          "label": "SET busy:d_7781 t_552 NX EX 15",
+          "detail": "Atomic claim: two matchers serving two riders can never offer the same driver at once. The 15 s expiry frees the driver if they ignore the offer, and the next location update puts them back in the available set.",
+          "payload": "SET busy:{sf}:d_7781 t_552 NX EX 15"
         },
         {
           "from": "geo_index",
@@ -558,29 +756,60 @@
           "kind": "req",
           "phase": "Offer to driver",
           "label": "push offer to d_7781",
-          "detail": "Routed to the gateway instance holding that driver's connection."
+          "detail": "Any gateway instance accepts the push and looks up which instance holds the driver's connection."
+        },
+        {
+          "from": "ws",
+          "to": "geo_index",
+          "kind": "req",
+          "phase": "Offer to driver",
+          "label": "which gateway holds d_7781?",
+          "detail": "The connection registry maps each online user to the gateway instance holding their socket.",
+          "payload": "HGET conn:{sf} d_7781"
+        },
+        {
+          "from": "geo_index",
+          "to": "ws",
+          "kind": "res",
+          "phase": "Offer to driver",
+          "label": "ws-4"
         },
         {
           "from": "ws",
           "to": "lb",
           "kind": "req",
           "phase": "Offer to driver",
-          "label": "WS push: offer"
+          "label": "WS push: offer",
+          "detail": "Instance ws-4 writes the offer on the driver's open WebSocket."
         },
         {
           "from": "lb",
-          "to": "driver",
+          "to": "waf",
           "kind": "req",
           "phase": "Offer to driver",
           "label": "offer (15 s to accept)",
           "payload": "{ \"type\": \"offer\", \"trip_id\": \"t_552\", \"pickup_eta_s\": 180, \"expires_in\": 15 }"
         },
         {
+          "from": "waf",
+          "to": "driver",
+          "kind": "req",
+          "phase": "Offer to driver",
+          "label": "offer (15 s to accept)"
+        },
+        {
           "from": "driver",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Driver accepts",
           "label": "accept"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Driver accepts",
+          "label": "allowed: forward"
         },
         {
           "from": "lb",
@@ -594,7 +823,24 @@
           "to": "matching",
           "kind": "req",
           "phase": "Driver accepts",
-          "label": "accepted(t_552)"
+          "label": "accepted(t_552)",
+          "detail": "The accept carries the trip id, so a late accept for an older offer is ignored."
+        },
+        {
+          "from": "matching",
+          "to": "geo_index",
+          "kind": "req",
+          "phase": "Confirm trip",
+          "label": "keep d_7781 busy if still t_552",
+          "detail": "The lease may have expired while the driver was deciding. A small script makes the busy flag permanent only if it still names this trip, and takes the driver out of the available set.",
+          "payload": "EVALSHA confirm_busy 2 busy:{sf}:d_7781 drivers:{sf}:available t_552 d_7781\n-- if GET busy == t_552: PERSIST busy, ZREM available d_7781, return 1\n-- else return 0 (lease lost: offer the next candidate)"
+        },
+        {
+          "from": "geo_index",
+          "to": "matching",
+          "kind": "res",
+          "phase": "Confirm trip",
+          "label": "1: confirmed"
         },
         {
           "from": "matching",
@@ -609,8 +855,8 @@
           "kind": "req",
           "phase": "Confirm trip",
           "label": "UPDATE … WHERE status='REQUESTED'",
-          "detail": "Conditional update: if the rider cancelled meanwhile, zero rows change and the driver is released.",
-          "payload": "UPDATE trips SET status = 'ACCEPTED', driver_id = 'd_7781'\nWHERE id = 't_552' AND status = 'REQUESTED';"
+          "detail": "Conditional update: if the rider cancelled meanwhile, zero rows change and the driver is released. A partial unique index allows one active trip per driver, so even if a Redis failover lost the busy flag, the database refuses a second assignment.",
+          "payload": "UPDATE trips SET status = 'ACCEPTED', driver_id = 'd_7781'\nWHERE id = 't_552' AND status = 'REQUESTED';\n-- CREATE UNIQUE INDEX one_active_trip ON trips (driver_id)\n--   WHERE status IN ('ACCEPTED', 'ARRIVED', 'IN_PROGRESS');"
         },
         {
           "from": "trips_db",
@@ -628,11 +874,18 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond to rider",
+          "label": "driver arriving in 3 min"
+        },
+        {
+          "from": "waf",
           "to": "rider",
           "kind": "res",
           "phase": "Respond to rider",
           "label": "driver arriving in 3 min",
-          "detail": "From here, the rider app follows the driver's position over its own WebSocket."
+          "detail": "From here, the rider app follows the driver's position over its own WebSocket (see the location flow)."
         }
       ]
     },
@@ -643,10 +896,17 @@
       "steps": [
         {
           "from": "driver",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /trips/t_552/complete"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward"
         },
         {
           "from": "lb",
@@ -661,7 +921,7 @@
           "kind": "req",
           "phase": "Compute fare",
           "label": "route distance + duration",
-          "detail": "Uses the recorded GPS trace, snapped to roads."
+          "detail": "Uses the trip's GPS trace, which the Trip Tracker appended to the trip as it went, snapped to roads."
         },
         {
           "from": "maps",
@@ -676,7 +936,7 @@
           "kind": "local",
           "phase": "Compute fare",
           "label": "fare = base + km + min × surge",
-          "detail": "Surge comes from supply and demand per city cell at request time; it was shown to the rider up front."
+          "detail": "The surge multiplier comes from the quote the rider accepted before requesting, stored on the trip, so the rider pays the price they were shown. Pricing itself runs outside this design."
         },
         {
           "from": "trip_svc",
@@ -684,7 +944,7 @@
           "kind": "req",
           "phase": "Charge",
           "label": "charge, key = t_552",
-          "detail": "The trip id is the idempotency key: if the call times out and is retried, the provider returns the first result instead of charging twice.",
+          "detail": "The trip id is the idempotency key: if the call times out and is retried, the provider returns the first result instead of charging twice. The call leaves through the NAT gateway.",
           "payload": "POST /v1/payment_intents\nIdempotency-Key: t_552\n\n{ \"amount\": 1840, \"currency\": \"usd\", \"customer\": \"cus_19\" }"
         },
         {
@@ -699,7 +959,8 @@
           "to": "trips_db",
           "kind": "req",
           "phase": "Finish trip",
-          "label": "UPDATE COMPLETED, fare"
+          "label": "UPDATE COMPLETED, fare",
+          "detail": "If the provider is down, the trip is still marked COMPLETED with payment pending, and a background job in the Trip Service retries the charge with the same key."
         },
         {
           "from": "trips_db",
@@ -710,18 +971,56 @@
         },
         {
           "from": "trip_svc",
+          "to": "matching",
+          "kind": "req",
+          "phase": "Release driver",
+          "label": "release d_7781 from t_552",
+          "detail": "The driver is free again only once the trip is finished in the database."
+        },
+        {
+          "from": "matching",
+          "to": "geo_index",
+          "kind": "req",
+          "phase": "Release driver",
+          "label": "DEL busy if still t_552",
+          "detail": "Compare and delete, so a stale release can never free a driver who has since started another trip.",
+          "payload": "EVALSHA release_busy 1 busy:{sf}:d_7781 t_552\n-- if GET busy == t_552: DEL busy"
+        },
+        {
+          "from": "geo_index",
+          "to": "matching",
+          "kind": "res",
+          "phase": "Release driver",
+          "label": "1"
+        },
+        {
+          "from": "matching",
+          "to": "trip_svc",
+          "kind": "res",
+          "phase": "Release driver",
+          "label": "released"
+        },
+        {
+          "from": "trip_svc",
           "to": "lb",
           "kind": "res",
-          "phase": "Finish trip",
+          "phase": "Respond",
           "label": "200 receipt"
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "trip complete"
+        },
+        {
+          "from": "waf",
           "to": "driver",
           "kind": "res",
-          "phase": "Finish trip",
+          "phase": "Respond",
           "label": "trip complete",
-          "detail": "The driver goes back into the available pool on their next location update."
+          "detail": "The driver goes back into the available set on their next location update, now that the busy flag is gone."
         }
       ]
     }
@@ -735,7 +1034,7 @@
     {
       "target": "geo_index",
       "kind": "failure",
-      "text": "It holds only current positions, which drivers resend every 4 s. After a failover the index refills itself within seconds; nothing needs restoring."
+      "text": "Redis replicates asynchronously. After a failover, positions refill within seconds from the next pings, but recent busy flags may be lost, so a driver on a trip could reappear as available. The partial unique index on active trips per driver in the Trips DB refuses the second assignment, and matching moves on to the next candidate."
     },
     {
       "target": "ws",
@@ -760,7 +1059,12 @@
     {
       "target": "dns",
       "kind": "scaling",
-      "text": "Geo routing keeps a city in one region, which keeps the driver geo index and matching local. If a region fails, change the DNS answer and drivers reconnect to another region within a few minutes (about one TTL)."
+      "text": "Geo routing keeps a city in one region, which keeps the driver geo index and matching local. Other regions run copies of this design. If a region fails, change the DNS answer and drivers reconnect to another region within a few minutes (about one TTL); trips in progress continue only if the Trips DB is replicated there."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The web ACL on the load balancer inspects every HTTP request and each WebSocket upgrade (frames on an open connection are not inspected): managed rule sets, per-IP rate rules and bot control against fake accounts and scripted ride requests. Both apps send short-lived tokens checked by the gateway on connect and by the Trip Service on every call; the payment provider key lives in the secrets manager."
     }
   ],
   "questions": [
@@ -789,10 +1093,11 @@
     {
       "id": "double-match",
       "q": "Two riders are offered the same driver at the same moment. How do you prevent a double booking?",
-      "a": "Make the assignment an atomic claim: the driver's state changes from available to offered with a conditional write (compare-and-set) or a short lease. Only the request that wins the claim proceeds; the other moves to the next candidate. The trip record is created only after the driver accepts.",
+      "a": "Make the claim atomic: matching sets a busy flag for the driver only if none exists (SET NX with a short expiry), so only one request wins and the other moves to the next candidate. On accept, the flag is kept only if it still names this trip. The driver is written onto the trip with a conditional update, and a partial unique index allowing one active trip per driver is the final guard if Redis ever loses a flag.",
       "topic": "consistency",
       "targets": [
         "matching",
+        "geo_index",
         "trip_svc",
         "trips_db"
       ]
@@ -800,10 +1105,11 @@
     {
       "id": "ws-failover",
       "q": "A WebSocket gateway instance dies. What happens to the connected drivers and riders?",
-      "a": "Their connections drop and the apps reconnect, with backoff and jitter, through the load balancer to another instance. Nothing important lived only in the gateway: trip state is in the trip service and positions are refreshed by the next update. A connection registry is updated on reconnect so pushes reach the new instance.",
+      "a": "Their connections drop and the apps reconnect, with backoff and jitter, through the load balancer to another instance. Nothing important lived only in the gateway: trip state is in the Trips DB and positions are refreshed by the next update. On reconnect the new instance overwrites the user's entry in the connection registry, so pushes find it at once.",
       "topic": "reliability",
       "targets": [
         "ws",
+        "geo_index",
         "driver",
         "rider"
       ]
@@ -821,11 +1127,11 @@
     {
       "id": "surge",
       "q": "How would you compute surge pricing?",
-      "a": "Aggregate supply (available drivers) and demand (ride requests) per geo cell over a short sliding window from the location and request streams. Price is a function of the ratio, smoothed so it does not flicker. It runs asynchronously; matching only reads the latest multiplier for a cell.",
+      "a": "Aggregate supply (available drivers) and demand (ride requests) per geo cell over a short sliding window from the location stream and request counts, in a pricing job outside this design. Price is a function of the ratio, smoothed so it does not flicker. The multiplier is locked into the quote the rider accepts, stored on the trip, and used for the fare.",
       "topic": "tradeoffs",
       "targets": [
-        "matching",
-        "events"
+        "events",
+        "trip_svc"
       ]
     }
   ]

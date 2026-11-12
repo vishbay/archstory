@@ -26,8 +26,16 @@
     ],
     "scale": [
       {
+        "label": "Shoppers",
+        "value": "10M a day"
+      },
+      {
         "label": "Orders",
-        "value": "5k/s at flash-sale peak"
+        "value": "~20M a day (~230/s average), 5k/s at flash-sale peak"
+      },
+      {
+        "label": "Reads",
+        "value": "~5 per order (cart, stock, order status), ~25k/s at peak"
       },
       {
         "label": "Catalog",
@@ -100,7 +108,7 @@
         "id": "checkout-latency",
         "name": "Checkout speed",
         "kind": "latency",
-        "sli": "Order requests completed within the threshold, divided by all order requests",
+        "sli": "Order requests answered (201, 202 or 402) within the threshold, divided by all order requests, at the API gateway",
         "target": 99,
         "threshold": "< 2 s"
       },
@@ -108,14 +116,14 @@
         "id": "single-charge",
         "name": "Charged exactly once",
         "kind": "correctness",
-        "sli": "Orders charged exactly once, divided by paid orders, from reconciliation",
+        "sli": "Paid orders with exactly one successful provider charge, divided by paid orders, from reconciliation against the provider's charge list",
         "target": 100
       },
       {
         "id": "no-oversell",
         "name": "Never oversold",
         "kind": "correctness",
-        "sli": "Units sold never above stock, checked against inventory after each sale window",
+        "sli": "SKUs whose committed reservations stay within the stock received, divided by all SKUs sold, from an audit query every 5 minutes",
         "target": 100
       }
     ],
@@ -123,7 +131,7 @@
       {
         "id": "duplicate-charge",
         "severity": "page",
-        "when": "Any order charged more than once",
+        "when": "Reconciliation finds any order with more than one successful charge at the provider",
         "why": "It is money, and it breaks trust. Stop and fix.",
         "target": "payment_svc",
         "slo": "single-charge"
@@ -137,10 +145,34 @@
         "slo": "checkout-availability"
       },
       {
+        "id": "checkout-slow-burn",
+        "severity": "ticket",
+        "when": "Checkout errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak that would use up the month's budget in ten days.",
+        "target": "gw",
+        "slo": "checkout-availability"
+      },
+      {
+        "id": "checkout-slow",
+        "severity": "page",
+        "when": "Slow checkouts burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Shoppers abandon slow checkouts and retry, adding load.",
+        "target": "gw",
+        "slo": "checkout-latency"
+      },
+      {
+        "id": "oversell",
+        "severity": "page",
+        "when": "The audit finds any SKU with more committed units than stock received",
+        "why": "Somebody paid for an item we do not have. Stop sales of that SKU and find the code path.",
+        "target": "inventory_db",
+        "slo": "no-oversell"
+      },
+      {
         "id": "psp-errors",
         "severity": "page",
-        "when": "Payment provider error ratio above 5% for 5 minutes",
-        "why": "Customers cannot pay. Open the circuit breaker, then queue or retry.",
+        "when": "Payment provider timeouts and 5xx above 5% of charges for 5 minutes",
+        "why": "Customers cannot pay. Open the circuit breaker so new checkouts fail fast; orders already charging stay PENDING for the sweeper.",
         "target": "psp",
         "slo": "checkout-availability"
       },
@@ -155,7 +187,7 @@
         "id": "stuck-pending",
         "severity": "ticket",
         "when": "Orders pending longer than 15 minutes",
-        "why": "A step of the saga stalled. Reconciliation should resolve or cancel them.",
+        "why": "The sweeper is not settling them: the provider is still unreachable, or the sweeper itself is failing. Their stock stays held meanwhile.",
         "target": "order_svc"
       },
       {
@@ -164,6 +196,21 @@
         "when": "Lock waits above 100 ms on a single SKU row",
         "why": "A flash sale concentrates writes on one row. Split the stock into buckets.",
         "target": "inventory_db",
+        "slo": "checkout-latency"
+      },
+      {
+        "id": "email-lag",
+        "severity": "ticket",
+        "when": "Email worker consumer lag above 5 minutes, or any event in the dead-letter topic",
+        "why": "Confirmations are late or lost. The orders themselves are fine.",
+        "target": "email_worker"
+      },
+      {
+        "id": "orders-db-saturation",
+        "severity": "ticket",
+        "when": "Orders DB CPU above 80% or connections above 85% of the maximum for 15 minutes",
+        "why": "At 5k orders/s the primary is the first shared limit; slow commits show up as checkout latency.",
+        "target": "orders_db",
         "slo": "checkout-latency"
       }
     ],
@@ -185,16 +232,34 @@
         "name": "Row lock wait time",
         "metric": "db_lock_wait_seconds",
         "why": "Contention on a hot SKU is the first thing to give in a flash sale."
+      },
+      {
+        "target": "order_svc",
+        "name": "Orders by outcome",
+        "metric": "orders_total{status=paid|failed|pending}",
+        "why": "The business view: a fall in paid orders with no rise in errors points at the provider or a front-end bug."
+      },
+      {
+        "target": "inventory_svc",
+        "name": "Reservations held, committed and released",
+        "metric": "reservations_total{outcome}",
+        "why": "Held stock that is neither committed nor released means the sweeper is behind and items look sold out."
+      },
+      {
+        "target": "waf",
+        "name": "Blocked requests by rule",
+        "metric": "waf_blocked_requests_total{rule}",
+        "why": "A jump in the card-testing rate rule is an attack in progress; a jump in a managed rule after a release can be false positives."
       }
     ],
     "debug": [
       {
         "symptom": "Orders stuck in PENDING",
         "steps": [
-          "Find the step that stalled: reservation, payment or the final commit. Follow the order id in the trace.",
-          "Check provider timeouts and unknown outcomes.",
-          "Run reconciliation for the affected window.",
-          "Verify reservations are expiring as they should."
+          "Follow the order id in the trace: did it stall at the reservation, the charge or the final commit?",
+          "Check provider timeouts and unknown outcomes, and whether the circuit breaker is open.",
+          "Check the sweeper ran in the last few minutes and what it settled.",
+          "Confirm reservations of abandoned checkouts are being released, and none of an order whose charge started."
         ]
       },
       {
@@ -212,6 +277,16 @@
       "id": "client",
       "label": "Shopper",
       "kind": "web_client"
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACL on the CDN: managed rules, bot control, rate rules against card testing",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
     },
     {
       "id": "dns",
@@ -236,17 +311,28 @@
       "id": "gw",
       "label": "API Gateway",
       "kind": "api_gateway",
-      "description": "Auth, rate limits, routing",
+      "description": "Auth, per-user rate limits, routing; reaches the services through a private integration",
       "cloud": {
         "aws": "API Gateway",
         "gcp": "API Gateway"
       }
     },
     {
+      "id": "ilb",
+      "label": "Internal Load Balancer",
+      "kind": "load_balancer",
+      "subnet": "app",
+      "description": "Private L7 load balancer in front of the Order Service fleet; health checks across 3 zones",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "Internal Application Load Balancer"
+      }
+    },
+    {
       "id": "order_svc",
       "label": "Order Service",
       "kind": "service",
-      "description": "Orchestrates the checkout saga",
+      "description": "Orchestrates the checkout saga; its background sweeper settles stuck orders and releases abandoned reservations",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -265,7 +351,7 @@
       "id": "payment_svc",
       "label": "Payment Service",
       "kind": "service",
-      "description": "Wraps the payment provider; owns idempotency and reconciliation",
+      "description": "Wraps the payment provider; the only holder of the provider API key; owns idempotency keys",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -285,7 +371,7 @@
       "id": "inventory_db",
       "label": "Inventory DB",
       "kind": "sql_db",
-      "description": "stock(sku, available, reserved)",
+      "description": "stock(sku, available, reserved) with CHECK (available >= 0); reservations(order_id, sku, status, expires_at)",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -297,7 +383,7 @@
       "kind": "stream",
       "subnet": "data",
       "ha": "quorum",
-      "description": "Kafka topic: OrderPaid, OrderFailed …",
+      "description": "Kafka topic: OrderPaid, OrderFailed; a dead-letter topic for events a consumer keeps failing on",
       "cloud": {
         "aws": "MSK (Kafka)",
         "gcp": "Kafka on GKE"
@@ -341,7 +427,7 @@
   "edges": [
     {
       "from": "client",
-      "to": "cdn"
+      "to": "waf"
     },
     {
       "from": "cdn",
@@ -349,7 +435,7 @@
     },
     {
       "from": "gw",
-      "to": "order_svc"
+      "to": "ilb"
     },
     {
       "from": "order_svc",
@@ -391,6 +477,14 @@
     {
       "from": "client",
       "to": "dns"
+    },
+    {
+      "from": "waf",
+      "to": "cdn"
+    },
+    {
+      "from": "ilb",
+      "to": "order_svc"
     }
   ],
   "flows": [
@@ -417,19 +511,36 @@
         },
         {
           "from": "client",
-          "to": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /orders",
-          "detail": "The client creates an idempotency key once per checkout attempt and reuses it on retries.",
+          "detail": "The client creates an idempotency key once per checkout attempt and reuses it on retries. Only a card token from the provider (pm_visa) is sent; card numbers never reach our servers.",
           "payload": "POST /orders HTTP/2\nIdempotency-Key: 9b2e4c1a-…\n\n{ \"cart_id\": \"cart_88\", \"items\": [{ \"sku\": \"SHOE-42\", \"qty\": 1 }], \"payment_method\": \"pm_visa\" }"
+        },
+        {
+          "from": "waf",
+          "to": "waf",
+          "kind": "local",
+          "phase": "Request in",
+          "label": "managed rules, bot + rate rules",
+          "detail": "AWS WAF runs on the CDN edge before anything is forwarded: managed rule sets block common exploits, bot control challenges scripted clients, and rate rules on POST /orders per IP and per account stop card testing (bots trying many stolen cards with small orders)."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward",
+          "detail": "Only requests the web ACL allows reach the CDN."
         },
         {
           "from": "cdn",
           "to": "gw",
           "kind": "req",
           "phase": "Request in",
-          "label": "forward"
+          "label": "forward, not cached",
+          "detail": "/orders has caching disabled: the CDN terminates TLS near the shopper and forwards the body, the Authorization header and the idempotency key to the origin. Responses carry Cache-Control: no-store, so one shopper's order can never be served to another."
         },
         {
           "from": "gw",
@@ -437,14 +548,24 @@
           "kind": "local",
           "phase": "Request in",
           "label": "auth + rate limit",
-          "detail": "During flash sales the gateway can also hold excess users in a virtual waiting room."
+          "detail": "Validates the shopper's token and applies per-user limits. During a flash sale a virtual waiting room in front of checkout (not shown) can hold excess shoppers."
         },
         {
           "from": "gw",
+          "to": "ilb",
+          "kind": "req",
+          "phase": "Create order",
+          "label": "create order (VPC Link)",
+          "detail": "The gateway reaches the private load balancer through a VPC Link, so no service is exposed to the internet. It starts a trace here; the traceparent header travels with every hop and into the outbox event.",
+          "payload": "POST /internal/orders HTTP/1.1\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\nX-Customer-Id: cus_19\nIdempotency-Key: 9b2e4c1a-…"
+        },
+        {
+          "from": "ilb",
           "to": "order_svc",
           "kind": "req",
           "phase": "Create order",
-          "label": "create order"
+          "label": "to a healthy instance",
+          "detail": "The internal load balancer spreads requests over the Order Service instances in all three zones and stops sending to any that fail health checks. A managed gateway scales itself; the fleet behind it still needs this."
         },
         {
           "from": "order_svc",
@@ -452,8 +573,8 @@
           "kind": "req",
           "phase": "Create order",
           "label": "INSERT order PENDING",
-          "detail": "A unique constraint on the idempotency key: a retry gets the existing order back instead of creating a second one.",
-          "payload": "INSERT INTO orders (id, idempotency_key, status, total)\nVALUES ('o_501', '9b2e4c1a-…', 'PENDING', 12900)\nON CONFLICT (idempotency_key) DO NOTHING RETURNING id;"
+          "detail": "A unique constraint on (customer, idempotency key): on a conflict the insert returns no row, so the service reads the existing order and returns its current state (201 if paid, 202 while still in progress) instead of creating a second one. A reused key with a different cart is rejected with 422.",
+          "payload": "INSERT INTO orders (id, customer_id, idempotency_key, cart_hash, status, total)\nVALUES ('o_501', 'cus_19', '9b2e4c1a-…', 'sha256:5d1e…', 'PENDING', 12900)\nON CONFLICT (customer_id, idempotency_key) DO NOTHING RETURNING id;"
         },
         {
           "from": "orders_db",
@@ -474,9 +595,9 @@
           "to": "inventory_db",
           "kind": "req",
           "phase": "Reserve stock",
-          "label": "conditional UPDATE",
-          "detail": "One atomic statement: it only succeeds while stock remains, so two buyers can never both get the last pair. No distributed lock needed.",
-          "payload": "UPDATE stock\nSET available = available - 1, reserved = reserved + 1\nWHERE sku = 'SHOE-42' AND available >= 1;"
+          "label": "reserve: conditional UPDATE",
+          "detail": "One short transaction: the decrement only succeeds while stock remains, so two buyers can never both get the last pair, and CHECK (available >= 0) backs it up. The reservation row is unique per order and SKU, so a retried reserve changes nothing. No distributed lock needed.",
+          "payload": "BEGIN;\nINSERT INTO reservations (order_id, sku, qty, status, expires_at)\nVALUES ('o_501', 'SHOE-42', 1, 'HELD', now() + interval '15 minutes')\nON CONFLICT (order_id, sku) DO NOTHING;  -- 0 rows: a retry, already reserved\nUPDATE stock SET available = available - 1, reserved = reserved + 1\nWHERE sku = 'SHOE-42' AND available >= 1;  -- 0 rows: sold out, ROLLBACK\nCOMMIT;"
         },
         {
           "from": "inventory_db",
@@ -484,7 +605,7 @@
           "kind": "res",
           "phase": "Reserve stock",
           "label": "1 row updated",
-          "detail": "Zero rows would mean sold out. Reservations expire after 15 minutes if the order never completes."
+          "detail": "Zero rows would mean sold out. The reservation is a hold, not a sale: it becomes a sale when the order is paid, or the sweeper releases it if the checkout is abandoned before payment."
         },
         {
           "from": "inventory_svc",
@@ -506,7 +627,7 @@
           "kind": "req",
           "phase": "Charge card",
           "label": "charge, key = o_501",
-          "detail": "If the provider times out, retry with the same key. The provider returns the original result rather than charging twice.",
+          "detail": "If the provider times out, retry with the same key: the provider returns the original result rather than charging twice. The call leaves through the NAT gateway with the API key from the secrets manager, and the provider's own fraud screening runs on the charge.",
           "payload": "POST /v1/payment_intents\nIdempotency-Key: o_501\n\n{ \"amount\": 12900, \"currency\": \"usd\", \"payment_method\": \"pm_visa\", \"confirm\": true }"
         },
         {
@@ -525,12 +646,43 @@
         },
         {
           "from": "order_svc",
+          "to": "inventory_svc",
+          "kind": "req",
+          "phase": "Confirm order",
+          "label": "commit reservation o_501",
+          "detail": "Turns the hold into a sale before the order is marked paid, so the sweeper can never put sold stock back on the shelf. If the service crashes here, the order is still PENDING and the sweeper finishes the job."
+        },
+        {
+          "from": "inventory_svc",
+          "to": "inventory_db",
+          "kind": "req",
+          "phase": "Confirm order",
+          "label": "UPDATE reservation COMMITTED",
+          "detail": "Conditional on HELD, so a retry changes nothing.",
+          "payload": "BEGIN;\nUPDATE reservations SET status = 'COMMITTED'\nWHERE order_id = 'o_501' AND status = 'HELD';  -- 0 rows: already committed, stop\nUPDATE stock SET reserved = reserved - 1 WHERE sku = 'SHOE-42';\nCOMMIT;"
+        },
+        {
+          "from": "inventory_db",
+          "to": "inventory_svc",
+          "kind": "res",
+          "phase": "Confirm order",
+          "label": "COMMIT"
+        },
+        {
+          "from": "inventory_svc",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Confirm order",
+          "label": "committed"
+        },
+        {
+          "from": "order_svc",
           "to": "orders_db",
           "kind": "req",
           "phase": "Confirm order",
           "label": "UPDATE PAID + INSERT outbox",
           "detail": "Transactional outbox: the status change and the OrderPaid event commit together. There is never a paid order without its event, or an event without the order.",
-          "payload": "BEGIN;\nUPDATE orders SET status = 'PAID' WHERE id = 'o_501';\nINSERT INTO outbox (topic, payload) VALUES ('orders', '{\"type\":\"OrderPaid\",\"id\":\"o_501\"}');\nCOMMIT;"
+          "payload": "BEGIN;\nUPDATE orders SET status = 'PAID' WHERE id = 'o_501' AND status = 'PENDING';\nINSERT INTO outbox (event_id, topic, key, payload, traceparent)\nVALUES ('ev_7c1', 'orders', 'o_501', '{\"type\":\"OrderPaid\",\"order_id\":\"o_501\"}', '00-4bf92f35…');\nCOMMIT;"
         },
         {
           "from": "orders_db",
@@ -541,6 +693,13 @@
         },
         {
           "from": "order_svc",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Response",
+          "label": "201 Created"
+        },
+        {
+          "from": "ilb",
           "to": "gw",
           "kind": "res",
           "phase": "Response",
@@ -555,6 +714,13 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Response",
+          "label": "Order confirmed"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Response",
@@ -581,7 +747,7 @@
           "kind": "async",
           "phase": "Events & email",
           "label": "publish OrderPaid",
-          "detail": "At-least-once: consumers deduplicate by event id."
+          "detail": "At least once: a crash after publishing but before marking the row sends the event again, so every consumer must tolerate duplicates, deduplicating by event id where a repeat would matter."
         },
         {
           "from": "events",
@@ -595,7 +761,8 @@
           "to": "email",
           "kind": "async",
           "phase": "Events & email",
-          "label": "send confirmation"
+          "label": "send confirmation",
+          "detail": "An occasional duplicate confirmation after a crash is tolerated, so the worker needs no dedupe store. An event that keeps failing goes to the dead-letter topic instead of blocking its partition."
         }
       ]
     },
@@ -606,10 +773,18 @@
       "steps": [
         {
           "from": "client",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /orders",
+          "detail": "Same path as a successful order: WAF, CDN (not cached), gateway, internal load balancer."
+        },
+        {
+          "from": "waf",
           "to": "cdn",
           "kind": "req",
           "phase": "Request in",
-          "label": "POST /orders"
+          "label": "allowed: forward"
         },
         {
           "from": "cdn",
@@ -620,10 +795,17 @@
         },
         {
           "from": "gw",
-          "to": "order_svc",
+          "to": "ilb",
           "kind": "req",
           "phase": "Request in",
           "label": "create order"
+        },
+        {
+          "from": "ilb",
+          "to": "order_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "to a healthy instance"
         },
         {
           "from": "order_svc",
@@ -708,8 +890,9 @@
           "to": "inventory_db",
           "kind": "req",
           "phase": "Roll back (saga)",
-          "label": "UPDATE available + 1",
-          "payload": "UPDATE stock SET available = available + 1, reserved = reserved - 1\nWHERE sku = 'SHOE-42';  -- guarded by reservation id"
+          "label": "release reservation",
+          "payload": "BEGIN;\nUPDATE reservations SET status = 'RELEASED'\nWHERE order_id = 'o_502' AND status = 'HELD';  -- 0 rows: already released, stop\nUPDATE stock SET available = available + 1, reserved = reserved - 1\nWHERE sku = 'SHOE-42';\nCOMMIT;",
+          "detail": "Guarded by the reservation row: stock goes back only if this call moved it from HELD to RELEASED."
         },
         {
           "from": "inventory_db",
@@ -742,6 +925,13 @@
         },
         {
           "from": "order_svc",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Response",
+          "label": "402 Payment Required"
+        },
+        {
+          "from": "ilb",
           "to": "gw",
           "kind": "res",
           "phase": "Response",
@@ -756,11 +946,191 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Response",
+          "label": "Card declined, try another"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Response",
           "label": "Card declined, try another",
           "detail": "The same cart can be retried with a new idempotency key."
+        }
+      ]
+    },
+    {
+      "id": "timeout",
+      "title": "Provider timeout, settled by the sweeper",
+      "summary": "The charge outcome is unknown, so the order stays PENDING with its stock held. The sweeper asks the provider again and finishes the order.",
+      "steps": [
+        {
+          "from": "order_svc",
+          "to": "payment_svc",
+          "kind": "req",
+          "phase": "Charge times out",
+          "label": "charge o_503",
+          "detail": "Order o_503 was created and its stock reserved exactly as in the main flow."
+        },
+        {
+          "from": "payment_svc",
+          "to": "psp",
+          "kind": "req",
+          "phase": "Charge times out",
+          "label": "charge, key = o_503",
+          "detail": "Two attempts with the same key and a short timeout. This path is rare, so it sits outside the 2 s p99, but the shopper still gets an answer within a few seconds."
+        },
+        {
+          "from": "psp",
+          "to": "payment_svc",
+          "kind": "res",
+          "phase": "Charge times out",
+          "label": "timeout (twice)",
+          "detail": "A timeout is not a decline: the provider may have charged the card and the answer was lost."
+        },
+        {
+          "from": "payment_svc",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Charge times out",
+          "label": "outcome unknown"
+        },
+        {
+          "from": "order_svc",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Respond pending",
+          "label": "202 Accepted, pending",
+          "detail": "Never fail an order whose charge might have succeeded, and never release its stock. The order stays PENDING."
+        },
+        {
+          "from": "ilb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond pending",
+          "label": "202"
+        },
+        {
+          "from": "gw",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond pending",
+          "label": "202"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond pending",
+          "label": "202"
+        },
+        {
+          "from": "waf",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond pending",
+          "label": "Confirming your payment…",
+          "detail": "The page polls GET /orders/o_503 (also uncached) until the order settles."
+        },
+        {
+          "from": "order_svc",
+          "to": "order_svc",
+          "kind": "local",
+          "phase": "Sweep",
+          "label": "every minute: sweep stuck orders",
+          "detail": "A background loop in every Order Service instance; no leader is needed because each claim below skips rows another instance holds. It also releases the reservations of orders older than 15 minutes whose charge never started (no payment attempt recorded)."
+        },
+        {
+          "from": "order_svc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Sweep",
+          "label": "claim PENDING > 2 min",
+          "detail": "Each instance takes a one-minute lease on a batch of old PENDING orders; SKIP LOCKED and the lease keep two instances off the same order, and every later step is idempotent anyway.",
+          "payload": "UPDATE orders SET sweep_lease_until = now() + interval '1 minute'\nWHERE id IN (\n  SELECT id FROM orders\n  WHERE status = 'PENDING' AND created_at < now() - interval '2 minutes'\n    AND (sweep_lease_until IS NULL OR sweep_lease_until < now())\n  ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED)\nRETURNING id;"
+        },
+        {
+          "from": "orders_db",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Sweep",
+          "label": "o_503"
+        },
+        {
+          "from": "order_svc",
+          "to": "payment_svc",
+          "kind": "req",
+          "phase": "Ask the provider",
+          "label": "resolve o_503"
+        },
+        {
+          "from": "payment_svc",
+          "to": "psp",
+          "kind": "req",
+          "phase": "Ask the provider",
+          "label": "repeat charge, key = o_503",
+          "detail": "Repeating the request with the same key is the safe question: if the first attempt charged, the provider replays that result; if it never arrived, the charge happens now, which is still what the order wants. Provider idempotency keys are kept for at least a day, far longer than this window."
+        },
+        {
+          "from": "psp",
+          "to": "payment_svc",
+          "kind": "res",
+          "phase": "Ask the provider",
+          "label": "succeeded (replayed)",
+          "detail": "Had it been declined, the order service would release the reservation and mark the order FAILED, as in the declined flow. While the provider stays unreachable the order simply stays PENDING."
+        },
+        {
+          "from": "payment_svc",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Ask the provider",
+          "label": "paid"
+        },
+        {
+          "from": "order_svc",
+          "to": "inventory_svc",
+          "kind": "req",
+          "phase": "Complete order",
+          "label": "commit reservation o_503"
+        },
+        {
+          "from": "inventory_svc",
+          "to": "inventory_db",
+          "kind": "req",
+          "phase": "Complete order",
+          "label": "UPDATE reservation COMMITTED",
+          "detail": "The reservation was never expired, because the sweeper does not release stock for an order whose charge has started."
+        },
+        {
+          "from": "inventory_db",
+          "to": "inventory_svc",
+          "kind": "res",
+          "phase": "Complete order",
+          "label": "COMMIT"
+        },
+        {
+          "from": "inventory_svc",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Complete order",
+          "label": "committed"
+        },
+        {
+          "from": "order_svc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Complete order",
+          "label": "UPDATE PAID + INSERT outbox",
+          "detail": "The same transaction as the main flow, so the OrderPaid event and the confirmation email follow as usual."
+        },
+        {
+          "from": "orders_db",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Complete order",
+          "label": "COMMIT"
         }
       ]
     }
@@ -778,24 +1148,29 @@
     {
       "target": "psp",
       "kind": "failure",
-      "text": "On a timeout the charge state is unknown. Retry with the same idempotency key; if still unknown, leave the order PENDING and let a reconciliation job query the provider."
+      "text": "On a timeout the charge state is unknown. Retry with the same idempotency key; if still unknown, answer 202 and leave the order PENDING with its stock held, and let the sweeper repeat the keyed request until the provider answers. During a provider outage a circuit breaker makes new checkouts fail fast instead of reserving stock they cannot pay for."
     },
     {
       "target": "inventory_db",
       "kind": "scaling",
-      "text": "A single hot SKU in a flash sale concentrates writes on one row. Split its stock into several buckets (rows) and reserve from any bucket with stock."
+      "text": "A single hot SKU in a flash sale concentrates writes on one row, which tops out at a few hundred to a few thousand updates a second. Split its stock into several buckets (rows) and reserve from any bucket with stock. Both databases keep every commit in more than one zone (Aurora writes its storage across three zones; Cloud SQL HA keeps a synchronous standby), so losing a zone costs a failover of about a minute but no committed order."
     },
     {
       "target": "events",
       "kind": "failure",
       "text": "Kafka replicates each partition across 3 zones; with one zone down it still has a majority of replicas and keeps accepting writes."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The WAF runs at the CDN edge: managed rule sets, bot control, and rate rules on POST /orders per IP, per account and per card fingerprint, because card testing (bots trying stolen cards with small orders) is the classic attack on a checkout. Card numbers never touch our servers: the browser tokenizes the card with the provider, and only the Payment Service can read the provider API key from the secrets manager."
     }
   ],
   "questions": [
     {
       "id": "double-charge",
       "q": "The shopper double-clicks \"Place order\". How do you avoid two orders and two charges?",
-      "a": "The client sends an idempotency key with the request, and the order service records the key with the order in the same transaction. A repeat with the same key returns the first result instead of creating a new order. The payment call reuses the key with the provider, so the card is charged once.",
+      "a": "The client sends an idempotency key with the request, and the order service stores it with the order under a unique constraint on (customer, key). A repeat with the same key returns the first order instead of creating a new one. The payment call uses the order id as the provider's idempotency key, so the card is charged once.",
       "topic": "reliability",
       "targets": [
         "client",
@@ -830,7 +1205,7 @@
     {
       "id": "oversell",
       "q": "Two shoppers buy the last item at the same time. How do you avoid overselling?",
-      "a": "Reserve stock with an atomic conditional update, such as decrementing only where quantity is greater than zero, and check that a row changed. Only one request wins. Reservations expire if payment never completes, so stock is not held forever.",
+      "a": "Reserve stock with an atomic conditional update that only decrements while stock is above zero, and check that a row changed; a CHECK constraint backs it up. Only one request wins. A reservation becomes a sale when the order is paid; a sweeper releases reservations of checkouts abandoned before payment, but never one whose charge is in flight.",
       "topic": "consistency",
       "targets": [
         "inventory_svc",
@@ -840,19 +1215,21 @@
     {
       "id": "psp-timeout",
       "q": "The payment provider times out. Do you retry, fail, or wait?",
-      "a": "The outcome is unknown, so retry with the same idempotency key, which is safe, or query the provider for the payment status. Mark the order payment pending meanwhile rather than failing it, and let the shopper see that state. A reconciliation job settles anything still pending.",
+      "a": "The outcome is unknown, so retry with the same idempotency key, which is safe. If it is still unknown, answer 202, keep the order PENDING with its stock held, and let a sweeper repeat the keyed request until the provider answers paid or declined. Never fail or release an order whose charge might have succeeded.",
       "topic": "reliability",
       "targets": [
         "payment_svc",
-        "psp"
+        "psp",
+        "order_svc"
       ]
     },
     {
       "id": "flash-sale",
       "q": "A flash sale sends 50 times the normal traffic at one product. What breaks first and what do you do?",
-      "a": "The single inventory row for that product becomes a hot spot. Rate limit at the gateway, queue buyers into a waiting room, and split stock into several counters (buckets) that are claimed independently. Keep browsing traffic on the CDN and caches so it does not compete with checkout.",
+      "a": "The single inventory row for that product becomes a hot spot. Rate limit at the WAF and gateway, hold buyers in a waiting room, and split stock into several counters (buckets) that are claimed independently. Keep browsing traffic on the CDN and caches so it does not compete with checkout.",
       "topic": "scale",
       "targets": [
+        "waf",
         "gw",
         "inventory_svc"
       ]
