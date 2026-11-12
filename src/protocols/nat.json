@@ -1,0 +1,805 @@
+{
+  "schema": "archstory/v1",
+  "id": "nat",
+  "meta": {
+    "title": "NAT",
+    "summary": "How a NAT gateway lets private hosts reach the internet through one public address: it rewrites addresses and ports on the way out, keeps a translation table to rewrite the replies on the way back, drops anything it has no entry for, and runs out of ports when too many connections go to one destination. Time model: the private hop to the gateway is short (0.1 of a one-way trip) and the internet hop long (0.9), so host to server and back is 1 RTT.",
+    "tags": [
+      "networking",
+      "address translation",
+      "cloud egress"
+    ],
+    "difficulty": "medium",
+    "source": "RFC 3022 (traditional NAT and NAPT), RFC 4787 (NAT behavior for UDP: mapping and filtering), RFC 5382 (NAT behavior for TCP: timeouts, unsolicited SYN), RFC 6146 (NAT64), RFC 6298 (retransmission timer), AWS VPC documentation for NAT gateways (55,000 connections per destination, 350 s idle timeout, ports 1024 to 65535, pricing)",
+    "kind": "protocol",
+    "order": 8
+  },
+  "requirements": {
+    "functional": [
+      "Lets hosts with private addresses (10.0.0.0/8 here) open connections to the internet through the gateway's public address",
+      "On the way out, rewrites the source address and port and records the pair in a translation table; on the way back, looks the reply up and rewrites the destination",
+      "Fixes the IP and TCP or UDP checksums after every rewrite, since both cover the addresses and ports (RFC 3022)",
+      "Drops inbound packets that match no table entry, so nobody on the internet can open a connection to a private host"
+    ],
+    "nonFunctional": [
+      "Entries expire when a connection is idle too long; a long-lived connection that sends nothing loses its entry and breaks on the next packet",
+      "A public address has about 64,000 usable source ports, and two connections to the same destination address, port and protocol need two different ports",
+      "NAT is not a firewall, but because unmatched inbound packets are dropped it behaves like one for unsolicited traffic",
+      "Cloud NAT gateways charge per hour and per gigabyte processed, so heavy egress through them is expensive"
+    ],
+    "scale": [
+      {
+        "label": "Time model here",
+        "value": "host to gateway 0.1, gateway to server 0.9 one-way trips: 1 RTT end to end"
+      },
+      {
+        "label": "Usable ports per public IP",
+        "value": "64,512 (1024 to 65535)"
+      },
+      {
+        "label": "AWS NAT gateway",
+        "value": "55,000 connections per IP per destination, up to 8 IPs"
+      },
+      {
+        "label": "TCP established idle timeout",
+        "value": "RFC 5382: at least 2 h 4 min; AWS NAT gateway: 350 s"
+      },
+      {
+        "label": "UDP mapping timer (RFC 4787)",
+        "value": "at least 2 min, 5 min or more recommended"
+      },
+      {
+        "label": "AWS price example (US East)",
+        "value": "$0.045 per hour plus $0.045 per GB processed"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "host",
+      "label": "Private host (10.0.1.10)",
+      "kind": "service",
+      "description": "An application server in a private subnet. It has only a private address, so its route to the internet points at the NAT gateway"
+    },
+    {
+      "id": "nat",
+      "label": "NAT gateway (203.0.113.10)",
+      "kind": "nat_gateway",
+      "icon": "🔁",
+      "description": "Sits in a public subnet with the public address 203.0.113.10 and keeps the translation table"
+    },
+    {
+      "id": "server",
+      "label": "Internet server (198.51.100.20)",
+      "kind": "external_api",
+      "description": "A public HTTPS API at 198.51.100.20:443 that the private host calls"
+    },
+    {
+      "id": "sender",
+      "label": "Unsolicited sender (192.0.2.99)",
+      "kind": "client",
+      "icon": "👾",
+      "description": "Some machine on the internet, a scanner or an attacker, that tries to reach the gateway's public address without being asked"
+    }
+  ],
+  "edges": [
+    {
+      "from": "host",
+      "to": "nat",
+      "label": "default route 0.0.0.0/0",
+      "protocol": "IP, private network"
+    },
+    {
+      "from": "nat",
+      "to": "server",
+      "label": "internet",
+      "protocol": "IP"
+    },
+    {
+      "from": "sender",
+      "to": "nat",
+      "label": "internet",
+      "protocol": "IP"
+    }
+  ],
+  "flows": [
+    {
+      "id": "outbound",
+      "title": "Outbound request and response",
+      "summary": "The host opens a TCP connection to the server. The gateway maps 10.0.1.10:41000 to 203.0.113.10:50000 on the way out, uses the same entry to send the replies back, and removes the entry after the connection has been idle too long.",
+      "steps": [
+        {
+          "from": "host",
+          "to": "host",
+          "kind": "local",
+          "phase": "Before",
+          "label": "connect() to 198.51.100.20:443",
+          "detail": "The application opens a TCP connection. The host picks an ephemeral source port, 41000, and its route table sends anything outside the VPC to the NAT gateway. The time model: the hop to the gateway costs 0.1 of a one-way trip and the internet hop 0.9, so a round trip from host to server is 1 RTT.",
+          "state": {
+            "host": "CLOSED",
+            "nat": "0 entries",
+            "server": "LISTEN"
+          },
+          "fields": [
+            {
+              "name": "socket",
+              "value": "10.0.1.10:41000 -> 198.51.100.20:443",
+              "note": "41000 is from the host's ephemeral port range"
+            }
+          ]
+        },
+        {
+          "from": "host",
+          "to": "nat",
+          "kind": "req",
+          "phase": "Out: rewrite the source",
+          "label": "SYN 10.0.1.10:41000",
+          "detail": "The SYN leaves with the host's private address as its source. That address means nothing on the internet: a reply to 10.0.1.10 could never find its way back, which is why the gateway must rewrite it.",
+          "state": {
+            "host": "SYN_SENT"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "10.0.1.10:41000",
+              "note": "Private (RFC 1918) address"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "protocol",
+              "value": "TCP, flags SYN"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "New entry: 41000 -> 50000",
+          "detail": "No entry exists for 10.0.1.10:41000, and this is an outbound SYN, so the gateway creates one. It picks a free public port, 50000, and records the mapping together with the remote end. RFC 5382 and RFC 4787 ask for endpoint-independent mapping: later packets from 10.0.1.10:41000 reuse 203.0.113.10:50000, whichever destination they go to.",
+          "state": {
+            "nat": "1 entry"
+          },
+          "fields": [
+            {
+              "name": "inside",
+              "value": "10.0.1.10:41000"
+            },
+            {
+              "name": "outside",
+              "value": "203.0.113.10:50000",
+              "note": "The gateway's public address and a free port"
+            },
+            {
+              "name": "remote",
+              "value": "198.51.100.20:443 TCP"
+            },
+            {
+              "name": "entry state",
+              "value": "SYN seen (transitory)",
+              "note": "RFC 5382: a transitory entry's idle timeout must be at least 4 minutes"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "server",
+          "kind": "req",
+          "label": "SYN 203.0.113.10:50000",
+          "detail": "The same SYN, with a new source address and port. Both the IP header checksum and the TCP checksum cover these fields, so the gateway adjusts them too. The server has no idea a private host exists.",
+          "state": {
+            "server": "SYN_RCVD"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "203.0.113.10:50000",
+              "note": "Rewritten from 10.0.1.10:41000"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443",
+              "note": "Unchanged"
+            },
+            {
+              "name": "checksums",
+              "value": "IP and TCP recomputed"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "server",
+          "to": "nat",
+          "kind": "res",
+          "phase": "Back: rewrite the destination",
+          "label": "SYN, ACK to :50000",
+          "detail": "The server answers the address it saw. The reply reaches the gateway at 0.95 RTT.",
+          "fields": [
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.10:50000"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "Lookup :50000 -> 10.0.1.10:41000",
+          "detail": "The gateway looks up the destination port 50000 and checks that the packet comes from the remote end recorded in the entry. It matches, so it rewrites the destination back to the private host.",
+          "fields": [
+            {
+              "name": "match",
+              "value": "203.0.113.10:50000 from 198.51.100.20:443 TCP"
+            },
+            {
+              "name": "rewrite dst to",
+              "value": "10.0.1.10:41000"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "host",
+          "kind": "res",
+          "label": "SYN, ACK to 10.0.1.10:41000",
+          "detail": "The host sees an ordinary SYN, ACK from 198.51.100.20:443 and is ESTABLISHED at 1 RTT, exactly as if there were no NAT. Neither end knows about the translation.",
+          "state": {
+            "host": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.1.10:41000",
+              "note": "Rewritten from 203.0.113.10:50000"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "host",
+          "to": "nat",
+          "kind": "req",
+          "phase": "Request and response",
+          "label": "ACK, then the request",
+          "detail": "The final ACK and the request (TLS and HTTP, simplified here into one message) use the same 5-tuple, so they use the same entry. Once the gateway sees the handshake complete, it treats the entry as established.",
+          "state": {
+            "nat": "1 established"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "10.0.1.10:41000"
+            },
+            {
+              "name": "entry",
+              "value": "41000 <-> 50000, established"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "nat",
+          "to": "server",
+          "kind": "req",
+          "label": "same, from :50000",
+          "detail": "The gateway rewrites the source exactly as it did for the SYN. The server's TCP sees the handshake finish and the request arrive at 1.5 RTT.",
+          "state": {
+            "server": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "203.0.113.10:50000"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "server",
+          "to": "nat",
+          "kind": "res",
+          "label": "response to :50000",
+          "fields": [
+            {
+              "name": "dst",
+              "value": "203.0.113.10:50000"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "nat",
+          "to": "host",
+          "kind": "res",
+          "label": "response to :41000",
+          "detail": "The response is back at 2 RTT, the same as without NAT: translation adds microseconds, not round trips.",
+          "fields": [
+            {
+              "name": "dst",
+              "value": "10.0.1.10:41000"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "phase": "Idle timeout",
+          "label": "Idle 350 s: entry removed",
+          "detail": "The application keeps the connection open but sends nothing. The gateway cannot tell an idle connection from an abandoned one, so it removes the entry after an idle timeout. RFC 5382 asks for at least 2 hours 4 minutes for an established TCP connection; the AWS NAT gateway uses 350 seconds. Neither end is told. Not to scale.",
+          "state": {
+            "nat": "0 entries"
+          },
+          "fields": [
+            {
+              "name": "idle timeout",
+              "value": "350 s (AWS NAT gateway)",
+              "note": "RFC 5382 REQ-5: at least 2 h 4 min for established TCP; cloud gateways are far shorter"
+            },
+            {
+              "name": "removed",
+              "value": "41000 <-> 50000"
+            }
+          ]
+        },
+        {
+          "from": "host",
+          "to": "nat",
+          "kind": "req",
+          "label": "data on the old connection",
+          "detail": "Later the host sends a request on what it thinks is a healthy connection. The gateway has no entry for it any more.",
+          "fields": [
+            {
+              "name": "src",
+              "value": "10.0.1.10:41000"
+            },
+            {
+              "name": "table",
+              "value": "no entry"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "nat",
+          "to": "host",
+          "kind": "res",
+          "label": "RST",
+          "detail": "The AWS NAT gateway answers a packet for a timed-out connection with a reset, so the host at least fails fast (other NATs may drop it, and then the host waits through retransmissions). The fix is a TCP keepalive or an application ping more often than the gateway's idle timeout, for example every 300 seconds here.",
+          "state": {
+            "host": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "RST"
+            },
+            {
+              "name": "fix",
+              "value": "keepalive below 350 s",
+              "note": "Linux's default TCP keepalive starts after 2 hours, far too late"
+            }
+          ],
+          "delay": 0.1
+        }
+      ]
+    },
+    {
+      "id": "unsolicited",
+      "title": "Unsolicited inbound is dropped",
+      "summary": "A machine on the internet sends packets to the gateway's public address. With no matching entry they go nowhere: a NAT only forwards inbound packets that answer something sent from inside.",
+      "steps": [
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "phase": "Before",
+          "label": "Table: one entry",
+          "detail": "The host from the first scenario has its connection to the API open, so the table holds one entry.",
+          "state": {
+            "nat": "1 entry"
+          },
+          "fields": [
+            {
+              "name": "entry",
+              "value": "10.0.1.10:41000 <-> 203.0.113.10:50000",
+              "note": "Remote end: 198.51.100.20:443 TCP"
+            }
+          ]
+        },
+        {
+          "from": "sender",
+          "to": "nat",
+          "kind": "req",
+          "phase": "No entry",
+          "label": "SYN to 203.0.113.10:50001",
+          "detail": "A scanner tries to open a connection to the gateway's public address on port 50001.",
+          "fields": [
+            {
+              "name": "src",
+              "value": "192.0.2.99:60123"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.10:50001"
+            },
+            {
+              "name": "flags",
+              "value": "SYN"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "No entry for :50001: drop",
+          "detail": "There is no entry for port 50001, so there is no private address to send it to: the gateway drops it. RFC 5382 says a NAT must not answer an unsolicited SYN for at least 6 seconds (so a simultaneous open from inside can still succeed) and may stay silent for good when its security policy says so (REQ-4a).",
+          "fields": [
+            {
+              "name": "lookup",
+              "value": "203.0.113.10:50001 TCP: no entry"
+            },
+            {
+              "name": "action",
+              "value": "drop",
+              "note": "RFC 5382 REQ-4: no reply for at least 6 s; then an ICMP Port Unreachable or silence"
+            }
+          ]
+        },
+        {
+          "from": "sender",
+          "to": "nat",
+          "kind": "req",
+          "phase": "Entry, wrong sender",
+          "label": "SYN to 203.0.113.10:50000",
+          "detail": "Now the scanner hits port 50000, which does have an entry, but one made for traffic with 198.51.100.20:443.",
+          "fields": [
+            {
+              "name": "src",
+              "value": "192.0.2.99:60123",
+              "note": "Not the remote end the entry was made for"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.10:50000"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "Entry is for 198.51.100.20: drop",
+          "detail": "This gateway filters by the remote end too (address and port-dependent filtering, in RFC 4787 terms): the host only ever sent to 198.51.100.20:443, so a packet from 192.0.2.99 is dropped. A NAT with endpoint-independent filtering would let it through to 10.0.1.10:41000; peer-to-peer hole punching relies on that, which is why RFC 4787 recommends it when application transparency matters most.",
+          "fields": [
+            {
+              "name": "entry remote",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "packet from",
+              "value": "192.0.2.99:60123"
+            },
+            {
+              "name": "filtering",
+              "value": "address and port-dependent: drop",
+              "note": "Endpoint-independent filtering would forward it"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "phase": "Allowing inbound",
+          "label": "Inbound needs a rule or a load balancer",
+          "detail": "NAT is not a firewall: it has no rules saying what is allowed, it just has nowhere to send unmatched packets. To accept inbound connections on purpose, a home router uses port forwarding, a static entry that always exists. Cloud NAT gateways are outbound only, so a public service sits behind a load balancer with a public address instead, and security groups remain the real firewall.",
+          "fields": [
+            {
+              "name": "port forwarding",
+              "value": "203.0.113.10:8443 -> 10.0.1.10:443",
+              "note": "A static entry, typical of home routers"
+            },
+            {
+              "name": "in the cloud",
+              "value": "public load balancer -> private targets",
+              "note": "The NAT gateway stays outbound only"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "exhaustion",
+      "title": "Port exhaustion",
+      "summary": "A fleet behind one public address holds 80,000 connections to the same API. Each needs its own public port for that destination, there are only about 64,000, and new connections fail until the gateway gets a second address or the fleet reuses connections.",
+      "steps": [
+        {
+          "from": "host",
+          "to": "host",
+          "kind": "local",
+          "phase": "Demand",
+          "label": "200 instances x 400 connections",
+          "detail": "Here the private host stands for a fleet: 200 instances, each with a pool of 400 connections to the same API at 198.51.100.20:443. That is 80,000 concurrent connections, all to one destination, all through one gateway address.",
+          "fields": [
+            {
+              "name": "instances",
+              "value": "200"
+            },
+            {
+              "name": "connections each",
+              "value": "400"
+            },
+            {
+              "name": "total",
+              "value": "80,000",
+              "note": "200 x 400"
+            },
+            {
+              "name": "destination",
+              "value": "198.51.100.20:443 TCP",
+              "note": "One destination address, port and protocol"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "Ports for one destination: 64,512",
+          "detail": "A reply is matched by its source (198.51.100.20:443), its destination (203.0.113.10 and a port) and the protocol. For one destination the only part that differs between connections is the gateway's port, so each connection needs its own. This gateway uses ports 1024 to 65535 (as the AWS NAT gateway does): 64,512 of them. To a different destination the same port can be used again, so the limit is per destination. In practice a gateway has a lower cap: AWS documents 55,000 simultaneous connections per address per destination.",
+          "state": {
+            "nat": "pool full"
+          },
+          "fields": [
+            {
+              "name": "port range",
+              "value": "1024 to 65535 = 64,512",
+              "note": "65535 - 1024 + 1: the range AWS documents; the well-known ports below 1024 are left out"
+            },
+            {
+              "name": "unique per",
+              "value": "destination IP, port, protocol"
+            },
+            {
+              "name": "in use",
+              "value": "64,512 of 64,512",
+              "note": "Approximate: AWS stops at 55,000 per destination"
+            },
+            {
+              "name": "still wanted",
+              "value": "80,000 - 64,512 = 15,488"
+            }
+          ]
+        },
+        {
+          "from": "host",
+          "to": "nat",
+          "kind": "req",
+          "phase": "Exhausted",
+          "label": "SYN, connection 64,513",
+          "detail": "One more instance opens one more connection to the same API.",
+          "fields": [
+            {
+              "name": "src",
+              "value": "10.0.1.10:41999"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "No free port: drop the SYN",
+          "detail": "There is no free port for this destination, so the gateway cannot translate the SYN and drops it. AWS counts these in the ErrorPortAllocation metric. Connections to other destinations still work, which makes this failure look random and service-specific.",
+          "fields": [
+            {
+              "name": "action",
+              "value": "drop"
+            },
+            {
+              "name": "metric (AWS)",
+              "value": "ErrorPortAllocation",
+              "note": "Alarm on it: it is the direct signal of this failure"
+            }
+          ]
+        },
+        {
+          "from": "host",
+          "to": "host",
+          "kind": "local",
+          "label": "SYN retries, then a timeout",
+          "detail": "The host hears nothing, so it resends the SYN after the initial retransmission timeout of 1 second (RFC 6298), doubling each time. The application sees slow connection timeouts, not a clear error.",
+          "fields": [
+            {
+              "name": "retries",
+              "value": "after 1 s, 2 s, 4 s ...",
+              "note": "RFC 6298 initial RTO of 1 s, doubled on each retry"
+            }
+          ]
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "phase": "Remedies",
+          "label": "Add a second address: 203.0.113.11",
+          "detail": "Each extra public address brings its own port range for the same destination. Two addresses give 129,024 ports to 198.51.100.20:443, enough for 80,000. AWS allows up to 8 addresses on one NAT gateway.",
+          "state": {
+            "nat": "2 public IPs"
+          },
+          "fields": [
+            {
+              "name": "addresses",
+              "value": "203.0.113.10, 203.0.113.11"
+            },
+            {
+              "name": "ports per destination",
+              "value": "2 x 64,512 = 129,024",
+              "note": "AWS: 2 x 55,000 = 110,000"
+            }
+          ]
+        },
+        {
+          "from": "host",
+          "to": "nat",
+          "kind": "req",
+          "label": "SYN (retry)",
+          "detail": "The host's next SYN retransmission arrives after the second address was added.",
+          "delay": 0.1
+        },
+        {
+          "from": "nat",
+          "to": "server",
+          "kind": "req",
+          "label": "SYN 203.0.113.11:1024",
+          "detail": "The gateway translates it with a port from the new address, and the connection goes through.",
+          "fields": [
+            {
+              "name": "src",
+              "value": "203.0.113.11:1024",
+              "note": "A port from the second address's range"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "host",
+          "to": "host",
+          "kind": "local",
+          "label": "Better: reuse fewer connections",
+          "detail": "More addresses treat the symptom. 400 connections per instance to one API is far more than needed when each carries many requests (HTTP keep-alive, or HTTP/2 with many streams on one connection). A pool of 50 per instance needs 10,000 ports. For the cloud provider's own services (object storage, queues), a VPC endpoint skips the NAT gateway entirely: no ports used and no per-GB processing charge.",
+          "fields": [
+            {
+              "name": "pool per instance",
+              "value": "50",
+              "note": "Example"
+            },
+            {
+              "name": "ports needed",
+              "value": "200 x 50 = 10,000"
+            },
+            {
+              "name": "VPC endpoint",
+              "value": "private route to cloud services",
+              "note": "Traffic never reaches the NAT gateway"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "nat",
+      "kind": "tradeoff",
+      "text": "Cloud NAT gateways charge by the hour and per gigabyte processed (AWS's US East example: $0.045 an hour and $0.045 per GB, on top of normal data transfer charges). A service that pulls container images, backups or object storage data through NAT can make it the most surprising line on the bill; VPC endpoints for the cloud's own services avoid the per-GB charge."
+    },
+    {
+      "target": "nat",
+      "kind": "failure",
+      "text": "A NAT gateway lives in one zone. If private subnets in every zone route through a single gateway, losing that zone cuts internet access for all of them, and cross-zone traffic costs extra; run one gateway per zone and route each zone's subnets to its own."
+    },
+    {
+      "target": "host",
+      "kind": "failure",
+      "text": "Long-lived idle connections (database pools, message brokers, push channels) silently lose their NAT entry after the idle timeout and fail on the next use. Set TCP keepalive or an application heartbeat below the gateway's timeout (350 s on AWS); the Linux default of 2 hours is far too long."
+    },
+    {
+      "target": "nat",
+      "kind": "security",
+      "text": "Dropping unmatched inbound packets hides private hosts from scans, but NAT is not a security boundary to rely on: it does nothing about outbound traffic, and a host that connects out to a malicious server gets that server's replies. Firewall rules and security groups are the real control."
+    },
+    {
+      "target": "server",
+      "kind": "scaling",
+      "text": "To the server, every host behind the gateway shares one address. Rate limits or allow lists keyed by IP treat the whole fleet as one client, and a partner that allow-lists your egress needs every gateway address, including ones added later for port capacity."
+    },
+    {
+      "kind": "note",
+      "text": "IPv6 does not need NAT: every host can have a globally unique address, and a stateful firewall (an egress-only internet gateway on AWS) gives the same outbound-only behavior without rewriting anything. NAT64 (RFC 6146) is a different tool: it lets IPv6-only hosts reach IPv4 servers."
+    }
+  ],
+  "questions": [
+    {
+      "id": "how-reply-finds-host",
+      "topic": "data",
+      "targets": [
+        "nat",
+        "host"
+      ],
+      "q": "The server sends its reply to 203.0.113.10. How does it reach 10.0.1.10?",
+      "a": "When the SYN left, the gateway recorded a translation entry: 10.0.1.10:41000 is 203.0.113.10:50000 for traffic with 198.51.100.20:443 over TCP. The reply arrives addressed to 203.0.113.10:50000 from that remote end, so the gateway finds the entry, rewrites the destination to 10.0.1.10:41000 and fixes the checksums. Without the entry it would have nowhere to send it."
+    },
+    {
+      "id": "port-math",
+      "topic": "scale",
+      "targets": [
+        "nat"
+      ],
+      "q": "Why can one public IP hold far more than 64,000 connections in total, but only about 64,000 to a single API?",
+      "a": "A returning packet is matched by the remote address and port, the gateway's address and port, and the protocol. For connections to different destinations the remote part already differs, so the same gateway port can be used again. For one destination address, port and protocol only the gateway's port differs, and there are 64,512 of them in the range 1024 to 65535 (AWS caps it at 55,000)."
+    },
+    {
+      "id": "exhaustion-fix",
+      "topic": "operations",
+      "targets": [
+        "nat",
+        "host"
+      ],
+      "q": "Calls to one third-party API time out intermittently while everything else works. You see ErrorPortAllocation on the NAT gateway. What do you do?",
+      "a": "The fleet has run out of gateway ports for that one destination. Short term, add public addresses to the gateway (each adds a full port range) or spread subnets over more gateways. Long term, reuse connections: right-size the pools, use keep-alive or HTTP/2, and close idle connections, because concurrent connections to one destination is what consumes ports."
+    },
+    {
+      "id": "idle-break",
+      "topic": "reliability",
+      "targets": [
+        "host",
+        "nat"
+      ],
+      "q": "A connection pool to an external database works all day but the first query after a quiet night fails with a reset. Why?",
+      "a": "The pooled connections sat idle longer than the NAT gateway's idle timeout (350 seconds on AWS), so the gateway removed their entries without telling either end. The next packet matched nothing and the gateway answered with a reset. Enable TCP keepalive or a pool validation query at an interval below the timeout, or make the pool evict connections idle longer than that."
+    },
+    {
+      "id": "nat-firewall",
+      "topic": "security",
+      "targets": [
+        "nat",
+        "sender"
+      ],
+      "q": "Is a NAT gateway a firewall?",
+      "a": "Not by design: it translates addresses, and it drops unsolicited inbound packets only because it has no entry telling it where they should go. That gives outbound-only behavior as a side effect, but it has no rules, does not filter outbound traffic and depends on its filtering behavior (endpoint-independent filtering lets any remote host reach an existing mapping). Use security groups or firewall rules for actual policy."
+    },
+    {
+      "id": "nat-cost",
+      "topic": "tradeoffs",
+      "targets": [
+        "nat"
+      ],
+      "q": "Your NAT gateway bill is larger than your compute bill. Where would you look?",
+      "a": "NAT gateways charge per GB processed, so look at which hosts and destinations send the most bytes through it, usually object storage, container registries or other cloud services. Gateway endpoints or interface endpoints keep that traffic off the NAT path, and caching images or artifacts inside the VPC cuts repeat downloads. Also check that each zone uses its own gateway, since crossing zones to reach one adds data transfer charges."
+    }
+  ]
+}

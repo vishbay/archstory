@@ -1,0 +1,787 @@
+{
+  "schema": "archstory/v1",
+  "id": "loadbalancing",
+  "meta": {
+    "title": "Load balancing: L4 vs L7",
+    "summary": "What a load balancer does with one connection at layer 4 (it forwards packets and never reads them) and at layer 7 (it ends TCP and TLS, reads HTTP and routes each request), and how it takes a failing backend out of rotation. Time model: 1 RTT is the round trip from the client to the load balancer; the hop from the load balancer to a backend is in the same zone and costs 0.1 of a one-way trip.",
+    "tags": [
+      "load balancing",
+      "proxy",
+      "health checks"
+    ],
+    "difficulty": "medium",
+    "source": "RFC 9293 (TCP), RFC 8446 (TLS 1.3), RFC 9110 (HTTP semantics, idempotent methods in section 9.2.2), RFC 7239 (Forwarded header), HAProxy PROXY protocol specification (version 2), NGINX proxy_next_upstream documentation, AWS Elastic Load Balancing documentation (deregistration delay)",
+    "kind": "protocol",
+    "order": 7
+  },
+  "requirements": {
+    "functional": [
+      "Spreads connections or requests over a pool of backends behind one address (a virtual IP, here 203.0.113.50)",
+      "Layer 4 (a network load balancer) picks a backend per connection from the packet headers and forwards every packet of that connection to it, without reading the payload",
+      "Layer 7 (an application load balancer) ends the client's TCP and TLS connection itself, reads each HTTP request and picks a backend per request by host, path or header",
+      "Health checks take a backend out of rotation when it fails several checks in a row; draining lets work already in flight finish before it is removed"
+    ],
+    "nonFunctional": [
+      "L4 is cheap per packet and protocol-agnostic (any TCP or UDP service), but it cannot route by path, retry a request or see the client's HTTP headers",
+      "With L4 the TLS session runs end to end, so the backend holds the certificate; with L7 the load balancer holds it and sees the plaintext",
+      "L7 pools connections to the backends, so many client connections become a few long-lived backend connections and backends skip a handshake per client",
+      "An L7 load balancer hides the client's address from the backend unless it adds X-Forwarded-For or Forwarded (RFC 7239); an L4 one either keeps the source address or carries it in a PROXY protocol header",
+      "A connection already open through an L4 balancer stays tied to its backend; an L7 balancer can send the next request on it somewhere else"
+    ],
+    "scale": [
+      {
+        "label": "Time model here",
+        "value": "client to LB: 1 RTT; LB to backend: 0.1 RTT (same zone)"
+      },
+      {
+        "label": "L4 decision",
+        "value": "once per connection, from the 5-tuple"
+      },
+      {
+        "label": "L7 decision",
+        "value": "once per HTTP request"
+      },
+      {
+        "label": "PROXY v2 header for IPv4 TCP",
+        "value": "28 bytes: 16 fixed + 12 address bytes"
+      },
+      {
+        "label": "Health check (example)",
+        "value": "every 10 s, out after 3 failures in a row"
+      },
+      {
+        "label": "Drain timeout",
+        "value": "AWS default deregistration delay: 300 s"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "A browser at 198.51.100.7 connecting to https://example.com, which resolves to the load balancer's address 203.0.113.50"
+    },
+    {
+      "id": "lb",
+      "label": "Load balancer",
+      "kind": "load_balancer",
+      "description": "Runs as an L4 network load balancer in the first scenario and as an L7 application load balancer in the others. Listens on 203.0.113.50:443"
+    },
+    {
+      "id": "a",
+      "label": "Server A",
+      "kind": "service",
+      "description": "Backend at 10.0.1.11 in the private network, serving the app on port 443 (L4) or 8080 (L7)"
+    },
+    {
+      "id": "b",
+      "label": "Server B",
+      "kind": "service",
+      "description": "Backend at 10.0.2.12, identical to Server A"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "TCP and TLS to the virtual IP",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "lb",
+      "to": "a",
+      "label": "forwarded packets (L4) or pooled connections (L7)",
+      "protocol": "TCP"
+    },
+    {
+      "from": "lb",
+      "to": "b",
+      "label": "forwarded packets (L4) or pooled connections (L7)",
+      "protocol": "TCP"
+    }
+  ],
+  "flows": [
+    {
+      "id": "l4",
+      "title": "L4: pass the connection through",
+      "summary": "A network load balancer hashes the connection's 5-tuple, picks Server A, and from then on forwards every packet of that connection to A. The handshakes and the encrypted request run end to end between the client and A.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Pick a backend",
+          "label": "SYN to 203.0.113.50:443",
+          "detail": "The client opens a TCP connection to the load balancer's virtual IP. The time model: 1 RTT is the round trip from the client to the load balancer, and the load balancer to a backend in the same zone costs 0.1 of a one-way trip each way. This SYN arrives after half a round trip.",
+          "state": {
+            "client": "SYN_SENT",
+            "lb": "no flow",
+            "a": "LISTEN",
+            "b": "LISTEN"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "198.51.100.7:51000",
+              "note": "The client's address and a random ephemeral port"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.50:443",
+              "note": "The virtual IP: the address DNS hands out for example.com"
+            },
+            {
+              "name": "flags",
+              "value": "SYN"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "hash(5-tuple) picks Server A",
+          "detail": "The load balancer reads only the IP and TCP headers. It hashes the 5-tuple, maps the hash to a healthy backend and writes a flow table entry, so every later packet with the same 5-tuple goes to the same backend without hashing again. It never sees the URL: the request has not even been sent yet, and when it is, it will be encrypted.",
+          "state": {
+            "lb": "flow -> A"
+          },
+          "fields": [
+            {
+              "name": "5-tuple",
+              "value": "TCP, 198.51.100.7:51000, 203.0.113.50:443",
+              "note": "Protocol, source address and port, destination address and port"
+            },
+            {
+              "name": "choice",
+              "value": "Server A (10.0.1.11)",
+              "note": "Illustrative: real balancers use consistent or flow hashing so adding a backend moves few flows"
+            },
+            {
+              "name": "flow table",
+              "value": "198.51.100.7:51000 -> A",
+              "note": "Kept until the connection closes or idles out"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "a",
+          "kind": "req",
+          "label": "SYN, source kept",
+          "detail": "The load balancer forwards the client's own SYN. It rewrites the destination to Server A but keeps the client's source address, so A sees the real client IP and answers through the load balancer. There is no second handshake: this is the client's handshake, passing through.",
+          "state": {
+            "a": "SYN_RCVD"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "198.51.100.7:51000",
+              "note": "Unchanged: client IP preservation"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.1.11:443",
+              "note": "Rewritten to Server A. Some L4 designs keep the virtual IP and let the backend answer the client directly (direct server return)"
+            },
+            {
+              "name": "flags",
+              "value": "SYN",
+              "note": "The same segment, same sequence number: the load balancer keeps no TCP state of its own"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "a",
+          "to": "lb",
+          "kind": "res",
+          "label": "SYN, ACK",
+          "detail": "Server A answers the client's SYN. The reply goes back through the load balancer, which rewrites the source back to the virtual IP so the client sees an answer from the address it called.",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "SYN, ACK from the VIP",
+          "detail": "The client is ESTABLISHED after 1.1 RTT: one round trip to the load balancer plus the short backend hop, because the handshake really is with Server A.",
+          "state": {
+            "client": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "src",
+              "value": "203.0.113.50:443",
+              "note": "Rewritten back to the virtual IP"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.7:51000"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "TLS end to end",
+          "label": "ACK, ClientHello",
+          "detail": "The client completes the handshake and starts TLS 1.3 at once. Same 5-tuple, so the flow table sends it to A."
+        },
+        {
+          "from": "lb",
+          "to": "a",
+          "kind": "req",
+          "label": "flow table: to A",
+          "detail": "A lookup, not a new decision. If this packet went to Server B instead, B would have no connection for it and would answer with a reset: that is why an L4 balancer must keep every packet of a connection on one backend.",
+          "state": {
+            "a": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "lookup",
+              "value": "198.51.100.7:51000 -> A"
+            },
+            {
+              "name": "PROXY v2 (if used)",
+              "value": "28 bytes before the ClientHello",
+              "note": "When the balancer does not keep the source address, it can prepend a PROXY protocol v2 header as the first bytes of the stream so A still learns the client's address and port"
+            },
+            {
+              "name": "v2 signature",
+              "value": "0D 0A 0D 0A 00 0D 0A 51 55 49 54 0A",
+              "note": "12 fixed bytes (\\r\\n\\r\\n\\0\\r\\nQUIT\\n), then 0x21 (version 2, PROXY), 0x11 (TCP over IPv4) and a 2-byte length of 12"
+            },
+            {
+              "name": "v2 addresses",
+              "value": "12 bytes",
+              "note": "Source and destination IPv4 (4 + 4) and ports (2 + 2); 16 + 12 = 28 bytes in all"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "a",
+          "to": "lb",
+          "kind": "res",
+          "label": "ServerHello ... Finished",
+          "detail": "Server A holds the certificate and private key for example.com and runs the TLS handshake itself. To the load balancer all of this is opaque bytes.",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "ServerHello ... Finished",
+          "detail": "TLS is end to end: the client verified Server A's certificate. The load balancer could not inspect or change the traffic even if it wanted to."
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request",
+          "label": "encrypted GET /api/cart",
+          "detail": "The request is encrypted inside TLS records. Its path, /api/cart, is invisible to the load balancer, so an L4 balancer cannot route /api to one pool and /images to another.",
+          "payload": "TLS application data (contains: GET /api/cart HTTP/1.1, Host: example.com)"
+        },
+        {
+          "from": "lb",
+          "to": "a",
+          "kind": "req",
+          "label": "same flow, to A",
+          "detail": "Every request on this connection goes to Server A for as long as the connection lives, however busy A is. One client connection is one backend connection.",
+          "delay": 0.1
+        },
+        {
+          "from": "a",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 OK, encrypted",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK, encrypted",
+          "detail": "The response is back at 3.3 RTT: three client round trips (TCP, TLS, request) and three short backend round trips, because every round trip of the handshake had to reach Server A. Why L4 is fast: per packet it does a table lookup and a header rewrite, no TCP stack, no TLS, no HTTP parsing."
+        }
+      ]
+    },
+    {
+      "id": "l7",
+      "title": "L7: terminate, read, route, retry",
+      "summary": "An application load balancer completes TCP and TLS with the client itself, reads the HTTP request, routes it by path over an already open backend connection, and retries an idempotent request on the other backend when the first one resets.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Handshakes end at the LB",
+          "label": "SYN",
+          "detail": "Same client, same virtual IP, but now the load balancer is a full proxy: it runs its own TCP stack and accepts the connection itself. It already holds idle keep-alive connections to both backends from earlier traffic (connection pooling).",
+          "state": {
+            "client": "SYN_SENT",
+            "lb": "SYN_RCVD",
+            "a": "pooled conn",
+            "b": "pooled conn"
+          }
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "SYN, ACK",
+          "detail": "The load balancer answers the SYN itself. No backend is involved yet, and none has been chosen.",
+          "state": {
+            "client": "ESTABLISHED"
+          }
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "label": "ACK, ClientHello",
+          "detail": "The ClientHello carries the server name (SNI) example.com, so a load balancer with many certificates picks the right one.",
+          "state": {
+            "lb": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "server_name",
+              "value": "example.com",
+              "note": "SNI: sent in the clear in the ClientHello"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "ServerHello ... Finished",
+          "detail": "The load balancer holds the certificate and private key, so this is where TLS terminates. Everything after this, it can decrypt and read."
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Route the request",
+          "label": "Finished, GET /api/cart",
+          "detail": "TLS 1.3 lets the client send its request right behind its Finished message, so the request reaches the load balancer at 2.5 RTT.",
+          "state": {
+            "lb": "TLS terminated"
+          },
+          "payload": "GET /api/cart HTTP/1.1\nHost: example.com\nCookie: session=<opaque>"
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "/api/* -> api pool: pick Server B",
+          "detail": "The load balancer decrypts and parses the request, then applies its rules in order: Host example.com, path prefix /api/ goes to the api pool. Within the pool it picks the backend with the fewest requests in flight. Rules could just as well match a header (canary: X-Canary: 1) or a cookie.",
+          "fields": [
+            {
+              "name": "Host",
+              "value": "example.com"
+            },
+            {
+              "name": "path",
+              "value": "/api/cart",
+              "note": "Matches the rule for /api/*"
+            },
+            {
+              "name": "algorithm",
+              "value": "least outstanding requests",
+              "note": "Example: A has 4 requests in flight, B has 1"
+            },
+            {
+              "name": "choice",
+              "value": "Server B"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "b",
+          "kind": "req",
+          "label": "GET /api/cart, pooled",
+          "detail": "A second, separate HTTP request on a connection the load balancer already had open to Server B: no TCP or TLS handshake to the backend. Many client connections share a few backend connections. The load balancer adds headers so B knows who the client really is, because at the TCP level B only sees the load balancer's address. This hop is plain HTTP inside the private network here; re-encrypting with TLS to the backend is a policy choice.",
+          "payload": "GET /api/cart HTTP/1.1\nHost: example.com\nX-Forwarded-For: 198.51.100.7\nX-Forwarded-Proto: https\nForwarded: for=198.51.100.7;proto=https;host=example.com",
+          "fields": [
+            {
+              "name": "TCP src",
+              "value": "10.0.0.5:40112",
+              "note": "The load balancer's own address: B never sees the client at the TCP level"
+            },
+            {
+              "name": "X-Forwarded-For",
+              "value": "198.51.100.7",
+              "note": "De facto standard; each proxy appends the address it received from"
+            },
+            {
+              "name": "Forwarded",
+              "value": "for=198.51.100.7;proto=https;host=example.com",
+              "note": "The standard form (RFC 7239). Trust it only when it was set by your own load balancer"
+            },
+            {
+              "name": "connection",
+              "value": "reused keep-alive, no handshake",
+              "note": "Connection pooling"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "b",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 OK",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK",
+          "detail": "The response is back at 3.1 RTT, quicker than the L4 path's 3.3: the handshakes only went as far as the load balancer, and the backend connection was already open. The price is CPU on the load balancer for TLS and HTTP parsing, and a second hop where things can fail."
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Backend reset, retry",
+          "label": "GET /api/stock",
+          "detail": "The next request reuses the client's keep-alive connection. The load balancer decides again for this request: a per-request choice, not per connection."
+        },
+        {
+          "from": "lb",
+          "to": "b",
+          "kind": "req",
+          "label": "GET /api/stock",
+          "detail": "B is still the least busy, so the request goes there.",
+          "delay": 0.1
+        },
+        {
+          "from": "b",
+          "to": "lb",
+          "kind": "res",
+          "label": "RST",
+          "detail": "Server B's process crashed while the request was on its way. B's kernel resets the pooled connection: no HTTP response came back.",
+          "state": {
+            "b": "reset"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "RST",
+              "note": "The connection is gone; the load balancer does not know whether the request was processed"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "GET is idempotent: retry on A",
+          "detail": "Because GET is idempotent (RFC 9110, section 9.2.2), sending it twice has the same effect as sending it once, so the load balancer can safely try another backend. A POST would not be retried by default: NGINX, for example, does not pass a POST, LOCK or PATCH to the next server once it was sent to one, because the first server may already have acted on it.",
+          "fields": [
+            {
+              "name": "method",
+              "value": "GET",
+              "note": "Idempotent methods: GET, HEAD, OPTIONS, TRACE, PUT, DELETE"
+            },
+            {
+              "name": "rule",
+              "value": "retry once, on a different backend",
+              "note": "Example policy; NGINX's default is proxy_next_upstream error timeout"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "a",
+          "kind": "req",
+          "label": "GET /api/stock (retry)",
+          "detail": "Sent on a pooled connection to Server A, with the same forwarding headers.",
+          "delay": 0.1
+        },
+        {
+          "from": "a",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 OK",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK",
+          "detail": "The client never saw the failure; it only waited 0.1 RTT longer, one extra round trip to a backend. An L4 balancer could not do this: it never sees requests, only packets, and the client's connection itself would have been broken."
+        }
+      ]
+    },
+    {
+      "id": "health",
+      "title": "Health check failure and draining",
+      "summary": "The load balancer probes each backend, takes Server B out of rotation after three failed checks in a row, lets requests already on B finish within a drain timeout, and sends all new work to Server A. The clock counts only message trips: the seconds between checks are not drawn.",
+      "steps": [
+        {
+          "from": "lb",
+          "to": "a",
+          "kind": "req",
+          "phase": "Health checks",
+          "label": "GET /healthz",
+          "detail": "Every 10 seconds (an example interval) the load balancer asks each backend for a cheap health page. A good check is fast and tests what the instance itself needs, not every downstream dependency, or one slow database takes every backend out at once.",
+          "state": {
+            "lb": "A, B in rotation",
+            "a": "healthy",
+            "b": "healthy"
+          },
+          "fields": [
+            {
+              "name": "interval",
+              "value": "10 s",
+              "note": "Example values; defaults differ between products"
+            },
+            {
+              "name": "timeout",
+              "value": "5 s"
+            },
+            {
+              "name": "unhealthy after",
+              "value": "3 failures in a row"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "a",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 OK",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "b",
+          "kind": "req",
+          "label": "GET /healthz",
+          "detail": "The same probe to Server B.",
+          "delay": 0.1
+        },
+        {
+          "from": "b",
+          "to": "lb",
+          "kind": "res",
+          "label": "503 Service Unavailable",
+          "detail": "B is in trouble (say its disk is full) and fails the check. One failure is not enough to act: a single slow answer or lost packet should not flap a backend in and out of rotation.",
+          "state": {
+            "b": "failing 1 of 3"
+          },
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "Checks 2 and 3 fail too: B is out",
+          "detail": "Twenty seconds later B has failed three checks in a row, so the load balancer marks it unhealthy and stops choosing it for new connections and requests. Detection took between 20 and 30 seconds with these settings: shorter intervals detect faster but cost more probes and risk false alarms.",
+          "state": {
+            "lb": "A only",
+            "b": "unhealthy"
+          },
+          "fields": [
+            {
+              "name": "failures",
+              "value": "3 of 3"
+            },
+            {
+              "name": "time to detect",
+              "value": "20 to 30 s",
+              "note": "Two more intervals after the first failure, plus however long B was sick before that check"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "Drain B: in-flight work may finish",
+          "detail": "Requests B is already working on are allowed to finish, up to a drain timeout (AWS calls it the deregistration delay, 300 seconds by default). The same mechanism is what makes a deploy safe: deregister an instance, wait for it to drain, then stop it.",
+          "state": {
+            "b": "draining"
+          },
+          "fields": [
+            {
+              "name": "drain timeout",
+              "value": "300 s",
+              "note": "AWS default deregistration delay; usually set close to the longest request you expect"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "lb",
+          "kind": "req",
+          "phase": "New work goes to A",
+          "label": "GET /api/cart",
+          "detail": "A new request arrives on the client's existing keep-alive connection to the load balancer. With L7, that connection ends at the load balancer, so nothing about it is tied to B."
+        },
+        {
+          "from": "lb",
+          "to": "a",
+          "kind": "req",
+          "label": "GET /api/cart",
+          "detail": "Only A is in rotation, so A gets it. A now carries all the traffic; this is why each backend pool needs headroom to lose one member.",
+          "delay": 0.1
+        },
+        {
+          "from": "a",
+          "to": "lb",
+          "kind": "res",
+          "label": "200 OK",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK"
+        },
+        {
+          "from": "b",
+          "to": "lb",
+          "kind": "res",
+          "phase": "B drains",
+          "label": "200 OK (in-flight request)",
+          "detail": "A slow request that B accepted before it was taken out finishes, and the answer still reaches its client through the load balancer. Draining is what lets it complete instead of being cut off.",
+          "delay": 0.1
+        },
+        {
+          "from": "lb",
+          "to": "client",
+          "kind": "res",
+          "label": "200 OK (older request)"
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "Drain timeout over: close B's conns",
+          "detail": "When the drain timeout ends, the load balancer closes whatever is left to B. Contrast L4: a client's TCP connection there is with B itself, pinned by the flow table. The balancer cannot move it to A, because A has no state for that connection; it can only keep forwarding to B or reset the connection, and the client has to reconnect, when the hash picks A. With L7 the client keeps its connection to the load balancer and never notices.",
+          "state": {
+            "b": "removed"
+          },
+          "fields": [
+            {
+              "name": "L7",
+              "value": "next request goes to A on the same client connection"
+            },
+            {
+              "name": "L4",
+              "value": "open connections stay on B until they end or are reset",
+              "note": "Clients must reconnect; the new connection hashes to a healthy backend"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "lb",
+      "kind": "tradeoff",
+      "text": "Sticky sessions (a cookie or a source-IP hash that keeps a user on one backend) let a backend keep session state in memory, but they spread load unevenly, defeat least-outstanding-requests balancing and lose every session on that backend when it dies. Keeping session state in a shared store makes every backend interchangeable."
+    },
+    {
+      "target": "lb",
+      "kind": "scaling",
+      "text": "Round robin assumes every request costs the same. When some are slow, least outstanding requests sends new work to the backend with the fewest requests in flight, which keeps a slow backend from piling up a queue. A new backend can get slow start: its share ramps up over a minute or so while its caches and JIT warm up."
+    },
+    {
+      "target": "lb",
+      "kind": "failure",
+      "text": "The load balancer must not be a single point of failure: managed ones run as many nodes across zones behind one name (DNS returns several addresses) or one anycast address. Cross-zone balancing evens out load when zones have different numbers of backends, but can add data transfer charges between zones."
+    },
+    {
+      "target": "client",
+      "kind": "failure",
+      "text": "Idle timeouts: the load balancer closes connections that send nothing for a while (60 seconds is a common default). Keep the backend's keep-alive timeout longer than the load balancer's idle timeout, or the backend can close a pooled connection just as the load balancer sends a request on it, which shows up as sporadic 502 errors."
+    },
+    {
+      "target": "a",
+      "kind": "security",
+      "text": "X-Forwarded-For can be forged by the client. A backend should trust only the entry added by its own load balancer (the rightmost one it appended) and accept traffic only from the load balancer's addresses, or anyone can claim to be any IP."
+    },
+    {
+      "target": "l4",
+      "kind": "note",
+      "text": "Simplification: the L4 scenario shows one segment per message and the NAT-style balancer that rewrites the destination address. Hash inputs vary by product, and some L4 balancers use direct server return so responses skip the balancer."
+    }
+  ],
+  "questions": [
+    {
+      "id": "l4-vs-l7",
+      "topic": "tradeoffs",
+      "targets": [
+        "lb"
+      ],
+      "q": "When would you choose an L4 load balancer over an L7 one?",
+      "a": "Choose L4 for non-HTTP protocols (databases, MQTT, game servers over UDP), for very high packet rates at low latency, and when TLS must stay end to end to the backend. Choose L7 when you need to route by host or path, retry requests, add headers, terminate TLS centrally or balance per request on long-lived HTTP/2 connections. Many systems use both: an L4 front door for raw scale and L7 proxies behind it."
+    },
+    {
+      "id": "why-flow-table",
+      "topic": "reliability",
+      "targets": [
+        "lb",
+        "a",
+        "b"
+      ],
+      "q": "Why must an L4 load balancer send every packet of a connection to the same backend?",
+      "a": "The TCP connection state (sequence numbers, windows, the TLS session) lives only on the backend that took the SYN. A packet sent to another backend arrives for a connection that backend has never seen, so it answers with a reset and the client's connection breaks. Hashing the 5-tuple and keeping a flow table pins each connection to one backend."
+    },
+    {
+      "id": "client-ip",
+      "topic": "data",
+      "targets": [
+        "lb",
+        "a"
+      ],
+      "q": "How does a backend learn the client's IP address behind an L4 and behind an L7 load balancer?",
+      "a": "Behind L4 the balancer can keep the client's source address on the forwarded packets; if it rewrites it, it can prepend a PROXY protocol header (version 2 is a 28-byte binary header for IPv4 TCP) at the start of the connection. Behind L7 the backend's TCP peer is the load balancer, so the client address travels in X-Forwarded-For or the standard Forwarded header. Either way the backend must only trust it from its own load balancer."
+    },
+    {
+      "id": "retry-post",
+      "topic": "consistency",
+      "targets": [
+        "lb"
+      ],
+      "q": "The load balancer retries a request when a backend resets the connection. Why is that safe for a GET but not for a POST?",
+      "a": "A reset after the request was sent leaves the load balancer unsure whether the backend acted on it. Repeating an idempotent method such as GET or PUT has the same effect as sending it once, so a retry is safe. A POST might have charged a card already; retrying it could do it twice, so proxies do not retry it by default unless the API makes it idempotent, for example with an idempotency key."
+    },
+    {
+      "id": "deploy-drain",
+      "topic": "operations",
+      "targets": [
+        "lb",
+        "b"
+      ],
+      "q": "How do you deploy a new version without failing requests behind a load balancer?",
+      "a": "Deregister a batch of instances so the load balancer stops sending them new work, wait out the drain timeout so in-flight requests finish, then stop and replace them and register the new ones once their health checks pass. The drain timeout should cover your longest normal request, and the pool needs spare capacity while some instances are out. Long-lived connections such as WebSockets need the server to ask clients to reconnect, because they may never finish on their own."
+    },
+    {
+      "id": "health-check-design",
+      "topic": "reliability",
+      "targets": [
+        "lb",
+        "a",
+        "b"
+      ],
+      "q": "Your health check queries the database. During a database slowdown every backend is marked unhealthy. What went wrong?",
+      "a": "The check tested a shared dependency, so one database problem failed every backend at once and the load balancer had nothing left to send traffic to. A liveness-style check should test only what the instance itself controls (the process is up and can serve), and dependency problems should be handled with timeouts and errors in the request path. Some load balancers also fail open: if every backend is unhealthy, they send traffic to all of them anyway."
+    }
+  ]
+}

@@ -1,0 +1,946 @@
+{
+  "schema": "archstory/v1",
+  "id": "oauth",
+  "meta": {
+    "title": "OAuth 2.0 and OpenID Connect",
+    "summary": "How a browser app signs a user in and calls an API on their behalf: the authorization code flow with PKCE and an ID token, how the API validates a JWT access token, and what happens when a token expires or is stolen. Time model: every message is one one-way trip, with 1 RTT to the authorization server and 1 RTT to the API; the time the user spends typing is not counted.",
+    "tags": [
+      "security",
+      "authorization",
+      "tokens"
+    ],
+    "difficulty": "hard",
+    "source": "RFC 6749 (OAuth 2.0), RFC 6750 (bearer tokens), RFC 7636 (PKCE), RFC 7519 (JWT), RFC 7515 (JWS), RFC 7517 (JWK), RFC 8725 (JWT best current practices), RFC 9068 (JWT access tokens), RFC 8252 (native apps), RFC 9700 (OAuth 2.0 security best current practice), OpenID Connect Core 1.0",
+    "kind": "protocol",
+    "order": 9
+  },
+  "requirements": {
+    "functional": [
+      "The user signs in at the authorization server, never in the app, and the app gets tokens instead of the password",
+      "The authorization code flow returns a short-lived one-time code through the browser, and the app swaps it for tokens in a direct request",
+      "PKCE binds the code to the app instance that asked for it: only the holder of the code_verifier can redeem it",
+      "OpenID Connect adds an ID token, a signed statement for the app about who logged in; the access token is for the API",
+      "The API validates a JWT access token locally with the issuer's public key, then checks issuer, audience, expiry and scope"
+    ],
+    "nonFunctional": [
+      "A browser app is a public client: it cannot keep a secret, so it has no client secret and PKCE is what protects the code (RFC 9700 requires PKCE for public clients)",
+      "Access tokens are short-lived because a self-contained JWT cannot be revoked before it expires",
+      "Refresh tokens for public clients must be sender-constrained or rotated on every use (RFC 9700), so a stolen one is detected when it is used twice",
+      "Redirect URIs are compared by exact string match, so a code can only be delivered to a registered address"
+    ],
+    "scale": [
+      {
+        "label": "Login with PKCE",
+        "value": "4 RTT here from redirect to first API answer, plus the user's typing"
+      },
+      {
+        "label": "code_verifier",
+        "value": "43 to 128 characters; 32 random bytes in base64url = 43"
+      },
+      {
+        "label": "Authorization code lifetime",
+        "value": "single use, 10 minutes at most recommended (RFC 6749)"
+      },
+      {
+        "label": "Access token lifetime (example)",
+        "value": "900 s (15 minutes)"
+      },
+      {
+        "label": "JWKS cache",
+        "value": "fetched once, refreshed on an unknown kid"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "app",
+      "label": "Browser app",
+      "kind": "web_client",
+      "description": "A single-page app served from https://app.example.com with client_id photo-app. A public client: all its code runs in the user's browser, so it can hold no secret"
+    },
+    {
+      "id": "user",
+      "label": "User",
+      "kind": "client",
+      "icon": "🧑",
+      "description": "The person, at the authorization server's login page in the same browser tab"
+    },
+    {
+      "id": "as",
+      "label": "Authorization server",
+      "kind": "auth",
+      "description": "The identity provider at https://id.example.com: logs the user in, asks for consent and issues codes and tokens. Its keys sign the tokens"
+    },
+    {
+      "id": "api",
+      "label": "API",
+      "kind": "service",
+      "description": "The resource server at https://api.example.com. It accepts access tokens issued for it and checks them on every request"
+    },
+    {
+      "id": "attacker",
+      "label": "Attacker",
+      "kind": "client",
+      "icon": "🕵️",
+      "description": "Someone who got hold of a code or a refresh token: from browser history, a log, a Referer header, a malicious extension or, on mobile, an app that claims the same redirect URI"
+    }
+  ],
+  "edges": [
+    {
+      "from": "app",
+      "to": "as",
+      "label": "redirects (front channel) and the token endpoint",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "user",
+      "to": "as",
+      "label": "login and consent pages",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "app",
+      "to": "api",
+      "label": "API calls with a bearer token",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "api",
+      "to": "as",
+      "label": "JWKS (public keys)",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "attacker",
+      "to": "as",
+      "label": "token endpoint",
+      "protocol": "HTTPS"
+    }
+  ],
+  "flows": [
+    {
+      "id": "login",
+      "title": "Authorization code with PKCE and an ID token",
+      "summary": "The app sends the user to the authorization server with a code_challenge, gets a code back through the redirect, redeems it with the code_verifier for an access token, an ID token and a refresh token, and calls the API.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "app",
+          "kind": "local",
+          "phase": "Prepare",
+          "label": "Make code_verifier, state, nonce",
+          "detail": "Before redirecting, the app makes three random values and keeps them in sessionStorage, because the page is about to be unloaded by the redirect. The code_verifier stays secret; only its SHA-256 hash, the code_challenge, will travel in the URL. The time model: each message is a one-way trip, 1 RTT to the authorization server or the API, and the user's typing is not counted.",
+          "state": {
+            "app": "signed out",
+            "as": "no session"
+          },
+          "fields": [
+            {
+              "name": "code_verifier",
+              "value": "<43 characters: 32 random bytes in base64url>",
+              "note": "RFC 7636: 43 to 128 characters from A-Z, a-z, 0-9, '-', '.', '_', '~'"
+            },
+            {
+              "name": "code_challenge",
+              "value": "<43 characters>",
+              "note": "BASE64URL(SHA-256(code_verifier)), without padding: a 32-byte hash is 43 characters"
+            },
+            {
+              "name": "state",
+              "value": "<random>",
+              "note": "Ties the answer to this request: protects the redirect back against cross-site request forgery"
+            },
+            {
+              "name": "nonce",
+              "value": "<random>",
+              "note": "OpenID Connect: comes back inside the ID token, so a replayed ID token is caught"
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "as",
+          "kind": "req",
+          "phase": "Front channel: authorize",
+          "label": "GET /authorize?response_type=code",
+          "detail": "The app sends the whole browser tab to the authorization endpoint. Everything here travels in the URL, which ends up in browser history and logs, so it carries nothing secret: the challenge, not the verifier.",
+          "state": {
+            "app": "redirected"
+          },
+          "payload": "GET /authorize?response_type=code&client_id=photo-app\n  &redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback\n  &scope=openid%20profile%20photos.read&state=<random>&nonce=<random>\n  &code_challenge=<43 characters>&code_challenge_method=S256\nHost: id.example.com",
+          "fields": [
+            {
+              "name": "response_type",
+              "value": "code",
+              "note": "The authorization code flow. 'token' (the implicit flow) should not be used (RFC 9700)"
+            },
+            {
+              "name": "client_id",
+              "value": "photo-app"
+            },
+            {
+              "name": "redirect_uri",
+              "value": "https://app.example.com/callback",
+              "note": "Must match a registered URI exactly, character for character"
+            },
+            {
+              "name": "scope",
+              "value": "openid profile photos.read",
+              "note": "openid makes this an OpenID Connect request; photos.read is an API permission added for this example"
+            },
+            {
+              "name": "state",
+              "value": "<random>"
+            },
+            {
+              "name": "nonce",
+              "value": "<random>"
+            },
+            {
+              "name": "code_challenge",
+              "value": "<43 characters>"
+            },
+            {
+              "name": "code_challenge_method",
+              "value": "S256",
+              "note": "SHA-256. 'plain' would put the verifier itself in the URL"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "user",
+          "kind": "res",
+          "phase": "The user signs in",
+          "label": "login page",
+          "detail": "The authorization server checks client_id and redirect_uri against the registration, stores the code_challenge, and shows its own login page. The password goes to the identity provider only; the app never sees it.",
+          "state": {
+            "user": "logging in"
+          }
+        },
+        {
+          "from": "user",
+          "to": "as",
+          "kind": "req",
+          "label": "credentials, consent",
+          "detail": "The user signs in (password, passkey, a second factor) and agrees that photo-app may read their profile and photos. The authorization server starts its own session, so the next login from this browser can skip the password.",
+          "state": {
+            "user": "consented",
+            "as": "user session"
+          },
+          "fields": [
+            {
+              "name": "authentication",
+              "value": "password + second factor",
+              "note": "Whatever the identity provider requires; invisible to the app"
+            },
+            {
+              "name": "consent",
+              "value": "profile, photos.read"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "app",
+          "kind": "res",
+          "label": "302 to /callback?code&state",
+          "detail": "The authorization server redirects the browser back to the registered redirect URI with a one-time code and the same state. The code is not a token: it is useless without the code_verifier, which never left the app.",
+          "state": {
+            "app": "code received"
+          },
+          "payload": "HTTP/1.1 302 Found\nLocation: https://app.example.com/callback?code=<one-time code>&state=<same random>",
+          "fields": [
+            {
+              "name": "code",
+              "value": "<one-time code>",
+              "note": "Single use; RFC 6749 recommends a lifetime of 10 minutes at most"
+            },
+            {
+              "name": "state",
+              "value": "<same random>",
+              "note": "Echoed unchanged"
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "app",
+          "kind": "local",
+          "label": "state matches the saved one",
+          "detail": "The app compares the returned state with the one in sessionStorage. A mismatch means this callback was not started by this app (for example, an attacker's link trying to log the user in to the attacker's account), and the app stops.",
+          "fields": [
+            {
+              "name": "check",
+              "value": "returned state == saved state"
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "as",
+          "kind": "req",
+          "phase": "Back channel: tokens",
+          "label": "POST /token with code_verifier",
+          "detail": "The app redeems the code in a direct HTTPS request (a cross-origin fetch the authorization server allows). It sends the code_verifier, proving it is the same instance that sent the challenge. No client secret: a browser app cannot keep one.",
+          "payload": "POST /token HTTP/1.1\nHost: id.example.com\nContent-Type: application/x-www-form-urlencoded\n\ngrant_type=authorization_code&code=<one-time code>\n&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback\n&client_id=photo-app&code_verifier=<43 characters>",
+          "fields": [
+            {
+              "name": "grant_type",
+              "value": "authorization_code"
+            },
+            {
+              "name": "code",
+              "value": "<one-time code>"
+            },
+            {
+              "name": "redirect_uri",
+              "value": "https://app.example.com/callback",
+              "note": "Must equal the one in the authorization request"
+            },
+            {
+              "name": "client_id",
+              "value": "photo-app"
+            },
+            {
+              "name": "code_verifier",
+              "value": "<43 characters>",
+              "note": "The secret half of PKCE, sent only here, in a request body over TLS"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "as",
+          "kind": "local",
+          "label": "BASE64URL(SHA-256(verifier)) == challenge",
+          "detail": "The authorization server hashes the verifier and compares it with the challenge it stored, and checks that the code is unused, unexpired, issued to photo-app and for this redirect_uri. Then it marks the code as used.",
+          "fields": [
+            {
+              "name": "PKCE",
+              "value": "S256(code_verifier) == code_challenge"
+            },
+            {
+              "name": "code",
+              "value": "unused, unexpired, for photo-app",
+              "note": "Now marked used"
+            },
+            {
+              "name": "redirect_uri",
+              "value": "same as in /authorize"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "app",
+          "kind": "res",
+          "label": "200 access, ID, refresh tokens",
+          "detail": "Three tokens with three jobs. The access token is for the API and the app treats it as opaque. The ID token is for the app: who logged in, when, at which provider. The refresh token gets new access tokens without sending the user back to the login page.",
+          "payload": "HTTP/1.1 200 OK\nContent-Type: application/json\nCache-Control: no-store\n\n{\"access_token\":\"<JWT>\",\"token_type\":\"Bearer\",\"expires_in\":900,\n \"refresh_token\":\"<opaque>\",\"id_token\":\"<JWT>\",\"scope\":\"openid profile photos.read\"}",
+          "fields": [
+            {
+              "name": "access_token",
+              "value": "<JWT, audience https://api.example.com>",
+              "note": "For the API. Here a JWT (RFC 9068); it could just as well be opaque"
+            },
+            {
+              "name": "token_type",
+              "value": "Bearer",
+              "note": "Whoever holds it can use it (RFC 6750)"
+            },
+            {
+              "name": "expires_in",
+              "value": "900",
+              "note": "Seconds: 15 minutes"
+            },
+            {
+              "name": "id_token",
+              "value": "<JWT, audience photo-app>",
+              "note": "For the app only: identity, never sent to the API"
+            },
+            {
+              "name": "refresh_token",
+              "value": "<opaque, RT1>",
+              "note": "Rotated on every use"
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "app",
+          "kind": "local",
+          "label": "Validate the ID token, check nonce",
+          "detail": "The app checks the ID token's signature, that iss is https://id.example.com, that aud contains photo-app, that it has not expired, and that its nonce equals the one it saved. Now the app knows who the user is.",
+          "state": {
+            "app": "signed in"
+          },
+          "fields": [
+            {
+              "name": "iss",
+              "value": "https://id.example.com"
+            },
+            {
+              "name": "aud",
+              "value": "photo-app",
+              "note": "The app's own client_id"
+            },
+            {
+              "name": "sub",
+              "value": "user-8472",
+              "note": "The user's stable id at this provider"
+            },
+            {
+              "name": "nonce",
+              "value": "<same random>",
+              "note": "Must equal the saved nonce"
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "api",
+          "kind": "req",
+          "phase": "Use the access token",
+          "label": "GET /photos, Bearer",
+          "detail": "The app sends the access token in the Authorization header (RFC 6750), never in the URL. The first API answer arrives 4 RTT after the redirect, not counting the time the user spent typing.",
+          "payload": "GET /photos HTTP/1.1\nHost: api.example.com\nAuthorization: Bearer <JWT>",
+          "fields": [
+            {
+              "name": "Authorization",
+              "value": "Bearer <access token>"
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "app",
+          "kind": "res",
+          "label": "200 OK",
+          "detail": "The API validated the token (the next scenario shows how) and returns the user's photos."
+        }
+      ]
+    },
+    {
+      "id": "validate",
+      "title": "Validating a JWT at the API",
+      "summary": "The API takes the token apart, finds the signing key by its kid in the issuer's JWKS, verifies the signature, then checks issuer, audience, time and scope before it serves the request.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "api",
+          "kind": "req",
+          "phase": "Read the token",
+          "label": "GET /photos, Bearer <JWT>",
+          "detail": "A JWT is three base64url parts joined by dots: header, payload (the claims) and signature. Anyone can decode the first two; the signature is what makes them trustworthy.",
+          "state": {
+            "api": "unverified"
+          },
+          "fields": [
+            {
+              "name": "header (encoded)",
+              "value": "eyJhbGciOiJSUzI1NiIsInR5cCI6ImF0K2p3dCIsImtpZCI6IjIwMjYtMTEtYSJ9",
+              "note": "base64url of the JSON below"
+            },
+            {
+              "name": "header",
+              "value": "{\"alg\":\"RS256\",\"typ\":\"at+jwt\",\"kid\":\"2026-11-a\"}",
+              "note": "alg: RSA signature with SHA-256; typ at+jwt marks an access token (RFC 9068); kid names the signing key"
+            },
+            {
+              "name": "iss",
+              "value": "https://id.example.com",
+              "note": "Who issued it"
+            },
+            {
+              "name": "sub",
+              "value": "user-8472",
+              "note": "Whom it is about"
+            },
+            {
+              "name": "aud",
+              "value": "https://api.example.com",
+              "note": "Whom it is for: this API"
+            },
+            {
+              "name": "client_id",
+              "value": "photo-app"
+            },
+            {
+              "name": "iat",
+              "value": "1794474000",
+              "note": "Issued at 2026-11-12 09:00:00 UTC (seconds since 1970)"
+            },
+            {
+              "name": "exp",
+              "value": "1794474900",
+              "note": "iat + 900: the token's 15 minutes"
+            },
+            {
+              "name": "scope",
+              "value": "openid profile photos.read"
+            },
+            {
+              "name": "signature",
+              "value": "<256 bytes, RS256 over header.payload>",
+              "note": "Placeholder: an RSA-2048 signature is 256 bytes"
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "api",
+          "kind": "local",
+          "label": "alg must be RS256: reject none",
+          "detail": "The API decides which algorithms it accepts; it does not let the token decide. 'alg: none' (an unsigned token) is rejected. So is algorithm confusion: an attacker switches alg to HS256 and signs with the issuer's public key as an HMAC secret, which a library that trusts the header would accept (RFC 8725).",
+          "fields": [
+            {
+              "name": "allowed",
+              "value": "RS256 only",
+              "note": "Configured per issuer, never taken from the token"
+            },
+            {
+              "name": "rejected",
+              "value": "none, HS256, anything else"
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "as",
+          "kind": "req",
+          "phase": "Find the key",
+          "label": "GET jwks_uri",
+          "detail": "The API needs the issuer's public key for kid 2026-11-a. It finds the jwks_uri in the issuer's discovery document (/.well-known/openid-configuration) and fetches the key set. This happens once: the keys are cached and fetched again only when a token arrives with an unknown kid, which is how key rotation works.",
+          "payload": "GET /.well-known/jwks.json HTTP/1.1\nHost: id.example.com",
+          "fields": [
+            {
+              "name": "cache",
+              "value": "miss (first token after start)",
+              "note": "Afterwards a hit: no call to the issuer per request"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "api",
+          "kind": "res",
+          "label": "JWKS: public keys by kid",
+          "detail": "A JSON Web Key Set (RFC 7517): public keys only, safe to publish. During a rotation it holds both the old and the new key.",
+          "payload": "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"2026-11-a\",\"use\":\"sig\",\"alg\":\"RS256\",\n  \"n\":\"<256-byte modulus, base64url>\",\"e\":\"AQAB\"}]}",
+          "fields": [
+            {
+              "name": "kid",
+              "value": "2026-11-a",
+              "note": "Matches the token header"
+            },
+            {
+              "name": "kty, alg",
+              "value": "RSA, RS256"
+            },
+            {
+              "name": "e",
+              "value": "AQAB",
+              "note": "base64url of the bytes 01 00 01: the usual RSA exponent 65537"
+            },
+            {
+              "name": "n",
+              "value": "<256-byte modulus>",
+              "note": "Placeholder"
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "api",
+          "kind": "local",
+          "phase": "Check",
+          "label": "Verify signature, kid 2026-11-a",
+          "detail": "The API verifies the RS256 signature over the first two parts with the public key. If it holds, the header and claims are exactly what the issuer signed. Only the issuer has the private key, so nobody else can mint or edit a token.",
+          "state": {
+            "api": "signature OK"
+          }
+        },
+        {
+          "from": "api",
+          "to": "api",
+          "kind": "local",
+          "label": "iss, aud, exp, nbf: OK",
+          "detail": "A valid signature only says who wrote the token. The API still checks that iss is the issuer it trusts, that aud is this API (a token minted for another service, or an ID token, is refused), and that the current time is before exp and not before nbf if present, allowing a small clock skew.",
+          "fields": [
+            {
+              "name": "iss",
+              "value": "== https://id.example.com"
+            },
+            {
+              "name": "aud",
+              "value": "== https://api.example.com",
+              "note": "An ID token has aud photo-app and fails here"
+            },
+            {
+              "name": "exp",
+              "value": "now < 1794474900",
+              "note": "Allowing a skew of a minute or so"
+            },
+            {
+              "name": "nbf",
+              "value": "absent here; checked when present"
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "api",
+          "kind": "local",
+          "label": "scope has photos.read",
+          "detail": "Authorization comes last: does this token allow this operation? GET /photos needs photos.read. A missing scope gets 403 with error=\"insufficient_scope\" (RFC 6750), not 401: the token is fine, it just does not allow this.",
+          "state": {
+            "api": "authorized"
+          },
+          "fields": [
+            {
+              "name": "needed",
+              "value": "photos.read"
+            },
+            {
+              "name": "if missing",
+              "value": "403, error=\"insufficient_scope\""
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "app",
+          "kind": "res",
+          "label": "200 OK",
+          "detail": "All of this happened inside the API with no call to the issuer (after the first JWKS fetch). That is the point of a JWT and also its limit: if the user logs out or the token is stolen, the signature still verifies until exp. Short lifetimes bound the damage; an API that must know about revocation at once uses token introspection (RFC 7662) instead, a call to the issuer per request or per short cache period."
+        }
+      ]
+    },
+    {
+      "id": "refresh",
+      "title": "Refresh, and stolen tokens",
+      "summary": "An expired access token gets 401, the app trades its refresh token for new tokens (rotation), a replayed old refresh token gets the whole family revoked, and an intercepted code is useless without the code_verifier.",
+      "steps": [
+        {
+          "from": "app",
+          "to": "api",
+          "kind": "req",
+          "phase": "Access token expired",
+          "label": "GET /photos, expired Bearer",
+          "detail": "More than 15 minutes have passed, so the access token's exp is in the past.",
+          "state": {
+            "app": "signed in",
+            "as": "RT1 active"
+          },
+          "fields": [
+            {
+              "name": "exp",
+              "value": "1794474900",
+              "note": "Already past"
+            }
+          ]
+        },
+        {
+          "from": "api",
+          "to": "app",
+          "kind": "res",
+          "label": "401 invalid_token",
+          "detail": "RFC 6750 says how to refuse: 401 with a WWW-Authenticate header naming the error. invalid_token tells the app that refreshing may help.",
+          "state": {
+            "app": "token expired"
+          },
+          "payload": "HTTP/1.1 401 Unauthorized\nWWW-Authenticate: Bearer error=\"invalid_token\",\n  error_description=\"The access token expired\"",
+          "fields": [
+            {
+              "name": "status",
+              "value": "401 Unauthorized"
+            },
+            {
+              "name": "WWW-Authenticate",
+              "value": "Bearer error=\"invalid_token\""
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "as",
+          "kind": "req",
+          "phase": "Refresh with rotation",
+          "label": "POST /token, refresh RT1",
+          "detail": "The app uses its refresh token. No user interaction: this is the point of a refresh token.",
+          "payload": "POST /token HTTP/1.1\nHost: id.example.com\nContent-Type: application/x-www-form-urlencoded\n\ngrant_type=refresh_token&refresh_token=<RT1>&client_id=photo-app",
+          "fields": [
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            },
+            {
+              "name": "refresh_token",
+              "value": "<RT1>"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "as",
+          "kind": "local",
+          "label": "Rotate: RT1 used, issue RT2",
+          "detail": "For a public client RFC 9700 requires refresh tokens to be sender-constrained or rotated. With rotation each refresh token works once: RT1 is now spent and RT2 replaces it, in the same family.",
+          "state": {
+            "as": "RT2 active"
+          },
+          "fields": [
+            {
+              "name": "RT1",
+              "value": "used",
+              "note": "Kept on record so a second use can be recognised"
+            },
+            {
+              "name": "RT2",
+              "value": "active, same family"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "app",
+          "kind": "res",
+          "label": "200 new access token, RT2",
+          "payload": "{\"access_token\":\"<new JWT>\",\"token_type\":\"Bearer\",\"expires_in\":900,\"refresh_token\":\"<RT2>\"}",
+          "state": {
+            "app": "signed in"
+          },
+          "fields": [
+            {
+              "name": "access_token",
+              "value": "<new JWT>"
+            },
+            {
+              "name": "refresh_token",
+              "value": "<RT2>",
+              "note": "The app must keep this one and forget RT1"
+            }
+          ]
+        },
+        {
+          "from": "app",
+          "to": "api",
+          "kind": "req",
+          "label": "GET /photos, new Bearer",
+          "detail": "The app retries the request that failed, with the new access token."
+        },
+        {
+          "from": "api",
+          "to": "app",
+          "kind": "res",
+          "label": "200 OK"
+        },
+        {
+          "from": "attacker",
+          "to": "as",
+          "kind": "req",
+          "phase": "Stolen RT1 replayed",
+          "label": "POST /token, refresh RT1",
+          "detail": "Suppose an attacker copied RT1 earlier (say through a malicious browser extension) and now tries to use it.",
+          "state": {
+            "attacker": "has RT1"
+          },
+          "fields": [
+            {
+              "name": "refresh_token",
+              "value": "<RT1>",
+              "note": "Already used once"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "as",
+          "kind": "local",
+          "label": "RT1 reused: revoke the family",
+          "detail": "A spent refresh token presented again means two parties hold copies. The server cannot tell which one is legitimate, so it revokes the active token of the family, RT2 (RFC 9700, section 4.14.2). The real app's next refresh will fail too and the user signs in again, which ends the attacker's access.",
+          "state": {
+            "as": "family revoked"
+          },
+          "fields": [
+            {
+              "name": "RT1",
+              "value": "second use: breach"
+            },
+            {
+              "name": "RT2",
+              "value": "revoked"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "attacker",
+          "kind": "res",
+          "label": "400 invalid_grant",
+          "detail": "RFC 6749 section 5.2: an invalid, expired or revoked grant gets 400 with error invalid_grant.",
+          "state": {
+            "attacker": "rejected"
+          },
+          "payload": "HTTP/1.1 400 Bad Request\nContent-Type: application/json\n\n{\"error\":\"invalid_grant\"}",
+          "fields": [
+            {
+              "name": "error",
+              "value": "invalid_grant"
+            }
+          ]
+        },
+        {
+          "from": "attacker",
+          "to": "as",
+          "kind": "req",
+          "phase": "Intercepted code, no verifier",
+          "label": "POST /token, stolen code",
+          "detail": "A different attack, on a later sign-in: the attacker grabs the code from the redirect URL before the app redeems it. Without PKCE the code alone would buy a full set of tokens. The attacker has the code but not the code_verifier, which never left the app, so it sends a guess.",
+          "state": {
+            "attacker": "has a code"
+          },
+          "payload": "grant_type=authorization_code&code=<stolen code>\n&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback\n&client_id=photo-app&code_verifier=<guess>",
+          "fields": [
+            {
+              "name": "code",
+              "value": "<stolen code>"
+            },
+            {
+              "name": "code_verifier",
+              "value": "<guess>",
+              "note": "The attacker saw only the challenge, a SHA-256 hash, which cannot be reversed"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "as",
+          "kind": "local",
+          "label": "SHA-256 of the guess != challenge",
+          "detail": "The authorization server hashes the presented verifier and compares it with the stored code_challenge. They differ, so RFC 7636 section 4.6 says to answer invalid_grant.",
+          "fields": [
+            {
+              "name": "BASE64URL(SHA-256(guess))",
+              "value": "!= code_challenge"
+            }
+          ]
+        },
+        {
+          "from": "as",
+          "to": "attacker",
+          "kind": "res",
+          "label": "400 invalid_grant",
+          "detail": "No tokens. The real app can still redeem the code with its verifier. This is why PKCE is required for public clients and recommended for every client (RFC 9700): it also stops an attacker from injecting a stolen code into another user's session.",
+          "state": {
+            "attacker": "rejected"
+          },
+          "payload": "HTTP/1.1 400 Bad Request\nContent-Type: application/json\n\n{\"error\":\"invalid_grant\"}",
+          "fields": [
+            {
+              "name": "error",
+              "value": "invalid_grant"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "app",
+      "kind": "security",
+      "text": "The implicit flow (response_type=token) returned the access token in the redirect URL, where history, logs and Referer headers could leak it and nothing bound it to the app. RFC 9700 says not to use it; the code flow with PKCE gives a browser app the same tokens through a back-channel request instead."
+    },
+    {
+      "target": "as",
+      "kind": "security",
+      "text": "Redirect URIs must be registered and compared by exact string match (RFC 9700). Pattern or prefix matching has repeatedly let attackers send codes to a URL they control, for example an open redirect on the same host."
+    },
+    {
+      "target": "api",
+      "kind": "security",
+      "text": "The API must accept only access tokens issued for it: check aud. An ID token is signed by the same issuer, so an API that checks only the signature would accept it, but it is meant for the app, says nothing about permissions, and may have been handed to many apps."
+    },
+    {
+      "target": "app",
+      "kind": "tradeoff",
+      "text": "Where a browser app keeps tokens: memory is safest but lost on reload; localStorage survives reloads but any injected script can read it. A backend for frontend (a small server-side component that holds the tokens and gives the browser an HttpOnly session cookie) keeps tokens out of JavaScript entirely, at the cost of running a server."
+    },
+    {
+      "target": "as",
+      "kind": "tradeoff",
+      "text": "Token lifetimes trade safety for load: a 5-minute access token limits a stolen token's use but means more refreshes; a 1-hour one cuts refreshes but a logout or revocation takes up to an hour to bite. Refresh tokens can live for days if they rotate and have an idle expiry."
+    },
+    {
+      "target": "app",
+      "kind": "note",
+      "text": "Native and mobile apps use the same flow through the system browser, never an embedded web view, with a claimed https or custom-scheme redirect or a loopback address (RFC 8252). PKCE was designed for them first, because another app on the device can register the same custom scheme and receive the code."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-pkce",
+      "topic": "security",
+      "targets": [
+        "app",
+        "as",
+        "attacker"
+      ],
+      "q": "What does PKCE protect against, and why does it work without a client secret?",
+      "a": "It protects the authorization code, which travels through the browser and can leak, from being redeemed by anyone else. The app sends a SHA-256 hash of a random verifier with the authorization request and the verifier itself only with the token request; the server redeems the code only if the two match. A hash cannot be reversed, so seeing the URL is not enough, and the proof is made fresh for each login instead of relying on a stored secret."
+    },
+    {
+      "id": "id-vs-access",
+      "topic": "security",
+      "targets": [
+        "app",
+        "api"
+      ],
+      "q": "What is the difference between an ID token and an access token, and why must the API reject an ID token?",
+      "a": "The ID token is for the client app: it says who signed in, with the app's client_id as its audience and a nonce to stop replay. The access token is for the API: its audience is the API and it carries scopes. An API that accepted ID tokens would let any app that ever received one (they are given to clients, not APIs) call it, without any granted scope, so the API checks aud and the token type."
+    },
+    {
+      "id": "jwt-revocation",
+      "topic": "consistency",
+      "targets": [
+        "api",
+        "as"
+      ],
+      "q": "A user logs out, but their JWT access token still works at the API for several minutes. Why, and what can you do?",
+      "a": "The API validates the JWT locally with the issuer's public key, and the signature stays valid until exp, so it never learns about the logout. Keep access tokens short (5 to 15 minutes) and revoke the refresh token at logout, so access ends at the next expiry. If revocation must be immediate, use opaque tokens with introspection or push a revocation list to the APIs, paying a call or a lookup per request."
+    },
+    {
+      "id": "alg-confusion",
+      "topic": "security",
+      "targets": [
+        "api"
+      ],
+      "q": "How can a JWT library accept a forged token, and how do you prevent it?",
+      "a": "If the library trusts the token's own alg header, an attacker can send alg none with no signature, or alg HS256 signed with the issuer's public key as the HMAC secret, which a verifier configured with that key will accept. Prevent it by fixing the allowed algorithms per issuer in configuration (here RS256 only), choosing the key by kid from the issuer's JWKS, and using a library that requires both (RFC 8725)."
+    },
+    {
+      "id": "refresh-rotation",
+      "topic": "reliability",
+      "targets": [
+        "as",
+        "app",
+        "attacker"
+      ],
+      "q": "How does refresh token rotation detect a stolen refresh token?",
+      "a": "Each refresh token can be used once; using it returns a new one and marks the old one spent. If a spent token is ever presented again, two parties hold copies, so the server revokes the whole family and both the thief and the real app must start over. The real app must store the new token reliably, or a lost response looks like reuse; servers often allow a few seconds of grace for that."
+    },
+    {
+      "id": "login-latency",
+      "topic": "performance",
+      "targets": [
+        "app",
+        "as",
+        "api"
+      ],
+      "q": "Count the round trips in the login scenario. Where does the time go, and what makes the next login faster?",
+      "a": "Here it is 4 RTT from the redirect to the first API answer: authorize and the login page, the login form and the redirect back, the token request, then the API call, plus the user's typing, which dominates. On the next visit the authorization server's session cookie skips the login page, so the redirect comes straight back, and within a session the refresh token gets new access tokens in one round trip with no redirect at all."
+    }
+  ]
+}
