@@ -5,6 +5,7 @@ import { useReactFlow, useStoreApi } from '@xyflow/react'
 import type { Cloud } from '../model/kinds'
 import { zoneName } from '../model/availability'
 import { exportCanvasImage } from './exportImage'
+import { notify } from './confirm'
 
 export function Toolbar({ children, barRef }: { children: ReactNode; barRef?: (el: HTMLDivElement | null) => void }) {
   return <div ref={barRef} className="toolbar" role="toolbar" aria-label="Canvas">{children}</div>
@@ -64,7 +65,7 @@ export function ExportImageButton({ title, disabled }: { title: string; disabled
   const [busy, setBusy] = useState(false)
   const run = async () => {
     setBusy(true)
-    try { await exportCanvasImage(rf.getNodes(), title, store.getState().domNode) } catch (e) { alert(`Could not save the image. ${e instanceof Error ? e.message : ''}`.trim()) }
+    try { await exportCanvasImage(rf.getNodes(), title, store.getState().domNode) } catch (e) { void notify('Could not save the image', e instanceof Error ? e.message : undefined) }
     setBusy(false)
   }
   return <button className="tb-btn" disabled={disabled || busy} title="Save the canvas as a PNG to paste into notes or docs" onClick={run}>Export image</button>

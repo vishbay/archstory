@@ -278,6 +278,10 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .palette { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; }
 button.danger { color: var(--hard); border-color: color-mix(in srgb, var(--hard) 45%, transparent); }
+button.primary.danger { background: var(--hard); border-color: var(--hard); color: #fff; }
+.confirm-dialog { width: min(420px, calc(100vw - 32px)); }
+.confirm-dialog h3 { margin: 0 0 6px; }
+.confirm-dialog p { margin: 0 0 16px; }
 .howto { padding-left: 18px; font-size: 13px; } .howto li { margin: 6px 0; }
 .rec-banner { position: absolute; top: calc(var(--bars) + 10px); left: calc(50% + (var(--pl) - var(--pr)) / 2); transform: translateX(-50%); z-index: 7; display: flex; align-items: center; gap: 10px;
   max-width: calc(100% - 24px); padding: 6px 8px 6px 12px; border-radius: 10px; font-size: 12.5px; background: var(--surface);

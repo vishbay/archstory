@@ -4,6 +4,7 @@ import type { Check } from '../practice/checks'
 import {
   budgets, checklistScore, clock, itemDone, itemKey, mmss, PHASES, PRESETS, report, status, type TimedSession,
 } from '../practice/timed'
+import { askConfirm } from './confirm'
 
 export interface TimedControls {
   session: TimedSession | null; now: number
@@ -117,7 +118,7 @@ export function TimedPanel({ t, attempt, checks }: { t: TimedControls; attempt: 
       <div className="row wrap">
         {s.pausedAt ? <button onClick={t.resume}>Resume</button> : <button onClick={t.pause}>Pause</button>}
         <button className="primary" onClick={t.next}>{st.index < PHASES.length - 1 ? `Next: ${PHASES[st.index + 1].title}` : 'Finish'}</button>
-        <button onClick={() => { if (confirm('End the interview now?')) t.end() }}>End</button>
+        <button onClick={async () => { if (await askConfirm({ title: 'End the interview now?', body: 'The clock stops here. If you have drawn anything, it is saved as an attempt.', confirm: 'End interview', cancel: 'Keep going' })) t.end() }}>End</button>
       </div>
       <ol className="timed-phases">
         {PHASES.map((p, i) => {

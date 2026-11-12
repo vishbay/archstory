@@ -7,6 +7,7 @@ import { askForJson } from '../ai/ask'
 import { hostOf, isConfigured, providerLabel, forFeature, modelFor } from '../ai/providers'
 import { copyText, extractJson, fixRequest } from './prompts'
 import { openAiSettings, useAiConfig } from './useAiConfig'
+import { askConfirm } from './confirm'
 
 export interface StoredReview { review: Review; sig: string; warnings: string[] }
 
@@ -116,7 +117,7 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
             <span><b>{r.overall}</b> / 5 overall</span>
             <span className="row">
               <button onClick={() => { setPasting(true); setCopied(false) }}>New review</button>
-              <button className="icon ghost" title="Clear review" onClick={() => { if (confirm('Clear this review?')) { onStore(null); setPasting(true) } }}>×</button>
+              <button className="icon ghost" title="Clear review" onClick={async () => { if (await askConfirm({ title: 'Clear this review?', body: 'You can paste or request a new one afterwards.', confirm: 'Clear review', danger: true })) { onStore(null); setPasting(true) } }}>×</button>
             </span>
           </div>
           <p>{r.summary}</p>

@@ -26,6 +26,7 @@ import { addSnapshot, applyBackup, attemptKey, cleanHints, collectBackup, hintsK
 import { Attempts } from './Attempts'
 import { downloadJson } from './files'
 import type { StoredReview } from './ReviewPanel'
+import { askConfirm } from './confirm'
 
 const NO_ZONES: ZoneState = { failed: null, home: 0, zl: null, hops: null }
 /** Side by side needs this much canvas between the floating panels: two panes of about 360px. */
@@ -131,8 +132,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const stopRecording = () => { setRecording(false); setRecFrom(null) }
   const stopConnecting = () => { setConnecting(false); setConnFrom(null) }
   const startConnecting = () => { stopRecording(); setConnecting(true); setConnFrom(null); setSelected(null); setPicked(null); leaveRef() }
-  const reset = () => {
-    if (!confirm(`Clear your answer for "${ref.meta.title}"? This cannot be undone.`)) return
+  const reset = async () => {
+    if (!await askConfirm({ title: `Clear your answer for "${ref.meta.title}"?`, body: 'This cannot be undone.', confirm: 'Clear answer', danger: true })) return
     setAttempt(blankAttempt(ref)); setReview(null); setHints(0); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
   }
   const saveAttempt = (name: string) => {
@@ -144,8 +145,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
     setAttempt(s.design); setReview(s.review); setSelected(null); setPicked(null); stopRecording(); setFlowId(''); leaveRef()
     setAttemptMsg(`Opened "${s.name}". Undo brings your previous answer back.`)
   }
-  const deleteAttempt = (s: Snapshot) => {
-    if (!confirm(`Delete "${s.name}"? This cannot be undone.`)) return
+  const deleteAttempt = async (s: Snapshot) => {
+    if (!await askConfirm({ title: `Delete "${s.name}"?`, body: 'This cannot be undone.', confirm: 'Delete attempt', danger: true })) return
     const next = snaps.filter(x => x.id !== s.id)
     setSnaps(next); store.set(snapshotsKey(ref.id), next); setAttemptMsg('Attempt deleted.')
   }
@@ -162,7 +163,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
     const r = parseBackup(json, problems.map(d => d.id))
     if (!r.ok) return setAttemptMsg(r.errors.join(' '))
     const n = Object.keys(r.backup.attempts).length
-    if (!confirm(`Restore ${n} answer${n === 1 ? '' : 's'}? Any different answer you have now is kept as a "Before restore" attempt.`)) return
+    if (!await askConfirm({ title: `Restore ${n} answer${n === 1 ? '' : 's'}?`, body: 'Any different answer you have now is kept as a "Before restore" attempt.', confirm: 'Restore' })) return
     const byId = Object.fromEntries(problems.map(d => [d.id, d]))
     const done = applyBackup(r.backup, kv, new Date(), (id, d) => { const c = runChecks(d, byId[id]); return { passed: c.passed, total: c.total } })
     reload(ref.id); reloadDeck(); setSelected(null); setPicked(null); stopRecording(); setFlowId('')

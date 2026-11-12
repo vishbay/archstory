@@ -28,6 +28,7 @@ import { Practice } from './Practice'
 import { Home } from './Home'
 import { Tour } from './Tour'
 import { EXPLORE_TOUR, PRACTICE_TOUR } from './tourSteps'
+import { ConfirmDialog } from './ConfirmDialog'
 
 type View = 'canvas' | 'timeline'
 const MINE_KEY = 'archstory.myDesigns'
@@ -251,6 +252,7 @@ export function App() {
       {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
       {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
+      <ConfirmDialog />
       {estimating && <EstimateDialog problem={design} onClose={() => setEstimating(false)} />}
       {drill && <DrillDialog designs={[...LIBRARY, ...mine]} onlyId={drill.id} onClose={() => setDrill(null)} />}
       {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}

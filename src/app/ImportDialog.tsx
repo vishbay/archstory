@@ -3,6 +3,7 @@ import type { Design } from '../model/schema'
 import { copyText, fixRequest } from './prompts'
 import { checkImport } from './importCheck'
 import { STARTER_DESIGN } from './starterDesign'
+import { askConfirm } from './confirm'
 
 export function ImportDialog({ onClose, onImport, initialText = '' }: { onClose: () => void; onImport: (d: Design) => void; initialText?: string }) {
   const [text, setText] = useState(initialText)
@@ -17,8 +18,8 @@ export function ImportDialog({ onClose, onImport, initialText = '' }: { onClose:
   const errors = check.status === 'invalid' ? check.errors : []
   const fixPrompt = () => fixRequest('design', errors)
 
-  const useExample = () => {
-    if (text.trim() && !confirm('Replace what you pasted with the example?')) return
+  const useExample = async () => {
+    if (text.trim() && !await askConfirm({ title: 'Replace what you pasted with the example?', confirm: 'Replace', danger: true })) return
     setText(JSON.stringify(STARTER_DESIGN, null, 2)); setFixCopied(false)
   }
   const readFile = async (f: File | undefined) => {

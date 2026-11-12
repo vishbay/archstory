@@ -45,7 +45,8 @@ export function PracticeInspector(p: {
   const node = p.selected ? d.nodes.find(n => n.id === p.selected) : undefined
   const edge = p.picked ? d.edges.find(e => e.from === p.picked!.from && e.to === p.picked!.to) : undefined
   const label = (id: string) => { const n = d.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
-  const tabs: PracticeTab[] = ['build', 'flows', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review', 'interview']
+  // Interview first: it frames the whole session (a clock or the AI interviewer); Practice still opens on Build.
+  const tabs: PracticeTab[] = ['interview', 'build', 'flows', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review']
   const shownTab = tab === 'reasoning' && !p.reasoningOn ? 'build' : tab
   const tabStrip = useTabStrip(shownTab)
   const tabName = { build: 'Build', flows: `Flows (${d.flows.length})`, check: p.result.total ? `Check ${p.result.passed}/${p.result.total}` : 'Check', reasoning: 'Reasoning', review: p.review ? `Review ${p.review.review.overall}/5` : 'Review',

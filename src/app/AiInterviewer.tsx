@@ -9,6 +9,7 @@ import {
 } from '../practice/interview'
 import { store } from './hooks'
 import { openAiSettings, useAiConfig } from './useAiConfig'
+import { askConfirm } from './confirm'
 
 // Browser speech: recognition (speech to text) where the browser has it, and speech synthesis to read questions aloud.
 interface SpeechResultEvent { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }
@@ -144,7 +145,7 @@ export function AiInterviewer({ attempt, reference, checks, cloud, onSelectNode 
       )}
 
       {st.finished ? (
-        <div className="row wrap"><button className="primary" onClick={() => { if (confirm('Start a new interview? This transcript will be cleared.')) save(null) }}>New interview</button></div>
+        <div className="row wrap"><button className="primary" onClick={async () => { if (await askConfirm({ title: 'Start a new interview?', body: 'This transcript will be cleared.', confirm: 'Start new interview', danger: true })) save(null) }}>New interview</button></div>
       ) : (
         <>
           <textarea className="iv-input" rows={3} value={text} placeholder={listening ? 'Listening…' : 'Your answer. Enter sends, Shift+Enter for a new line.'}
