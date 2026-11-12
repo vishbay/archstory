@@ -111,7 +111,7 @@ export function Home({ library, mine, protocols = [], onWatch, onExplore, onPrac
         <section className="hero">
           <div className="hero-copy">
             <a className="hero-pill" href="#library" onClick={e => { e.preventDefault(); document.getElementById('library')?.scrollIntoView({ behavior: 'smooth' }) }}>
-              <span className="hero-pill-tag">New</span> Solutions architect scenarios, regions and DR <span aria-hidden>→</span>
+              <span className="hero-pill-tag">New</span> Ask any AI about the design you are studying <span aria-hidden>→</span>
             </a>
             <h1>System design, <span className="hero-grad">one request at a time.</span></h1>
             <p>Watch real architectures handle each request hop by hop, build your own answer, and get it checked and reviewed. Then rehearse it as a timed or AI mock interview.</p>
@@ -154,7 +154,25 @@ export function Home({ library, mine, protocols = [], onWatch, onExplore, onPrac
           </div>
         </section>
 
-        <p className="eyebrow">Bring your own question</p>
+        <section className="features more">
+          <p className="eyebrow">More than diagrams</p>
+          <h2 className="section-title">What an interviewer might probe</h2>
+          <div className="how">
+            {[
+              { icon: <><path d="M12 3.5l9 16H3l9-16z" /><path d="M12 10v4M12 17h.01" /></>, title: 'Failure drills', body: 'Fail an availability zone or a whole region and see what keeps serving, what data is lost and how long recovery takes.' },
+              { icon: <path d="M3 12h4l3-8 4 16 3-8h4" />, title: 'Monitoring', body: 'SLOs with burn-rate alerts, what to watch on every component, and how to debug the likely incidents.' },
+              { icon: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M8.5 7h7M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01" /></>, title: 'Numbers', body: 'Back-of-the-envelope estimates for each design and a rough monthly cloud bill, including the costs people forget.' },
+              { icon: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3zM18.5 16l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />, title: 'Ask any AI', body: 'Copy the design you are studying as a prompt for ChatGPT, Claude or Gemini, then ask your own questions about it.' },
+            ].map(f => (
+              <div key={f.title} className="how-step">
+                <span className="how-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{f.icon}</svg></span>
+                <b>{f.title}</b><p>{f.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+      <p className="eyebrow">Bring your own question</p>
         <HowToImport onImport={onImport} onGenerate={onGenerate} />
         <p className="eyebrow">Mock interviews</p>
         <HowToInterview onPractice={() => onPractice(first.id)} onConnect={openAiSettings} />

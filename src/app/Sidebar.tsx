@@ -44,12 +44,12 @@ export function Sidebar({ current, onBrowse, onAsk, onImport, onExport, onGenera
       <div className="panel-foot side-actions">
         <button className="browse" onClick={onBrowse} title={`Search all ${proto ? 'protocols' : 'designs'} (⌘K / Ctrl+K)`}>Browse {proto ? 'protocols' : 'designs'}<kbd>⌘K</kbd></button>
         <button className="primary ask-ai" onClick={onAsk} title={`Copy this ${proto ? 'protocol walkthrough' : 'design'} as a prompt for ChatGPT, Claude, Gemini or any assistant, then ask your questions about it`}>✦ Ask AI about this {proto ? 'protocol' : 'design'}</button>
-        <div className="row wrap">
+        <div className="side-tools" role="group" aria-label="File actions" style={{ ['--cols' as string]: proto ? 2 : 3 }}>
           {!proto && <button onClick={onImport} title="Add any other system design question as a JSON design, then explore and practise it">Import</button>}
           <button onClick={onViewJson} title={`See the JSON behind the ${proto ? 'protocol' : 'design'} you are viewing`}>View JSON</button>
           <button onClick={onExport}>Export</button>
-          {!proto && <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant to make a new design">Make a design with AI</button>}
         </div>
+        {!proto && <button className="make-ai" onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant to make a new design"><span aria-hidden>＋</span> Make a design with AI</button>}
       </div>
     </>
   )

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="public/favicon.svg" width="72" height="72" alt="ArchStory logo" />
+<img src="public/favicon.svg" width="72" height="72" alt="ArchStory logo: a client, a service and two data stores joined by a request path" />
 
 # ArchStory
 
@@ -78,6 +78,8 @@ System design interviews are not about memorising boxes and arrows. They are abo
 - Regions and disaster recovery: RTO, RPO, replication, region failure drill
 - Hybrid designs with an on-premises box and a hybrid link
 - Monitoring: SLOs, error budgets, alerts, what to watch and how to debug
+- A floating player dock with a step track, speed control and a one-line Key to the node states
+- Readable in light and dark themes, checked for text contrast on every screen
 - Export the canvas as a PNG
 - *Ask AI about this design*: copies the design you are studying as a prompt for any assistant, so you can ask your own questions about it
 

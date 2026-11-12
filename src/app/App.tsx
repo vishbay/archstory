@@ -192,7 +192,7 @@ export function App() {
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the requirements and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
             title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'requirements and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
         )}
-        <button className="brand" onClick={() => { setMode('home'); logoClick() }} title="Home">Arch<span>Story</span></button>
+        <button className="brand" onClick={() => { setMode('home'); logoClick() }} title="Home"><img className="brand-mark" src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width="22" height="22" />Arch<span>Story</span></button>
         {mode !== 'home' && <>
           <span className="sep" />
           <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog"

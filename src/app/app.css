@@ -98,7 +98,7 @@ select, input[type="text"], .search, textarea {
   border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-hi); }
 .topbar { grid-area: top; position: relative; z-index: 30; display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-width: 0;
   background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border-bottom: 1px solid var(--glass-border); }
-.brand { font-weight: 700; letter-spacing: -.01em; } .brand span { color: var(--accent-text); margin-left: 1px; }
+.brand { font-weight: 700; letter-spacing: -.01em; display: inline-flex; align-items: center; gap: 8px; } .brand-mark { border-radius: 6px; flex: none; } .brand span { color: var(--accent-text); margin-left: 1px; }
 .sep { width: 1px; height: 20px; background: var(--border); }
 .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 aside.left, aside.right { grid-area: main; z-index: 20; overflow: hidden; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-radius: 16px;
@@ -583,6 +583,7 @@ summary { color: var(--accent-text); }
 .legend-nodes .swatch { width: 18px; height: 11px; border-radius: 4px; }
 .legend-nodes .swatch::before { left: 2.5px; top: 2.5px; width: 4px; height: 4px; }
 .legend-nodes .swatch::after { left: 9px; top: 4px; width: 6px; height: 2px; }
+.legend-nodes .swatch.active { margin: 0 1.5px; box-shadow: 0 0 0 1.5px var(--accent); }   /* a ring that stays clear of the label */
 @media (min-width: 901px) and (max-width: 1180px) { .legend-nodes { gap: 0 4px; } .legend-nodes .legend-chip { gap: 2px; font-size: 10px; } .legend-nodes .swatch { width: 16px; } .legend-nodes .swatch::after { width: 5px; } }   /* the compact right panel is 290px inside */
 
 .line { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--muted); } .line.dashed { border-top-style: dashed; }
@@ -1088,6 +1089,10 @@ button.listening { border-color: var(--hard); color: var(--hard-t); }
 .side-pane .react-flow__panel.top { margin-top: 40px; }
 
 .side-actions .ask-ai { width: 100%; height: 34px; font-size: 12.5px; }
+.side-tools { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 6px; }
+.side-tools button { width: 100%; height: 32px; justify-content: center; padding: 0 6px; }
+.side-actions .make-ai { width: 100%; height: 34px; gap: 6px; justify-content: center; font-size: 12.5px; color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong)); background: var(--accent-soft); }
+.side-actions .make-ai:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
 .dialog textarea.ask-first { width: 100%; height: auto; min-height: 0; margin-top: 4px; resize: vertical; }
 
 /* ---------- Under the hood (labs): protocol timelines ---------- */
