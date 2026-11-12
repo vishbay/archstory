@@ -128,6 +128,14 @@
         "threshold": "< 800 ms"
       },
       {
+        "id": "proxy-overhead",
+        "name": "Proxy overhead on legacy paths",
+        "kind": "latency",
+        "sli": "Legacy requests whose time at the router minus the on-premises load balancer's own time for the same request id is under the threshold, divided by all legacy requests (joined from both access logs)",
+        "target": 99,
+        "threshold": "< 10 ms"
+      },
+      {
         "id": "cdc-fresh",
         "name": "Copies stay current",
         "kind": "freshness",
@@ -139,7 +147,7 @@
         "id": "copies-agree",
         "name": "Copies agree",
         "kind": "correctness",
-        "sli": "Rows whose checksum matches between Oracle and the cloud database in the hourly reconciliation of each migrated entity, divided by rows compared",
+        "sli": "Rows that match between Oracle and the cloud database in the CDC task's row validation (it re-reads changed rows on both sides and compares them), divided by rows compared, per migrated entity",
         "target": 99.99
       }
     ],
@@ -153,10 +161,18 @@
         "slo": "storefront"
       },
       {
+        "id": "storefront-slow-burn",
+        "severity": "ticket",
+        "when": "5xx at the router burning the error budget 2 times too fast over 6 hours and 3 days",
+        "why": "A steady trickle of errors, often one legacy path or one link, that never pages but will use up the month's budget.",
+        "target": "lb",
+        "slo": "storefront"
+      },
+      {
         "id": "canary-worse",
         "severity": "page",
         "when": "Orders service 5xx rate more than 1 point above the monolith's, or its p99 more than 300 ms above, for 5 minutes",
-        "why": "The canary is hurting real orders. The alarm also sets the canary weight to 0 automatically; a human must confirm the rollback finished and the reverse copy drained.",
+        "why": "The canary is hurting real orders. The alarm also switches the rule to forward only to the monolith automatically; a human must confirm the rollback finished and the reverse copy drained.",
         "target": "orders",
         "slo": "order-latency"
       },
@@ -190,6 +206,21 @@
         "why": "Silent drift between the copies, usually a type mapping or a skipped change. It must be fixed before the next cutover step relies on the copy.",
         "target": "orders_db",
         "slo": "copies-agree"
+      },
+      {
+        "id": "proxy-overhead",
+        "severity": "ticket",
+        "when": "More than 1% of legacy requests spend over 10 ms extra between the router and the on-premises load balancer, over 1 hour",
+        "why": "The migration is making untouched pages slower: usually the link on its VPN backup, lost connection reuse, or one Direct Connect location carrying everything.",
+        "target": "hybrid",
+        "slo": "proxy-overhead"
+      },
+      {
+        "id": "redo-headroom",
+        "severity": "ticket",
+        "when": "Oracle keeps fewer than 6 hours of archived redo beyond what capture has read, or the CDC user's password expires within 14 days",
+        "why": "Either one breaks capture for good: past the archived logs, or with a locked user, the only way back is a full reload of the affected tables. Fix it the same day.",
+        "target": "onprem_db"
       }
     ],
     "signals": [
@@ -228,6 +259,12 @@
         "name": "Archived redo headroom",
         "metric": "oracle_archivelog_retained_hours minus cdc_capture_lag_hours",
         "why": "If capture falls further behind than Oracle keeps archived logs, CDC cannot resume and the table needs a full reload."
+      },
+      {
+        "target": "lb",
+        "name": "Orders per minute by side against last week",
+        "metric": "router_requests_total{route=\"POST /api/orders\",status=\"201\",backend} / same minute last week",
+        "why": "The business check on the canary: the cloud side's share of successful orders should match its weight, and total orders should not dip when the weight changes."
       }
     ],
     "debug": [
@@ -246,12 +283,22 @@
           "Check reverse apply lag and the CDC task's error table: a stopped task shows as growing lag, a rejected row shows as an apply error.",
           "Look for constraint failures in Oracle, such as a column the new schema allows to be empty but the old one requires, or a status value the old check constraint does not know.",
           "Check the loop filter: rows from the cloud must carry origin CLOUD so forward capture skips them, and the reverse task must not filter them by mistake.",
-          "Run the reconciliation for the affected hours on order ids starting with N- and replay the missing ones from the cloud database."
+          "Run row validation again for the affected hours on order ids starting with N- and replay the missing ones from the cloud database."
         ]
       }
     ]
   },
   "nodes": [
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACL attached to the CDN: managed rule sets, rate limits and bot rules for every path, migrated or legacy",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
+    },
     {
       "id": "client",
       "label": "Shoppers",
@@ -322,7 +369,7 @@
       "id": "hybrid",
       "label": "Hybrid Link",
       "kind": "hybrid_link",
-      "description": "Private connection to the data centre: two dedicated connections at two locations, with a site-to-site VPN as the fallback",
+      "description": "Private connection to the data centre: two dedicated connections at two locations, attached to the VPC through a transit gateway. BGP prefers the dedicated connections and moves to the site-to-site VPN only when both are down",
       "cloud": {
         "aws": "Direct Connect",
         "gcp": "Cloud Interconnect"
@@ -353,7 +400,7 @@
       "label": "CDC Replication",
       "kind": "worker",
       "ha": "primary-standby",
-      "description": "Full load, then change data capture: forward from Oracle redo logs into the cloud databases, reverse from the cloud databases back into Oracle, one writer per entity",
+      "description": "Full load, then change data capture: forward from Oracle redo logs into the cloud databases, reverse from the cloud databases back into Oracle, one writer per entity. On Google Cloud, Database Migration Service and Datastream only replicate into the cloud, so the reverse direction there needs a tool such as Oracle GoldenGate or Debezium. Row validation re-reads changed rows on both sides and compares them, which feeds the copies-agree check. The Oracle and database credentials it uses live in a secrets store with rotation",
       "cloud": {
         "aws": "Database Migration Service",
         "gcp": "Database Migration Service"
@@ -383,6 +430,10 @@
     },
     {
       "from": "client",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
       "to": "cdn"
     },
     {
@@ -467,12 +518,20 @@
         },
         {
           "from": "client",
-          "to": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /api/orders",
           "detail": "Order calls are never cached; the CDN terminates TLS close to the shopper and forwards the call to the origin.",
           "payload": "POST /api/orders\nCookie: session=8c1f...; AWSALBTG=...\nIdempotency-Key: 3b9e6d2a\n\n{ \"customer_id\": 4471902, \"cart_id\": \"c_77k2\",\n  \"items\": [ { \"sku\": \"SKU-1182\", \"qty\": 2 } ],\n  \"shipping\": \"standard\" }"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: POST /api/orders",
+          "detail": "The web ACL on the CDN checks every request against managed rule sets, rate limits and bot rules before it is forwarded, so legacy paths get the same protection as migrated ones without touching the monolith."
         },
         {
           "from": "cdn",
@@ -497,7 +556,8 @@
           "kind": "req",
           "phase": "Route",
           "label": "forward to orders service",
-          "detail": "This request drew the cloud side, so the new service will create and own the order."
+          "detail": "This request drew the cloud side, so the new service will create and own the order. The router adds a trace id, which the orders service, the anti-corruption layer and a SOAP header to the monolith all carry, so one trace spans both sides of the migration.",
+          "payload": "POST /api/orders HTTP/1.1\nX-Amzn-Trace-Id: Root=1-6730c4a2-8d1e5b3f0a7c42e9b6d15f08\ntraceparent: 00-8d1e5b3f0a7c42e9b6d15f08c3a2e1d0-4f6a8b0c2d4e6f81-01\nIdempotency-Key: 3b9e6d2a"
         },
         {
           "from": "orders",
@@ -554,8 +614,8 @@
           "kind": "req",
           "phase": "Persist",
           "label": "INSERT order N-8F3K2 owner=CLOUD",
-          "detail": "Orders created here get ids starting with N- and owner CLOUD, so every row has exactly one writer and the router can send later changes to the right side by id.",
-          "payload": "INSERT INTO orders (order_id, customer_id, status, total_cents, reservation_id, owner, origin)\nVALUES ('N-8F3K2', 4471902, 'placed', 5998, 'r77310', 'CLOUD', 'CLOUD');"
+          "detail": "Orders created here get ids starting with N- and owner CLOUD, so every row has exactly one writer and the router can send later changes to the right side by id. The client's idempotency key is stored under a unique constraint, so a retried POST returns the existing order instead of creating a second one.",
+          "payload": "INSERT INTO orders (order_id, customer_id, status, total_cents, reservation_id, idempotency_key, owner, origin)\nVALUES ('N-8F3K2', 4471902, 'placed', 5998, 'r77310', '3b9e6d2a', 'CLOUD', 'CLOUD');"
         },
         {
           "from": "orders_db",
@@ -580,6 +640,13 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "order confirmed"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -620,12 +687,20 @@
       "steps": [
         {
           "from": "client",
-          "to": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /cart/items",
           "detail": "Shoppers use the same hostname for every page; they cannot tell which side serves which path.",
           "payload": "POST /cart/items\nCookie: JSESSIONID=A1B2C3...\n\nsku=SKU-1182&qty=2"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: POST /cart/items",
+          "detail": "The web ACL on the CDN checks every request against managed rule sets, rate limits and bot rules before it is forwarded, so legacy paths get the same protection as migrated ones without touching the monolith."
         },
         {
           "from": "cdn",
@@ -699,6 +774,13 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "cart with 2 items"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -811,9 +893,9 @@
           "to": "lb",
           "kind": "local",
           "phase": "Stop new writes",
-          "label": "weights: orders 0, monolith 100",
-          "detail": "An alarm action changes the rule's weights, so new orders go to the monolith within seconds with no deploy and no DNS change.",
-          "payload": "aws elbv2 modify-rule --rule-arn <orders-post-rule> --actions '[{\"Type\":\"forward\",\"ForwardConfig\":{\"TargetGroups\":[{\"TargetGroupArn\":\"tg-orders-svc\",\"Weight\":0},{\"TargetGroupArn\":\"tg-monolith-onprem\",\"Weight\":100}]}}]'"
+          "label": "rule: forward only to monolith",
+          "detail": "The alarm triggers a small function that replaces the weighted action with a plain forward to the monolith, so new orders go there within seconds with no deploy and no DNS change. Setting the canary's weight to 0 is not enough: with target group stickiness on, shoppers already pinned to the canary keep reaching it until their one-hour stickiness cookie expires.",
+          "payload": "aws elbv2 modify-rule --rule-arn <orders-post-rule> --actions '[{\"Type\":\"forward\",\"TargetGroupArn\":\"tg-monolith-onprem\"}]'"
         },
         {
           "from": "cdc",
@@ -836,7 +918,7 @@
           "kind": "req",
           "phase": "Drain reverse CDC",
           "label": "apply to Oracle",
-          "detail": "The drain goes over the same private link; at about 2 MB / s of changes, a backlog of minutes clears in seconds."
+          "detail": "The drain goes over the same private link. The reverse stream carries only the canary's own writes, a few orders a second, so even minutes of backlog is a few thousand rows and clears in seconds."
         },
         {
           "from": "hybrid",
@@ -861,21 +943,45 @@
           "label": "reverse lag 0"
         },
         {
+          "from": "monolith",
+          "to": "onprem_db",
+          "kind": "req",
+          "phase": "Hand back ownership",
+          "label": "flip N- rows to OWNER and ORIGIN MONOLITH",
+          "detail": "Only when reverse lag is 0 does the rollback runbook, run as a monolith admin job, flip the canary's rows. Resetting ORIGIN as well matters: forward capture skips ORIGIN='CLOUD' rows, so without it the monolith's later changes to these orders would never reach the cloud copy. Forward CDC carries this update to the cloud database, which flips the owner there too.",
+          "payload": "UPDATE ORDERS SET OWNER = 'MONOLITH', ORIGIN = 'MONOLITH'\n WHERE ORDER_ID LIKE 'N-%' AND OWNER = 'CLOUD';\nCOMMIT;"
+        },
+        {
+          "from": "onprem_db",
+          "to": "monolith",
+          "kind": "res",
+          "phase": "Hand back ownership",
+          "label": "N- rows flipped, COMMIT"
+        },
+        {
           "from": "lb",
           "to": "lb",
           "kind": "local",
           "phase": "Hand back ownership",
           "label": "route /api/orders/N-* to monolith",
-          "detail": "Only when reverse lag is 0 does the owner of the N- rows flip to MONOLITH and the rule for changes to those orders point at the monolith, so there is never a moment with two writers.",
-          "payload": "UPDATE ORDERS SET OWNER = 'MONOLITH' WHERE ORDER_ID LIKE 'N-%' AND OWNER = 'CLOUD';\n-- then: rule path-pattern /api/orders/N-* forward to tg-monolith-onprem"
+          "detail": "Only after the ownership flip has committed does the rule for changes to N- orders point at the monolith, so there is never a moment with two writers.",
+          "payload": "rule path-pattern /api/orders/N-* forward to tg-monolith-onprem"
         },
         {
           "from": "client",
-          "to": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Served by monolith",
           "label": "POST /api/orders",
           "detail": "The next order from the same shopper is placed exactly as it was before the migration started."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Served by monolith",
+          "label": "passed: POST /api/orders",
+          "detail": "The web ACL on the CDN checks every request against managed rule sets, rate limits and bot rules before it is forwarded, so legacy paths get the same protection as migrated ones without touching the monolith."
         },
         {
           "from": "cdn",
@@ -889,7 +995,7 @@
           "to": "hybrid",
           "kind": "req",
           "phase": "Served by monolith",
-          "label": "weight 100 to monolith",
+          "label": "forward to monolith",
           "detail": "The monolith's order code was kept deployed and tested with synthetic orders during the canary, so the old path is warm and needs no redeploy."
         },
         {
@@ -937,6 +1043,13 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "order 48812210 confirmed"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Served by monolith",
@@ -959,7 +1072,7 @@
     {
       "target": "hybrid",
       "kind": "failure",
-      "text": "If one dedicated connection fails, BGP moves traffic to the other within seconds, so each must run under 50%. If both fail, traffic falls back to the IPsec VPN at about 1.25 Gbps per tunnel, which cannot carry the 1.5 Gbps peak, so the router sheds or queues legacy traffic. Migrated catalog pages keep working; orders and cart stop. CDC pauses and resumes from its checkpoint when the link returns, provided Oracle kept the archived logs, so retain at least 24 hours of them."
+      "text": "If one dedicated connection fails, BGP moves traffic to the other within seconds, so each must run under 50%. If both fail, traffic falls back to the IPsec VPN at about 1.25 Gbps per tunnel, so one tunnel cannot carry the 1.5 Gbps peak: run several tunnels with ECMP on the transit gateway, or accept that legacy pages, cart and orders (which reserve stock in the monolith) slow down and time out at peak, since the router cannot shed load by itself. Migrated catalog pages keep working either way. If the VPN is lost too, legacy paths stop and CDC pauses, resuming from its checkpoint when the link returns, provided Oracle kept the archived logs, so retain at least 24 hours of them."
     },
     {
       "target": "acl",
@@ -975,6 +1088,16 @@
       "target": "onprem_db",
       "kind": "note",
       "text": "Moving data from Oracle to PostgreSQL is a heterogeneous migration: convert the schema and stored procedures first (with a schema conversion tool, then by hand), run a full load of each table, then start CDC from the SCN the load was consistent at. Validate with row counts and checksums before any traffic depends on the copy, and keep reconciliation running until the Oracle tables are retired."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "Putting the web ACL on the CDN, the one front door, protects the monolith as well as the new services, and the data centre's old perimeter firewall rules can be retired path by path. Run new managed rules in count mode first: legacy endpoints often send odd but valid input (SOAP-style bodies, long cookies) that a blocking rule would break. The router should accept traffic only from the CDN (a secret header the CDN adds, or the CDN's managed prefix list), or attackers can skip the WAF by calling the load balancer directly."
+    },
+    {
+      "target": "lb",
+      "kind": "note",
+      "text": "The router's rules are the migration's feature flags: which paths and what share go to the cloud live in the rule set, changed by a reviewed script or the alarm's function, never by hand in the console, and every change is logged so a bad routing change can be traced and undone. A config service or feature-flag tool is only needed once routing depends on who the shopper is rather than on the path."
     }
   ],
   "questions": [

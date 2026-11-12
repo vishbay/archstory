@@ -74,10 +74,17 @@
       "cloud": { "aws": "Route 53", "gcp": "Cloud DNS" }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACL on the console's load balancer: managed rule sets, per-IP rate limits and an allowlist of the operations team's networks. It does not see device traffic, which is raw TLS on port 8883",
+      "cloud": { "aws": "AWS WAF", "gcp": "Cloud Armor" }
+    },
+    {
       "id": "nlb",
       "label": "Network Load Balancer (L4)",
       "kind": "network_load_balancer",
-      "description": "TCP passthrough on port 8883 so TLS, and the device certificate, reach the broker. On GCP this is an external passthrough load balancer in front of the EMQX nodes. On AWS there is nothing to run: the IoT Core device endpoint does this inside the managed service",
+      "description": "TCP passthrough on port 8883 so TLS, and the device certificate, reach the broker. On GCP this is an external passthrough load balancer in front of the EMQX nodes, needed because 1.9M long-lived connections must be spread over 12 nodes without terminating TLS, with Cloud Armor network edge policies (advanced network DDoS protection) on it; EMQX itself caps connections and connect rate per listener. On AWS there is nothing to run: the IoT Core device endpoint does this inside the managed service, behind AWS Shield",
       "cloud": { "gcp": "External passthrough Network Load Balancer" }
     },
     {
@@ -99,14 +106,14 @@
       "id": "api",
       "label": "Device API",
       "kind": "service",
-      "description": "Serves dashboard queries, accepts commands and firmware campaigns, owns the device twin, and receives command results and connect events from the broker",
+      "description": "Serves dashboard queries, accepts commands and firmware campaigns, owns the device twin, and receives command results and connect events from the broker. On AWS it publishes to IoT Core through an interface VPC endpoint",
       "cloud": { "aws": "ECS Fargate", "gcp": "Cloud Run" }
     },
     {
       "id": "registry",
       "label": "Device Registry",
       "kind": "sql_db",
-      "description": "One row per device: model, group, owner, certificate fingerprint and status, firmware version and rollout wave; also alert rules per group",
+      "description": "One row per device: model, group, owner, certificate fingerprint and status, firmware version and rollout wave; also alert rules per group. EMQX checks certificate status here through its database auth hook (cached). AWS IoT Core keeps certificate status in its own registry instead, so on AWS the Device API marks a certificate REVOKED there as well as here, and the broker never queries this database",
       "cloud": { "aws": "Aurora PostgreSQL", "gcp": "Cloud SQL Postgres" }
     },
     {
@@ -148,7 +155,7 @@
       "id": "notify",
       "label": "Notifications (SMS, email, pager)",
       "kind": "notification_provider",
-      "description": "Delivers threshold alerts to operators and field crews"
+      "description": "Delivers threshold alerts to operators and field crews; reached through the NAT gateways"
     }
   ],
   "edges": [
@@ -156,11 +163,13 @@
     { "from": "devices", "to": "nlb", "label": "MQTT over TLS", "protocol": "MQTT 5, TCP 8883" },
     { "from": "devices", "to": "archive", "label": "firmware download", "protocol": "HTTPS (presigned URL)" },
     { "from": "console", "to": "dns", "protocol": "DNS" },
-    { "from": "console", "to": "lb", "protocol": "HTTPS" },
+    { "from": "console", "to": "waf", "protocol": "HTTPS" },
+    { "from": "waf", "to": "lb", "protocol": "HTTPS" },
     { "from": "nlb", "to": "broker", "protocol": "TCP passthrough" },
     { "from": "lb", "to": "api", "protocol": "HTTP" },
     { "from": "broker", "to": "registry", "label": "cert status, policy" },
     { "from": "broker", "to": "stream", "label": "telemetry rule", "async": true },
+    { "from": "broker", "to": "archive", "label": "rule error action", "async": true },
     { "from": "api", "to": "broker", "label": "commands out, events in", "protocol": "MQTT publish / HTTPS rule action" },
     { "from": "api", "to": "registry" },
     { "from": "api", "to": "shadow" },
@@ -196,13 +205,13 @@
         {
           "from": "broker", "to": "stream", "kind": "async", "phase": "Route",
           "label": "PutRecord, partition key m-0012345",
-          "detail": "Using the device id as partition key keeps one device's readings in order on one shard, which the deduplication and windowing rely on.",
+          "detail": "Using the device id as partition key keeps one device's readings in order on one shard, which the deduplication and windowing rely on. Device id plus seq identifies a reading at every hop, so it serves as the trace key from the meter to the archive.",
           "payload": "PutRecord { StreamName: \"telemetry\", PartitionKey: \"m-0012345\",\n  Data: { device_id: \"m-0012345\", ts: 1762790400, seq: 88123, received_at: 1762790401.2, v: {...} } }"
         },
         {
           "from": "broker", "to": "nlb", "kind": "res", "phase": "Acknowledge",
           "label": "PUBACK 4711",
-          "detail": "The broker acknowledges once it has accepted the message, not once the rule action has finished, so the rule needs an error action (for example to a bucket) or a broken stream would lose readings silently."
+          "detail": "The broker acknowledges once it has accepted the message, not once the rule action has finished, so the rule has an error action that writes failed readings to an errors prefix in the archive bucket; without it a broken stream would lose acknowledged readings silently."
         },
         {
           "from": "nlb", "to": "devices", "kind": "res", "phase": "Acknowledge",
@@ -238,10 +247,15 @@
           "payload": "{ \"alert_id\": \"al-77f\", \"rule\": \"overvoltage\", \"device\": \"m-0012345\",\n  \"value\": 251.2, \"limit\": 250, \"since\": \"2026-11-10T16:39:00Z\", \"to\": [\"oncall-north\"] }"
         },
         {
-          "from": "console", "to": "lb", "kind": "req", "phase": "Dashboard",
+          "from": "console", "to": "waf", "kind": "req", "phase": "Dashboard",
           "label": "GET /v1/devices/m-0012345/readings?from=-1h",
           "detail": "The operator follows the alert to the meter's dashboard, which asks for the last hour of voltage.",
           "payload": "GET /v1/devices/m-0012345/readings?field=volt&from=-1h&step=10s\nAuthorization: Bearer <operator token>"
+        },
+        {
+          "from": "waf", "to": "lb", "kind": "req", "phase": "Dashboard",
+          "label": "passed: GET readings",
+          "detail": "The web ACL checks managed rules, a per-IP rate limit and the operations network allowlist before the request reaches the load balancer; the console can send commands to 2M devices, so it is the part of the platform most worth protecting."
         },
         {
           "from": "lb", "to": "api", "kind": "req", "phase": "Dashboard",
@@ -257,7 +271,11 @@
         { "from": "tsdb", "to": "api", "kind": "res", "phase": "Respond", "label": "360 points" },
         { "from": "api", "to": "lb", "kind": "res", "phase": "Respond", "label": "200 OK" },
         {
-          "from": "lb", "to": "console", "kind": "res", "phase": "Respond",
+          "from": "lb", "to": "waf", "kind": "res", "phase": "Respond",
+          "label": "200 OK"
+        },
+        {
+          "from": "waf", "to": "console", "kind": "res", "phase": "Respond",
           "label": "200 OK, chart data",
           "payload": "HTTP/1.1 200 OK\n\n{ \"device\": \"m-0012345\", \"field\": \"volt\", \"step\": \"10s\",\n  \"points\": [[1762786800, 238.9], [1762786810, 239.1], ...] }"
         }
@@ -269,10 +287,15 @@
       "summary": "An operator changes a meter's reporting interval while the meter is offline. The intent is written to the twin first, the broker queues the command in the meter's persistent session, and the meter applies and confirms it when it comes back. If it stays away longer than the session lasts, the connect event makes the API republish from the twin.",
       "steps": [
         {
-          "from": "console", "to": "lb", "kind": "req", "phase": "Request",
+          "from": "console", "to": "waf", "kind": "req", "phase": "Request",
           "label": "POST /v1/devices/m-0012345/commands",
           "detail": "The idempotency key stops a double click or a retried request from creating two commands.",
-          "payload": "POST /v1/devices/m-0012345/commands\nIdempotency-Key: 3b9d21\n\n{ \"type\": \"set_config\", \"config\": { \"report_interval_s\": 60 }, \"expires_in_s\": 604800 }"
+          "payload": "POST /v1/devices/m-0012345/commands\nIdempotency-Key: 3b9d21\ntraceparent: 00-6e1f0b9c4d2a47e8a3b5c7d9e0f1a2b3-1c3e5a7b9d0f2e48-01\n\n{ \"type\": \"set_config\", \"config\": { \"report_interval_s\": 60 }, \"expires_in_s\": 604800 }"
+        },
+        {
+          "from": "waf", "to": "lb", "kind": "req", "phase": "Request",
+          "label": "passed: POST command",
+          "detail": "Same web ACL checks: allowed, so it is passed on. The console's trace id travels with the command into the twin and the MQTT message's user properties, so a command can be followed from the click to the device's result."
         },
         {
           "from": "lb", "to": "api", "kind": "req", "phase": "Request",
@@ -307,7 +330,11 @@
         { "from": "broker", "to": "api", "kind": "res", "phase": "Publish", "label": "accepted" },
         { "from": "api", "to": "lb", "kind": "res", "phase": "Respond", "label": "202 Accepted" },
         {
-          "from": "lb", "to": "console", "kind": "res", "phase": "Respond",
+          "from": "lb", "to": "waf", "kind": "res", "phase": "Respond",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "waf", "to": "console", "kind": "res", "phase": "Respond",
           "label": "202 c-889 pending",
           "payload": "HTTP/1.1 202 Accepted\n\n{ \"cmd_id\": \"c-889\", \"status\": \"PENDING\", \"device_online\": false }"
         },
@@ -331,7 +358,7 @@
         {
           "from": "broker", "to": "registry", "kind": "req", "phase": "Reconnect",
           "label": "certificate status and policy",
-          "detail": "The TLS handshake proved the certificate chains to the fleet CA; the registry adds whether this certificate has been revoked or the device quarantined."
+          "detail": "The TLS handshake proved the certificate chains to the fleet CA; the registry adds whether this certificate has been revoked or the device quarantined. This is the EMQX path; AWS IoT Core makes the same check against its own certificate registry."
         },
         { "from": "registry", "to": "broker", "kind": "res", "phase": "Reconnect", "label": "active" },
         { "from": "broker", "to": "nlb", "kind": "res", "phase": "Reconnect", "label": "CONNACK session present=1" },
@@ -412,7 +439,7 @@
         {
           "from": "broker", "to": "broker", "kind": "local", "phase": "Admission",
           "label": "node over its connect rate",
-          "detail": "Each broker node admits a fixed number of new connections per second and refuses the rest at once. Refusing fast is better than accepting everything and letting handshakes time out, which would make every device retry and add load. AWS IoT Core enforces the same idea through account-level connect quotas."
+          "detail": "Each broker node admits a fixed number of new connections per second and refuses the rest at once. Refusing fast is better than accepting everything and letting handshakes time out, which would make every device retry and add load. AWS IoT Core enforces the same idea through account-level connect quotas. Bringing all 2M devices back within the 15-minute target needs about 2,200 admitted connects a second in total, about 190 per EMQX node (280 with a zone down); on AWS the account's connect quota must be raised to that before launch, because its default is far lower."
         },
         { "from": "broker", "to": "nlb", "kind": "res", "phase": "Admission", "label": "CONNACK 0x9F connection rate exceeded" },
         { "from": "nlb", "to": "devices", "kind": "res", "phase": "Admission", "label": "CONNACK 0x9F" },
@@ -488,7 +515,7 @@
     {
       "target": "broker",
       "kind": "scaling",
-      "text": "Each connection is a TLS session plus MQTT session state, a few tens of KB of memory. Plan about 250k connections per EMQX node, well under benchmark figures, and run 12 nodes across 3 zones at about 170k each so losing a zone leaves 8 nodes at 250k. The L4 load balancer must be passthrough: an L7 load balancer would terminate TLS, hide the client certificate and add a proxy to every long-lived connection."
+      "text": "Each connection is a TLS session plus MQTT session state, a few tens of KB of memory. Plan about 250k connections per EMQX node, well under benchmark figures, and run 12 nodes across 3 zones at about 170k each so losing a zone leaves 8 nodes at 250k. Losing a zone also drops a third of the fleet at once, about 630k devices, which reconnect through the same backoff and admission control as after a carrier outage. The L4 load balancer must be passthrough: an L7 load balancer would terminate TLS, hide the client certificate and add a proxy to every long-lived connection."
     },
     {
       "target": "shadow",
@@ -508,7 +535,7 @@
     {
       "target": "api",
       "kind": "security",
-      "text": "Firmware rollouts go in waves (1% canary, then 10%, 50%, 100%), each gated on crash and reconnect rates and on the new version reporting healthy telemetry, with an automatic halt. Images are signed and the bootloader verifies the signature and keeps an A/B partition, so a bad image rolls back on the device without a truck visit. Devices download from presigned URLs that expire, never a public bucket."
+      "text": "Firmware rollouts go in waves (1% canary, then 10%, 50%, 100%), each gated on crash and reconnect rates and on the new version reporting healthy telemetry, with an automatic halt. Images are signed and the bootloader verifies the signature and keeps an A/B partition, so a bad image rolls back on the device without a truck visit. Devices download from presigned URLs that expire, never a public bucket; a 1% wave is only 40 GB, but if waves grow, a CDN in front of the image bucket takes that load and egress cost. Device private keys never leave the secure element, and the fleet CA's signing key lives in the managed private CA, never on a build server."
     }
   ],
   "network": {
@@ -596,6 +623,29 @@
         "slo": "dashboard-freshness"
       },
       {
+        "id": "connect-slow-burn",
+        "severity": "ticket",
+        "when": "Connect success burning the error budget 2 times too fast over 6 hours and 3 days",
+        "why": "A steady trickle of failed connects, often one device model or one carrier, that never pages.",
+        "target": "broker",
+        "slo": "connect-success"
+      },
+      {
+        "id": "fleet-recovery",
+        "severity": "page",
+        "when": "15 minutes after connected devices dropped by more than 5%, fewer than 95% of them are connected again",
+        "why": "The 15-minute reconnect target is missed: admission limits, the certificate path or device backoff is holding the fleet back.",
+        "target": "broker",
+        "slo": "connect-success"
+      },
+      {
+        "id": "cert-expiry",
+        "severity": "ticket",
+        "when": "More than 1,000 devices whose certificate expires within 30 days have not completed rotation",
+        "why": "Each one will be refused at its next connect after expiry and need a field visit, so rotation failures must be chased weeks ahead.",
+        "target": "registry"
+      },
+      {
         "id": "tsdb-throttle",
         "severity": "ticket",
         "when": "Time-series write latency p99 above 500 ms or any throttled writes for 15 minutes",
@@ -609,7 +659,8 @@
       { "target": "broker", "name": "Queued messages per session", "metric": "mqtt_session_queue_len", "why": "Commands waiting for offline devices. Sessions at the queue limit are dropping commands, which the twin must then redeliver." },
       { "target": "stream", "name": "Consumer lag", "metric": "stream_iterator_age_seconds", "why": "Separates slow processing from slow ingestion when dashboards are stale." },
       { "target": "processor", "name": "Late and invalid readings", "metric": "readings_late_total, readings_invalid_total{model,fw}", "why": "Late readings rise after outages; invalid readings grouped by firmware version point at a bad release." },
-      { "target": "shadow", "name": "Oldest pending command", "metric": "commands_pending_age_seconds", "why": "Commands that never get a result, from devices that are offline or ignoring them." }
+      { "target": "shadow", "name": "Oldest pending command", "metric": "commands_pending_age_seconds", "why": "Commands that never get a result, from devices that are offline or ignoring them." },
+      { "target": "processor", "name": "Meters with no reading in 24 hours", "metric": "meters_silent_24h{group}", "why": "The business number: a meter that does not report cannot be billed from actual readings, and a cluster of them in one group points at a local network or firmware problem." }
     ],
     "debug": [
       {

@@ -28,7 +28,7 @@
       "Survive the loss of a whole region: RTO 1 min, RPO 5 s for profile and order data",
       "Each region can carry 100% of global peak on its own",
       "A request retried after a failover never creates a second order or a second charge",
-      "EU users' personal data handling meets the company's data residency commitments"
+      "EU users' personal data may be stored in both regions under the company's transfer safeguards; strict EU residency is out of scope here (see the security note for the change it would need)"
     ],
     "scale": [
       {
@@ -134,7 +134,7 @@
         "id": "read-availability",
         "name": "Profile and history reads",
         "kind": "availability",
-        "sli": "Read requests answered without a 5xx or timeout, divided by all read requests, summed across both regions' load balancers",
+        "sli": "Read requests answered without a 5xx or timeout, divided by all read requests, summed across both regions' load balancers. Requests that never reach a load balancer while a region is dark are invisible here, so external probes and the region-unhealthy alert cover that window",
         "target": 99.99
       },
       {
@@ -177,6 +177,14 @@
         "why": "Users cannot buy, which loses revenue directly.",
         "target": "api",
         "slo": "order-availability"
+      },
+      {
+        "id": "slow-burn",
+        "severity": "ticket",
+        "when": "Read or order errors burning the error budget 2 times too fast over 6 hours and 3 days (the slow-burn pair beside the two pages above)",
+        "why": "A small steady error rate, often one region or one dependency, that will use up the month's budget without ever paging.",
+        "target": "lb",
+        "slo": "read-availability"
       },
       {
         "id": "region-unhealthy",
@@ -245,6 +253,12 @@
         "name": "Last successful run",
         "metric": "billing_last_success_timestamp",
         "why": "The job runs only in us-east-1, so a region failure shows up here first."
+      },
+      {
+        "target": "api",
+        "name": "Orders placed per region against last week",
+        "metric": "orders_created_total{region} / same minute last week",
+        "why": "The business view: a drop in one region that its error rate does not explain (a broken client release, a payment method failing) shows here first."
       }
     ],
     "debug": [
@@ -269,6 +283,16 @@
     ]
   },
   "nodes": [
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACLs attached to each regional load balancer and to the CDN: managed rule sets, per-IP rate limits and bot rules, evaluated before a request reaches either",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
+    },
     {
       "id": "client",
       "label": "Web and Mobile App",
@@ -309,7 +333,7 @@
       "id": "api",
       "label": "Profile and Orders API",
       "kind": "service",
-      "description": "Stateless; runs in both regions, each sized for 100% of global peak; verifies tokens locally",
+      "description": "Stateless; runs in all three zones of both regions, each region sized for 100% of global peak; verifies tokens locally against the identity provider's public keys (token issuing, and the signing key held in a KMS key replicated to both regions, are left out of this diagram)",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -329,7 +353,7 @@
       "id": "db",
       "label": "Global Table",
       "kind": "nosql_db",
-      "description": "users, orders, refresh tokens; a full replica in each region takes local writes and replicates asynchronously, last writer wins per item",
+      "description": "users, orders, refresh tokens; a full replica in each region takes local writes and replicates asynchronously, last writer wins per item; reached from the API through a VPC gateway endpoint in each region, so table traffic never goes through the NAT gateways",
       "cloud": {
         "aws": "DynamoDB global tables",
         "gcp": "Spanner"
@@ -340,7 +364,7 @@
       "label": "Avatar Storage",
       "kind": "object_store",
       "regions": "global",
-      "description": "A bucket in each region behind one global endpoint, with two-way replication; keys are unique per upload, so replication never conflicts",
+      "description": "A bucket in each region behind one global endpoint, with two-way replication; keys are unique per upload, so replication never conflicts. Uploads (a presigned PUT from the app) are left out of this diagram. On Google Cloud a dual-region bucket cannot span two continents, so the equivalent is a bucket per region behind the load balancer",
       "cloud": {
         "aws": "S3 Multi-Region Access Point",
         "gcp": "Cloud Storage dual-region bucket"
@@ -372,7 +396,7 @@
       "id": "psp",
       "label": "Payment Provider",
       "kind": "payment_provider",
-      "description": "Charges cards; accepts an idempotency key and returns the original charge for a repeated key"
+      "description": "Charges cards; accepts an idempotency key and returns the original charge for a repeated key. Called over the internet through each region's NAT gateways (one per zone), with the provider's API key read from a secrets store at startup"
     }
   ],
   "groups": [],
@@ -383,10 +407,14 @@
     },
     {
       "from": "client",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
       "to": "cdn"
     },
     {
-      "from": "client",
+      "from": "waf",
       "to": "lb"
     },
     {
@@ -443,7 +471,7 @@
         },
         {
           "from": "client",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "GET /v1/me",
@@ -451,12 +479,21 @@
           "payload": "GET /v1/me HTTP/2\nHost: api.shop.example\nAuthorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6ImsyMDI2MTEifQ..."
         },
         {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: GET /v1/me",
+          "detail": "The web ACL checks the request against managed rule sets (injection, known bad inputs), a per-IP rate limit and bot rules, and blocks it with a 403 before it costs the region anything. It runs in both regions with the same rules, so a failover does not change what is allowed."
+        },
+        {
           "from": "lb",
           "to": "api",
           "kind": "req",
           "phase": "Request in",
           "label": "GET /v1/me",
-          "detail": "Any task in any zone can take it, because the service keeps no state between requests."
+          "detail": "Any task in any zone can take it, because the service keeps no state between requests. The load balancer adds a trace id, which the API passes on to the cache, table and payment calls, so one trace covers the whole request in either region.",
+          "payload": "GET /v1/me HTTP/1.1\nHost: api.shop.example\nX-Amzn-Trace-Id: Root=1-6730b2c1-5f0e9a7d3c1b48e2a9d07f61\ntraceparent: 00-5f0e9a7d3c1b48e2a9d07f61a3b2c4d5-9b1e0c2d4a6f8e01-01"
         },
         {
           "from": "api",
@@ -522,6 +559,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 profile"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -530,11 +574,19 @@
         },
         {
           "from": "client",
-          "to": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Avatar",
           "label": "GET avatar",
           "detail": "Images never touch the regional stack: the CDN serves them from an edge location near the user."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Avatar",
+          "label": "passed: GET avatar",
+          "detail": "Same web ACL checks: allowed, so it is passed on."
         },
         {
           "from": "cdn",
@@ -542,7 +594,7 @@
           "kind": "req",
           "phase": "Avatar",
           "label": "origin fetch on miss",
-          "detail": "The origin is the global storage endpoint, which routes to the nearest bucket that holds the object and to the other one if a region is down."
+          "detail": "The origin is the global storage endpoint, which routes to the nearest healthy bucket by network distance, not by which bucket holds the object, so an avatar uploaded in the other region a moment ago can 404 until replication catches up; the app shows the old avatar or retries."
         },
         {
           "from": "media",
@@ -553,6 +605,13 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Avatar",
+          "label": "image"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Avatar",
@@ -567,12 +626,20 @@
       "steps": [
         {
           "from": "client",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/orders",
           "detail": "The app creates the order id when the user taps Buy and sends it on every retry. Because the id is chosen by the client, a retry in either region names the same order.",
           "payload": "POST /v1/orders HTTP/2\nAuthorization: Bearer eyJhbGci...\nIdempotency-Key: ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\n\n{ \"items\": [{ \"sku\": \"BK-2231\", \"qty\": 1 }], \"total_minor\": 3499, \"currency\": \"EUR\", \"payment_method\": \"pm_card_8812\" }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: POST /v1/orders",
+          "detail": "The web ACL checks the request against managed rule sets (injection, known bad inputs), a per-IP rate limit and bot rules, and blocks it with a 403 before it costs the region anything. It runs in both regions with the same rules, so a failover does not change what is allowed."
         },
         {
           "from": "lb",
@@ -603,8 +670,8 @@
           "kind": "req",
           "phase": "Charge",
           "label": "create charge, key = order id",
-          "detail": "Using the order id as the provider's idempotency key means a retry from any region, at any time, gets the original charge back instead of charging again.",
-          "payload": "POST /v1/charges\nIdempotency-Key: ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\n\n{ \"amount\": 3499, \"currency\": \"eur\", \"payment_method\": \"pm_card_8812\" }"
+          "detail": "Using the order id as the provider's idempotency key means a retry from any region gets the original charge back instead of charging again, for as long as the provider retains keys (a day or more at common providers), which comfortably covers client retries.",
+          "payload": "POST /v1/charges\nIdempotency-Key: ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\n\n{ \"amount\": 3499, \"currency\": \"eur\", \"payment_method\": \"pm_card_8812\", \"metadata\": { \"order_id\": \"ord_01JCK8Z3W4M6T9QX2B7Y5N0RHD\" } }"
         },
         {
           "from": "psp",
@@ -654,6 +721,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "Order confirmed"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -676,14 +750,29 @@
       "steps": [
         {
           "from": "client",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "In flight",
           "label": "POST /v1/orders to us-east-1",
           "detail": "A New York user taps Buy as us-east-1 fails. The order PENDING row committed and replicated, the charge succeeded at the provider, but the region died before the PAID update replicated."
         },
         {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "In flight",
+          "label": "passed: POST /v1/orders to us-east-1",
+          "detail": "The web ACL checks the request against managed rule sets (injection, known bad inputs), a per-IP rate limit and bot rules, and blocks it with a 403 before it costs the region anything. It runs in both regions with the same rules, so a failover does not change what is allowed."
+        },
+        {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "In flight",
+          "label": "connection reset"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "In flight",
@@ -716,12 +805,20 @@
         },
         {
           "from": "client",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Retry",
           "label": "POST /v1/orders, same order id",
           "detail": "Same id and same body, now to eu-west-1, about 75 ms further away for this user but fully able to serve them.",
           "payload": "POST /v1/orders HTTP/2\nIdempotency-Key: ord_01JCK9A1F7R2V8PZ6D3K0W5MYS\n\n{ \"items\": [{ \"sku\": \"HD-0410\", \"qty\": 2 }], \"total_minor\": 5998, \"currency\": \"USD\", \"payment_method\": \"pm_card_2290\" }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Retry",
+          "label": "passed: POST /v1/orders, same order id",
+          "detail": "Same web ACL checks: allowed, so it is passed on."
         },
         {
           "from": "lb",
@@ -803,6 +900,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "Order confirmed (once)"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -849,6 +953,15 @@
       "target": "db",
       "kind": "note",
       "text": "On Google Cloud the closest managed choice is a multi-region Spanner instance, which behaves differently: it commits each write synchronously to a majority of replicas across regions, so nothing committed is lost and there are no conflicts, but every write pays the cross-region quorum latency. Bigtable with multi-cluster replication is the asynchronous, last writer wins equivalent of the model drawn here."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The same web ACL is deployed to both regions' load balancers from one template, because a rule that exists in only one region becomes a hole the moment users fail over to the other. Per-IP rate limits are counted per region, so a failover roughly doubles what one region sees from the same clients: set them with that headroom, and keep request size limits in mind for order bodies. The CDN gets its own global web ACL, since avatars never touch the regional stack."
+    },
+    {
+      "kind": "note",
+      "text": "Each region runs its own VPC with the layout drawn here across three zones, with non-overlapping ranges (10.20.0.0/16 in us-east-1, 10.21.0.0/16 in eu-west-1) so they can be peered later. Nothing on the request path crosses between the VPCs: the global table and the buckets replicate over the provider's backbone, so no peering or transit gateway is needed. Losing a zone inside a region is absorbed locally: API tasks run in all three zones, the cache promotes its replica in another zone, and the table and buckets are regional services."
     }
   ],
   "questions": [
@@ -874,7 +987,7 @@
     {
       "id": "retry-after-failover",
       "q": "A checkout times out just as its region fails, and the app retries in the other region. How do you avoid a duplicate order or a double charge?",
-      "a": "The client generates the order id once and reuses it as the idempotency key, so the retry names the same order. If the original row replicated, a conditional put finds it and the service resumes or replays it; if it did not, the new region creates it under the same id, and the two versions later converge on one item instead of two orders. The payment provider call uses the same key, so whichever region calls it gets the original charge back, which is the guarantee that matters most because the database alone cannot see unreplicated writes.",
+      "a": "The client generates the order id once and reuses it as the idempotency key, so the retry names the same order. If the original row replicated, a conditional put finds it and the service resumes or replays it; if it did not, the new region creates it under the same id, and the two versions later converge on one item instead of two orders. The payment provider call uses the same key, so whichever region calls it gets the original charge back, which is the guarantee that matters most because the database alone cannot see unreplicated writes. If the client gives up and never retries, a sweeper task in the API finds orders still PENDING after a few minutes, looks up the charge at the provider by the order id (sent as charge metadata), and marks each one PAID or cancelled (refunding if needed), so no card stays charged for an order the user never saw confirmed.",
       "topic": "reliability",
       "targets": [
         "client",

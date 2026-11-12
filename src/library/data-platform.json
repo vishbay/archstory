@@ -130,6 +130,13 @@
         "threshold": "by 06:00 ET"
       },
       {
+        "id": "events-complete",
+        "name": "No acknowledged event lost",
+        "kind": "correctness",
+        "sli": "Per hour of received time, events in raw.clickstream divided by events the collectors acknowledged with a 202 (both counted by request id once the hour has fully landed)",
+        "target": 99.999
+      },
+      {
         "id": "curated-correct",
         "name": "Curated data is right first time",
         "kind": "correctness",
@@ -171,6 +178,14 @@
         "slo": "query-latency"
       },
       {
+        "id": "events-missing",
+        "severity": "page",
+        "when": "Any fully landed hour where raw.clickstream holds fewer events than the collectors acknowledged",
+        "why": "Acknowledged events are gone from the device, so a gap here is permanent loss unless Kafka still holds them: replay from Kafka within its 7 day retention.",
+        "target": "events",
+        "slo": "events-complete"
+      },
+      {
         "id": "gate-blocked",
         "severity": "ticket",
         "when": "Any quality gate blocks a curated publish, or more than 0.5% of a topic's events go to quarantine for 15 minutes",
@@ -192,6 +207,21 @@
         "when": "CDC replication lag above 15 minutes, or WAL retained by the replication slot on the orders DB above 20 GB",
         "why": "A stalled CDC task makes the slot keep WAL on the production database. Left alone it fills the disk and takes checkout down, so act well before that.",
         "target": "cdc"
+      },
+      {
+        "id": "kafka-isr",
+        "severity": "ticket",
+        "when": "Any clickstream.raw partition under-replicated or below 2 in-sync replicas for 10 minutes",
+        "why": "With fewer than 2 in-sync replicas, acks=all writes fail and the collectors start returning errors; one more broker loss would lose data. Fix before the next zone problem.",
+        "target": "events",
+        "slo": "events-complete"
+      },
+      {
+        "id": "compaction-behind",
+        "severity": "ticket",
+        "when": "Average data file size of a streaming table below 32 MB for 6 hours, or more than 5,000 files in one day's partition",
+        "why": "Compaction has stopped, and every scan of the table will slow down day by day until it runs again.",
+        "target": "lake"
       }
     ],
     "signals": [
@@ -230,6 +260,18 @@
         "name": "Nightly DAG critical path end time",
         "metric": "dag_critical_path_eta_seconds{dag=\"nightly_orders\"}",
         "why": "Predicts the 06:00 deadline from the tasks still to run, so a slow night is visible before it becomes a late one."
+      },
+      {
+        "target": "warehouse",
+        "name": "Revenue reconciliation gap",
+        "metric": "daily_revenue_diff_pct{ds} (warehouse against the orders database's own total)",
+        "why": "The business number finance trusts; a small but growing gap shows a CDC or merge problem before anyone files a ticket."
+      },
+      {
+        "target": "collector",
+        "name": "Accepted events by app version",
+        "metric": "collector_events_total{app, app_version, schema_ref}",
+        "why": "A new release that drops or renames events shows up as a step change for that version alone."
       }
     ],
     "debug": [
@@ -271,6 +313,16 @@
       }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACL attached to the collector's load balancer: per-IP and per-app-key rate limits, request size limits and bot rules",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
+    },
+    {
       "id": "lb",
       "label": "Load Balancer (L7)",
       "kind": "load_balancer",
@@ -284,7 +336,7 @@
       "id": "collector",
       "label": "Event Collector",
       "kind": "service",
-      "description": "Deliberately thin: checks the app key and size, stamps received time, writes to Kafka. No schema validation, so a bad release never makes it reject events",
+      "description": "Deliberately thin: checks the app key and size, stamps received time and a request id, writes to Kafka. No schema validation, so a bad release never makes it reject events",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -305,7 +357,7 @@
       "label": "Data Lake",
       "kind": "object_store",
       "ha": "regional",
-      "description": "Iceberg tables in Parquet, in raw, cleaned and curated zones (plus quarantine). Lifecycle rules move older files to infrequent-access tiers",
+      "description": "Iceberg tables in Parquet, in raw, cleaned and curated zones (plus quarantine). Lifecycle rules move older files to infrequent-access tiers. Reached from the VPC through a gateway endpoint, so terabytes a day never pass through the NAT gateways",
       "cloud": {
         "aws": "S3",
         "gcp": "Cloud Storage"
@@ -328,7 +380,7 @@
       "label": "Catalog and Schema Registry",
       "kind": "data_catalog",
       "ha": "regional",
-      "description": "Table metadata and Iceberg snapshot pointers, event schemas with compatibility rules, data contracts for SaaS exports, column tags (PII) that drive access policies, and lineage",
+      "description": "Table metadata and Iceberg snapshot pointers, event schemas with compatibility rules, data contracts for SaaS exports, column tags (PII) that drive access policies, and lineage. On AWS the event schemas live in Glue Schema Registry beside the Data Catalog's tables",
       "cloud": {
         "aws": "Glue Data Catalog",
         "gcp": "Dataplex"
@@ -351,7 +403,7 @@
       "label": "CDC Replication",
       "kind": "worker",
       "ha": "primary-standby",
-      "description": "Reads the orders DB's logical replication slot and writes every change, deletes included, as Parquet files to the raw zone",
+      "description": "Reads the orders DB's logical replication slot and writes every change, deletes included, with its operation and log position, as Parquet files to the raw zone (Datastream writes Avro or JSON instead)",
       "cloud": {
         "aws": "DMS",
         "gcp": "Datastream"
@@ -382,13 +434,13 @@
       "id": "saas",
       "label": "SaaS Exports",
       "kind": "external_api",
-      "description": "Ad platforms, CRM and support tools; pulled daily through their export APIs, with rate limits and their own schema changes"
+      "description": "Ad platforms, CRM and support tools; pulled daily through their export APIs, with rate limits and their own schema changes. Called through the NAT gateways with API credentials kept in a secrets store"
     },
     {
       "id": "bi",
       "label": "BI Tool",
       "kind": "external_api",
-      "description": "Dashboards and ad hoc exploration; queries the warehouse as a service account with each user's identity passed through for access policies",
+      "description": "Dashboards and ad hoc exploration; queries the warehouse as a service account with each user's identity passed through for access policies; reaches the warehouse through a private VPC connection, not a public endpoint",
       "cloud": {
         "aws": "QuickSight",
         "gcp": "Looker"
@@ -403,6 +455,10 @@
     },
     {
       "from": "app",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
       "to": "lb"
     },
     {
@@ -478,12 +534,20 @@
         },
         {
           "from": "app",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Collect",
           "label": "POST /v1/events (batch of 20)",
           "detail": "The SDK buffers events on the device and sends every 10 s or 20 events, which saves battery and requests. Each event carries its own id, schema reference and the device's event time, because the time it is sent can be hours later.",
           "payload": "POST /v1/events\nX-App-Key: ios-prod-7f2c\n\n{ \"sent_at\": \"2026-11-10T14:02:11Z\",\n  \"events\": [\n    { \"event_id\": \"01JC9Q4W8E7K\", \"schema\": \"add_to_cart/3\",\n      \"event_ts\": \"2026-11-10T14:01:58Z\", \"session_id\": \"s_91a\",\n      \"user_id\": \"u_5521\", \"product_id\": \"p_88213\", \"price\": 19.99, \"qty\": 1 },\n    ... ] }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Collect",
+          "label": "passed: POST /v1/events (batch of 20)",
+          "detail": "The collector is a public endpoint and its app key ships inside every app, so it is not a secret. The web ACL rate limits per IP and per app key, caps request size and drops known bots before a flood can fill Kafka with junk."
         },
         {
           "from": "lb",
@@ -498,8 +562,8 @@
           "to": "collector",
           "kind": "local",
           "phase": "Collect",
-          "label": "check key and size, stamp received_at",
-          "detail": "The collector does as little as possible so it stays available: no schema checks and no lookups. received_at is the server's clock, used later to measure lateness and to find which hours a backfill must touch."
+          "label": "check key and size, stamp received_at and request id",
+          "detail": "The collector does as little as possible so it stays available: no schema checks and no lookups. received_at is the server's clock, used later to measure lateness and to find which hours a backfill must touch. The request id goes into each record's Kafka headers and the raw table, so one batch can be traced from the app to the micro-batch that landed it."
         },
         {
           "from": "collector",
@@ -507,7 +571,8 @@
           "kind": "req",
           "phase": "Collect",
           "label": "produce, key = session_id, acks=all",
-          "detail": "Keying by session keeps one session's events in order on one partition. acks=all with min.insync.replicas=2 means an acknowledged event is on two brokers in two zones before the app is told it can drop it."
+          "detail": "Keying by session keeps one session's events in order on one partition. acks=all with min.insync.replicas=2 means an acknowledged event is on two brokers in two zones before the app is told it can drop it.",
+          "payload": "ProducerRecord(topic=\"clickstream.raw\", key=\"s_91a\",\n  headers={ request_id: \"req_7d41c2\", received_at: \"2026-11-10T14:02:11.384Z\" },\n  value={...event JSON...})  acks=all, enable.idempotence=true"
         },
         {
           "from": "events",
@@ -525,6 +590,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Collect",
+          "label": "202: SDK clears its buffer"
+        },
+        {
+          "from": "waf",
           "to": "app",
           "kind": "res",
           "phase": "Collect",
@@ -536,7 +608,7 @@
           "kind": "async",
           "phase": "Land in the lake",
           "label": "streaming job reads (1 min trigger)",
-          "detail": "A Spark Structured Streaming job reads a minute of offsets at a time. Its offsets are saved in a checkpoint in the lake and committed with the table write, so a restart neither skips nor duplicates a micro-batch."
+          "detail": "A Spark Structured Streaming job reads a minute of offsets at a time and keeps its offsets in a checkpoint in the lake. After a crash it replays at most the last micro-batch, and the replay is harmless: Iceberg skips a commit it already has for that batch, and cleaned drops repeated event ids."
         },
         {
           "from": "spark",
@@ -559,7 +631,7 @@
           "kind": "local",
           "phase": "Land in the lake",
           "label": "validate, dedupe, partition by event time",
-          "detail": "Events are written to the hour they happened in, not the hour they arrived, so an event from a phone that was offline for a day lands in yesterday's partition. Duplicates from SDK retries are dropped on event_id within a 3 day watermark; events later than that go to a late table that the nightly job merges. user_id is replaced by a keyed hash in cleaned, so the raw zone is the only place it appears in clear."
+          "detail": "Events are written to the hour they happened in, not the hour they arrived, so an event from a phone that was offline for a day lands in yesterday's partition. SDK retries usually repeat an event within minutes, so the stream drops repeated event_ids with one hour of state; keeping 3 days of ids (about 6B) in streaming state would be far too large. The curated build counts distinct event_ids per hour, so a rare later duplicate never inflates a metric, and the nightly job removes it from cleaned. Events more than 3 days late go to a late table that the nightly job merges. user_id is replaced by a keyed hash in cleaned, so the raw zone is the only place it appears in clear."
         },
         {
           "from": "spark",
@@ -591,8 +663,8 @@
           "kind": "req",
           "phase": "Curate",
           "label": "read new snapshots, overwrite hours on an audit branch",
-          "detail": "An incremental read returns only rows added since the last processed snapshot. Overwriting whole hours, instead of adding to them, makes the job idempotent: running it twice gives the same table.",
-          "payload": "-- write-audit-publish: writes go to a branch readers cannot see\nALTER TABLE curated.page_views_hourly CREATE BRANCH audit_88121;\nSET spark.wap.branch = audit_88121;\nINSERT OVERWRITE curated.page_views_hourly\nSELECT date_trunc('hour', event_ts) AS hour, product_id, channel,\n       count(*) AS views, count(DISTINCT session_id) AS sessions\nFROM cleaned.events\nWHERE event_type = 'page_view'\n  AND hours(event_ts) IN ('2026-11-10T14', '2026-11-10T13', '2026-11-08T21')\nGROUP BY 1, 2, 3;"
+          "detail": "An incremental read returns only rows added since the last processed snapshot. Overwriting whole hours, instead of adding to them, makes the job idempotent: running it twice gives the same table. Dynamic partition overwrite matters: in static mode an INSERT OVERWRITE without a partition clause would replace the whole table.",
+          "payload": "-- write-audit-publish: writes go to a branch readers cannot see\nALTER TABLE curated.page_views_hourly CREATE BRANCH audit_88121;\nSET spark.wap.branch = audit_88121;\nSET spark.sql.sources.partitionOverwriteMode = dynamic;  -- replace only the hours written\nINSERT OVERWRITE curated.page_views_hourly\nSELECT date_trunc('hour', event_ts) AS hour, product_id, channel,\n       count(DISTINCT event_id) AS views, count(DISTINCT session_id) AS sessions\nFROM cleaned.events\nWHERE event_type = 'page_view'\n  AND date_trunc('hour', event_ts) IN (TIMESTAMP '2026-11-10 14:00', TIMESTAMP '2026-11-10 13:00', TIMESTAMP '2026-11-08 21:00')\nGROUP BY 1, 2, 3;"
         },
         {
           "from": "lake",
@@ -608,7 +680,7 @@
           "phase": "Quality gate",
           "label": "run checks on the branch",
           "detail": "Checks run against the unpublished data: volume against the same hour in the last 4 weeks, null and range checks on key columns, unique keys, and that totals match the cleaned table. A failing check stops the publish, so dashboards keep showing the last good data.",
-          "payload": "checks: curated.page_views_hourly @ audit_88121\n  row_count vs 4-week same-hour median: -3%   (limit +-25%)   PASS\n  null product_id:                      0.00% (limit 0.1%)   PASS\n  unique (hour, product_id, channel):   ok                   PASS\n  sum(views) = cleaned page_view count: ok                   PASS"
+          "payload": "checks: curated.page_views_hourly @ audit_88121\n  row_count vs 4-week same-hour median: -3%   (limit +-25%)   PASS\n  null product_id:                      0.00% (limit 0.1%)   PASS\n  unique (hour, product_id, channel):   ok                   PASS\n  sum(views) = distinct cleaned page_views: ok                   PASS"
         },
         {
           "from": "spark",
@@ -873,12 +945,20 @@
       "steps": [
         {
           "from": "app",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Bad release",
           "label": "POST /v1/events from app 8.2",
           "detail": "Release 8.2 renamed product_id to sku and sends price as text, under schema add_to_cart/4, which was never registered. The app team's CI did not run the schema compatibility check.",
           "payload": "{ \"event_id\": \"01JCA0M3ZQ2T\", \"schema\": \"add_to_cart/4\", \"event_ts\": \"2026-11-10T13:07:44Z\",\n  \"session_id\": \"s_c40\", \"sku\": \"p_88213\", \"price\": \"19.99 USD\", \"qty\": 1 }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Bad release",
+          "label": "passed: POST /v1/events from app 8.2",
+          "detail": "The collector is a public endpoint and its app key ships inside every app, so it is not a secret. The web ACL rate limits per IP and per app key, caps request size and drops known bots before a flood can fill Kafka with junk."
         },
         {
           "from": "lb",
@@ -1009,7 +1089,7 @@
           "kind": "req",
           "phase": "Backfill",
           "label": "map /4 events, overwrite cleaned and curated hours",
-          "detail": "Each affected hour is overwritten whole, on an audit branch, so the backfill cannot double count events that already landed and can be rerun safely if it fails halfway.",
+          "detail": "Each affected hour is overwritten whole, on an audit branch, so the backfill cannot double count events that already landed and can be rerun safely if it fails halfway. It runs with dynamic partition overwrite, like the regular build.",
           "payload": "INSERT OVERWRITE cleaned.events          -- hours 13..16 for add_to_cart\nSELECT * FROM cleaned.events WHERE ... -- the valid /3 events already there\nUNION ALL\nSELECT map_v4_to_v3(payload) FROM quarantine.events\nWHERE schema_ref = 'add_to_cart/4' AND hours(received_at) BETWEEN 13 AND 16;"
         },
         {
@@ -1066,7 +1146,7 @@
     {
       "target": "spark",
       "kind": "failure",
-      "text": "Late and duplicate events are the normal case, not the exception. Partition by event time, deduplicate on event_id within a 3 day watermark, and track which hours each micro-batch touched so the curated build recomputes those hours whole. Every write overwrites a partition rather than appending to it, which is what makes reruns, retries and backfills safe."
+      "text": "Late and duplicate events are the normal case, not the exception. Partition by event time, drop repeated event_ids in the stream over a short window and count distinct event_ids in the curated build, and track which hours each micro-batch touched so the curated build recomputes those hours whole. Every write overwrites a partition rather than appending to it, which is what makes reruns, retries and backfills safe."
     },
     {
       "target": "lake",
@@ -1087,6 +1167,11 @@
       "target": "warehouse",
       "kind": "scaling",
       "text": "Query cost tracks bytes scanned. A full scan of two years of cleaned events is about 150 TB, roughly $900 per query at BigQuery on-demand prices; with a 7 day partition filter it is about 1.4 TB, and reading 4 of 40 columns from clustered files brings it under 150 GB. Require partition filters on large tables, point dashboards at hourly marts instead of event tables, and set per-team budgets or reservations with alerts."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The collector accepts anonymous traffic from the internet with an app key anyone can extract from the app, so anyone can send it events. The web ACL limits volume (per IP and per key) and size, which protects Kafka and the bill, but cannot tell a fake page view from a real one: treat clickstream as untrusted input, validate it in the streaming job, and never let it drive money (orders and revenue come only from the orders database). Watch the rate limits during sales, when legitimate traffic from one carrier IP can look like a flood."
     }
   ],
   "questions": [

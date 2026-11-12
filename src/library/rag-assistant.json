@@ -81,7 +81,7 @@
       "id": "user",
       "label": "Employees (web and Slack)",
       "kind": "web_client",
-      "description": "The web app and the Slack bot; both sign in through the company SSO and read the answer as a stream"
+      "description": "The web app and the Slack bot. Web users sign in through the company SSO; the Slack bot links each Slack user to their SSO identity once (an OAuth sign-in) and calls the API with a short-lived token issued for that user, never with a shared bot identity, so retrieval always runs with the asking person's permissions"
     },
     {
       "id": "dns",
@@ -91,6 +91,16 @@
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Web ACL attached to the load balancer: managed rule sets, per-IP rate limits and request size limits, before any request reaches the orchestrator",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
       }
     },
     {
@@ -117,7 +127,7 @@
       "id": "cache",
       "label": "Cache",
       "kind": "cache",
-      "description": "Per-user rate limit buckets, each user's resolved group list, recent conversation turns, query embeddings and an answer cache scoped by permission set",
+      "description": "Per-user rate limit buckets, each user's resolved group list (loaded from the registry on a miss, kept for 5 minutes), recent conversation turns, query embeddings and an answer cache scoped by permission set",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -127,7 +137,7 @@
       "id": "vector_index",
       "label": "Vector + Keyword Index",
       "kind": "vector_db",
-      "description": "One record per chunk: text, 1024-dim embedding, BM25 terms, doc id, version, source link and the principals allowed to read it. Serves k-NN and keyword search with the permission filter applied inside the query",
+      "description": "One record per chunk: text, 1024-dim embedding, BM25 terms, doc id, version, source link and the principals allowed to read it. Serves k-NN and keyword search with the permission filter applied inside the query. Sharded across data nodes in three zones with one replica of each shard, so the HNSW graphs need about twice the 250 GB in memory; reached through the VPC",
       "cloud": {
         "aws": "Amazon OpenSearch Service",
         "gcp": "Vertex AI Vector Search"
@@ -137,7 +147,7 @@
       "id": "meta_db",
       "label": "Document Registry DB",
       "kind": "sql_db",
-      "description": "Each document's source, version, content and ACL hashes and chunk ids; connector cursors; conversations, answer traces and thumbs up/down feedback",
+      "description": "Each document's source, version, content and ACL hashes and chunk ids; connector cursors; directory group memberships synced by the connectors; conversations, answer traces and thumbs up/down feedback",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -157,7 +167,7 @@
       "id": "ingest_q",
       "label": "Ingestion Queue",
       "kind": "queue",
-      "description": "One message per changed or deleted document, with a dead-letter queue for files that keep failing to parse",
+      "description": "FIFO queue with the document id as the message group, so two versions of one document are never processed at once or out of order; one message per changed or deleted document, with a dead-letter queue for files that keep failing to parse (ordering keys on Pub/Sub)",
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
@@ -168,7 +178,7 @@
       "label": "Source Connectors",
       "kind": "scheduler",
       "tier": "services",
-      "description": "Every few minutes asks each source for changes since its saved cursor (content, permissions and deletions), plus a weekly full listing to catch missed deletes",
+      "description": "Every few minutes asks each source for changes since its saved cursor (content, permissions and deletions), plus a weekly full listing to catch missed deletes. Also syncs directory group memberships, and runs the daily permission audit that rechecks a sample of prompt chunks against the source APIs. Source credentials (service account tokens, OAuth clients) live in a secrets store and rotate; calls to the SaaS sources leave through the NAT gateways",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -188,7 +198,7 @@
       "id": "llm",
       "label": "LLM API",
       "kind": "llm",
-      "description": "Managed model API: a small fast model for query rewriting and checks, a larger model for answers, and a fallback model with its own quota",
+      "description": "Managed model API: a small fast model for query rewriting and checks, a larger model for answers, and a fallback model with its own quota. Reached through a private endpoint (interface VPC endpoint or Private Service Connect), not the internet, in the company's own region",
       "cloud": {
         "aws": "Amazon Bedrock",
         "gcp": "Vertex AI"
@@ -198,7 +208,7 @@
       "id": "embed",
       "label": "Embedding + Rerank API",
       "kind": "llm",
-      "description": "Managed embedding model (1024 dimensions) and a cross-encoder reranking model",
+      "description": "Managed embedding model (1024 dimensions) and a cross-encoder reranking model, reached through the same private endpoint",
       "cloud": {
         "aws": "Amazon Bedrock",
         "gcp": "Vertex AI"
@@ -208,7 +218,7 @@
       "id": "sources",
       "label": "Source Systems",
       "kind": "external_api",
-      "description": "Confluence, SharePoint, Google Drive, Jira and ServiceNow, each with its own change API and permission model"
+      "description": "Confluence, SharePoint, Google Drive, Jira and ServiceNow, each with its own change API and permission model, plus the company directory (Entra ID or Okta) for group membership"
     }
   ],
   "edges": [
@@ -218,6 +228,10 @@
     },
     {
       "from": "user",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
       "to": "lb",
       "protocol": "HTTPS + SSE"
     },
@@ -309,11 +323,11 @@
           "kind": "res",
           "phase": "DNS",
           "label": "load balancer IPs",
-          "payload": "ask.corp.example.  60  IN A  10.20.1.15"
+          "payload": "ask.corp.example.  60  IN A  52.4.18.77\nask.corp.example.  60  IN A  3.94.211.6"
         },
         {
           "from": "user",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/ask (Accept: text/event-stream)",
@@ -321,12 +335,21 @@
           "payload": "POST /v1/ask\nAuthorization: Bearer <SSO id token>\nAccept: text/event-stream\n\n{ \"conversation_id\": \"c_71f\",\n  \"question\": \"does that apply to contractors too?\" }"
         },
         {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: POST /v1/ask (Accept: text/event-stream)",
+          "detail": "The web ACL on the load balancer checks managed rule sets, a per-IP rate limit and a request size limit, and blocks bad traffic before it can spend model tokens; it cannot judge prompts, which is the orchestrator's job."
+        },
+        {
           "from": "lb",
           "to": "chat_api",
           "kind": "req",
           "phase": "Request in",
           "label": "forward to any orchestrator",
-          "detail": "The orchestrator keeps no state between requests, so any instance in any zone can take the stream."
+          "detail": "The orchestrator keeps no state between requests, so any instance in any zone can take the stream. The load balancer adds a trace id that the orchestrator passes on every model, search and cache call and stores in the answer trace, so one id ties a thumbs down to every hop.",
+          "payload": "POST /v1/ask\nX-Amzn-Trace-Id: Root=1-6730d1e4-2a9f6c0b7e3d41a5c8f02b96\ntraceparent: 00-2a9f6c0b7e3d41a5c8f02b96d4e7a1c3-7b2e9f0a1c3d5e60-01"
         },
         {
           "from": "chat_api",
@@ -341,17 +364,17 @@
           "to": "cache",
           "kind": "req",
           "phase": "Auth and limits",
-          "label": "token bucket, groups, history, answer cache",
-          "detail": "One pipelined round trip takes a token from the user's bucket (20 questions a minute, 300k tokens a day), reads the user's flattened group list, the last 4 turns of the conversation, and looks for a cached answer for the same question and permission set.",
-          "payload": "EVALSHA take_token  ratelimit:u_jdoe  20 60\nGET  principals:u_jdoe\nLRANGE conv:c_71f -8 -1\nGET  answer:{sha256(normalized question)}:{acl_fp 9c1e}:{index gen 4812}"
+          "label": "token bucket, groups, history",
+          "detail": "One pipelined round trip takes a token from the user's bucket (20 questions a minute, 300k tokens a day), reads the user's flattened group list and the last 4 turns of the conversation. On a group-list miss the orchestrator reads the memberships the connectors synced into the registry and caches them for 5 minutes, which keeps revocations inside the 15-minute budget.",
+          "payload": "EVALSHA take_token  ratelimit:u_jdoe  20 60\nGET  principals:u_jdoe\nLRANGE conv:c_71f -8 -1"
         },
         {
           "from": "cache",
           "to": "chat_api",
           "kind": "res",
           "phase": "Auth and limits",
-          "label": "allowed, 37 groups, 4 turns, cache miss",
-          "payload": "[1, [\"u:jdoe\", \"g:all-employees\", \"g:eng\", \"g:us-staff\", ...], [...4 turns...], nil]"
+          "label": "allowed, 37 groups, 4 turns",
+          "payload": "[1, [\"u:jdoe\", \"g:all-employees\", \"g:eng\", \"g:us-staff\", ...], [...4 turns...]]"
         },
         {
           "from": "chat_api",
@@ -368,6 +391,22 @@
           "kind": "res",
           "phase": "Rewrite query",
           "label": "\"parental leave eligibility for contractors US\""
+        },
+        {
+          "from": "chat_api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Rewrite query",
+          "label": "look up answer for the rewritten query",
+          "detail": "The lookup uses the standalone rewritten query, not the raw text: \"does that apply to contractors too?\" means something different in every conversation. The key also holds the hash of the user's group list and the index build, so users with different access never share an answer.",
+          "payload": "GET answer:{sha256(\"parental leave eligibility for contractors us\")}:{acl_fp 9c1e}:{index build v7}"
+        },
+        {
+          "from": "cache",
+          "to": "chat_api",
+          "kind": "res",
+          "phase": "Rewrite query",
+          "label": "miss"
         },
         {
           "from": "chat_api",
@@ -453,6 +492,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Stream back",
+          "label": "answer renders word by word (first token about 1.4 s)"
+        },
+        {
+          "from": "waf",
           "to": "user",
           "kind": "res",
           "phase": "Stream back",
@@ -476,6 +522,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Check citations",
+          "label": "citations shown as links"
+        },
+        {
+          "from": "waf",
           "to": "user",
           "kind": "res",
           "phase": "Check citations",
@@ -496,7 +549,7 @@
           "kind": "async",
           "phase": "Record",
           "label": "cache answer for this permission set",
-          "detail": "The cached answer is keyed by the question, the hash of the user's group list and the index generation, and is also listed under each cited document so a change to that document drops it."
+          "detail": "The cached answer is keyed by the rewritten query, the hash of the user's group list and the index build (which changes only on a full rebuild), expires after a day so newly added documents are picked up, and is listed under each cited document so a change to that document drops it."
         }
       ]
     },
@@ -559,8 +612,8 @@
           "kind": "async",
           "phase": "Queue",
           "label": "enqueue IndexDocument",
-          "detail": "The queue absorbs bursts, such as a bulk import of 50k tickets, and retries files that fail to parse without blocking the connector.",
-          "payload": "{ \"op\": \"upsert\", \"doc_id\": \"conf:HR-4411\", \"version\": 43,\n  \"raw\": \"s3://kb-raw/confluence/HR/4411/v43.html\",\n  \"acl\": [\"g:all-employees\"], \"url\": \"https://wiki.corp.example/HR/4411\" }"
+          "detail": "The queue absorbs bursts, such as a bulk import of 50k tickets, and retries files that fail to parse without blocking the connector. The document id is the message group, so a burst of edits to one page is applied in order by one worker at a time.",
+          "payload": "MessageGroupId: conf:HR-4411\nMessageDeduplicationId: conf:HR-4411:v43\n\n{ \"op\": \"upsert\", \"doc_id\": \"conf:HR-4411\", \"version\": 43,\n  \"raw\": \"s3://kb-raw/confluence/HR/4411/v43.html\",\n  \"acl\": [\"g:all-employees\"], \"url\": \"https://wiki.corp.example/HR/4411\" }"
         },
         {
           "from": "ingest_q",
@@ -568,7 +621,7 @@
           "kind": "async",
           "phase": "Queue",
           "label": "deliver to a worker",
-          "detail": "A deleted document arrives the same way with op delete, and the worker removes every chunk with that doc id, so deleted content stops being retrievable within minutes."
+          "detail": "A deleted document arrives the same way with op delete, and the worker removes every chunk with that doc id, so deleted content stops being retrievable within minutes; the connector also deletes the document's raw versions from storage."
         },
         {
           "from": "indexer",
@@ -673,11 +726,19 @@
       "steps": [
         {
           "from": "user",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/ask",
           "detail": "A normal question arrives during the morning peak in the largest office time zone."
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: POST /v1/ask",
+          "detail": "The web ACL on the load balancer checks managed rule sets, a per-IP rate limit and a request size limit, and blocks bad traffic before it can spend model tokens; it cannot judge prompts, which is the orchestrator's job."
         },
         {
           "from": "lb",
@@ -732,7 +793,7 @@
           "kind": "req",
           "phase": "Fall back",
           "label": "fallback model, streamed",
-          "detail": "The fallback is a different model or the same model through another region's quota (on Bedrock a cross-region inference profile). The prompt is unchanged, since all models are evaluated against the same prompt version before they are allowed as fallbacks."
+          "detail": "The fallback is a different model with its own quota in the same region. Cross-region inference profiles would add capacity but send prompts to other regions, which the requirement to keep prompts in the company's region rules out. The prompt is unchanged, since all models are evaluated against the same prompt version before they are allowed as fallbacks."
         },
         {
           "from": "llm",
@@ -752,6 +813,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "answer with citations"
+        },
+        {
+          "from": "waf",
           "to": "user",
           "kind": "res",
           "phase": "Respond",
@@ -774,11 +842,19 @@
       "steps": [
         {
           "from": "user",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/ask \"how do I reset my VPN token?\"",
           "detail": "An ordinary question whose best keyword match happens to be a ticket with planted text."
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed: POST /v1/ask \"how do I reset my VPN token?\"",
+          "detail": "The web ACL on the load balancer checks managed rule sets, a per-IP rate limit and a request size limit, and blocks bad traffic before it can spend model tokens; it cannot judge prompts, which is the orchestrator's job."
         },
         {
           "from": "lb",
@@ -833,7 +909,7 @@
           "kind": "local",
           "phase": "Check output",
           "label": "links must come from cited sources",
-          "detail": "Every URL in the answer must appear in a cited chunk and be on a company domain allowlist. A link that fails is removed and the answer is flagged, which catches the common goal of injections: getting a phishing link in front of the user."
+          "detail": "Every URL or image link in the answer must appear in a cited chunk and be on a company domain allowlist. A link that fails is removed and the answer is flagged, which catches the common goal of injections: getting a phishing link in front of the user."
         },
         {
           "from": "chat_api",
@@ -844,6 +920,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "safe answer with citations"
+        },
+        {
+          "from": "waf",
           "to": "user",
           "kind": "res",
           "phase": "Respond",
@@ -891,6 +974,11 @@
       "target": "llm",
       "kind": "failure",
       "text": "The model provider is the dependency most likely to throttle or slow down, and it is outside your control. Keep a fallback model with separate quota, a circuit breaker so a throttled model is not hammered, and a last-resort answer that lists the most relevant permitted documents. Retrieval is independent of generation, so search keeps working when every model is down."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The assistant is reachable from the internet so remote staff and the Slack bot can use it, so the load balancer sits behind a web ACL and also requires a valid SSO token before anything reaches the orchestrator. The web ACL stops floods and scrapers early, since every request that gets through can cost model tokens, but it cannot recognise prompt injection: that defence lives in the orchestrator, because the dangerous text arrives inside retrieved documents, not in the request. Teams that need it private put the load balancer behind the corporate VPN or a zero-trust proxy and run the Slack bot in socket mode, which connects out to Slack."
     }
   ],
   "network": {
@@ -937,6 +1025,14 @@
         "threshold": "< 2 s"
       },
       {
+        "id": "full-answer",
+        "name": "Full answer under 15 s",
+        "kind": "latency",
+        "sli": "Questions whose done event leaves the load balancer within the threshold of the request arriving, divided by all questions that were not rate limited",
+        "target": 95,
+        "threshold": "< 15 s"
+      },
+      {
         "id": "answer-availability",
         "name": "Questions answered",
         "kind": "availability",
@@ -955,7 +1051,7 @@
         "id": "acl-correct",
         "name": "No unauthorized chunks in prompts",
         "kind": "correctness",
-        "sli": "Sampled prompt chunks that the asking user can open at the source when rechecked through the source API, divided by all sampled chunks (an audit job checks 1,000 a day)",
+        "sli": "Sampled prompt chunks that the asking user can open at the source when rechecked through the source API, divided by all sampled chunks (the connectors' audit task rechecks 1,000 a day, picked from the answer traces)",
         "target": 100
       }
     ],
@@ -977,6 +1073,22 @@
         "slo": "answer-availability"
       },
       {
+        "id": "slow-answers",
+        "severity": "ticket",
+        "when": "More than 5% of answers take over 15 s to finish, over 1 hour and over 6 hours",
+        "why": "Usually longer outputs after a prompt change, or the fallback model, which may be slower, serving more traffic.",
+        "target": "chat_api",
+        "slo": "full-answer"
+      },
+      {
+        "id": "answer-slow-burn",
+        "severity": "ticket",
+        "when": "Failed answers burning the error budget 2 times too fast over 6 hours and 3 days",
+        "why": "A steady trickle of failed streams that never pages, often one client (the Slack bot) or one model.",
+        "target": "chat_api",
+        "slo": "answer-availability"
+      },
+      {
         "id": "acl-mismatch",
         "severity": "page",
         "when": "Any sampled prompt chunk that the user cannot open at the source",
@@ -987,7 +1099,7 @@
       {
         "id": "index-lag",
         "severity": "ticket",
-        "when": "Oldest message in the ingestion queue older than 10 minutes for 15 minutes, or a connector cursor not advanced for 30 minutes",
+        "when": "Oldest message in the ingestion queue older than 10 minutes for 15 minutes, or a connector cursor not advanced for 30 minutes, or more than 50 documents in the dead-letter queue",
         "why": "Edits and deletions are not reaching the index. It precedes a freshness miss and usually means a source API is rate limiting or a parser is failing.",
         "target": "ingest_q",
         "slo": "index-freshness"
@@ -1002,7 +1114,7 @@
       {
         "id": "spend-spike",
         "severity": "ticket",
-        "when": "Tokens per hour 50% above the same hour last week, or any user above 3 times the daily token limit in attempts",
+        "when": "Average cost per question above 2.5 cents over a day (the 3 cent limit is near), tokens per hour 50% above the same hour last week, or any user above 3 times the daily token limit in attempts",
         "why": "A runaway client, a prompt change that doubled context size, or a script scraping the assistant.",
         "target": "llm"
       }
@@ -1043,6 +1155,18 @@
         "name": "Thumbs-down rate by source and prompt version",
         "metric": "feedback_down_ratio{source,prompt_ver}",
         "why": "Points at a source with bad parsing or a prompt change that made answers worse."
+      },
+      {
+        "target": "chat_api",
+        "name": "Cost per question",
+        "metric": "sum(llm_cost_usd) / questions_total, by model and prompt_ver",
+        "why": "The budget is 3 cents a question; this is the number finance asks about, and a prompt change shows up here the same day."
+      },
+      {
+        "target": "connectors",
+        "name": "Permission audit results",
+        "metric": "acl_audit_checked_total, acl_audit_mismatch_total{source}",
+        "why": "Proves the audit actually ran: a day with zero checks is as bad as a day with a mismatch."
       }
     ],
     "debug": [
@@ -1081,7 +1205,7 @@
       "id": "permission-aware",
       "topic": "security",
       "q": "Why filter by permissions at retrieval time instead of checking after the answer is generated, and how do you keep permissions current?",
-      "a": "Once a restricted chunk is in the prompt the model can paraphrase it, and no output check can reliably tell that a sentence came from it, so the only safe point is the search itself: each chunk stores the principals allowed to read it and the query filters on the user's id and flattened groups. Connectors sync document ACLs and directory group membership, permission-only changes update the ACL field without re-embedding, and the user's group list is cached for only a few minutes. For the most sensitive spaces, recheck access against the source API for the final 8 chunks, and audit a daily sample to prove no leak.",
+      "a": "Once a restricted chunk is in the prompt the model can paraphrase it, and no output check can reliably tell that a sentence came from it, so the only safe point is the search itself: each chunk stores the principals allowed to read it and the query filters on the user's id and flattened groups. Connectors sync document ACLs and directory group membership, permission-only changes update the ACL field without re-embedding, and the user's group list is cached for only a few minutes. For the most sensitive spaces, recheck access against the source API for the final 8 chunks, and audit a daily sample to prove no leak. Effective access must be computed, not copied: Confluence space permissions and inherited page restrictions, and SharePoint sharing links, all have to be folded into each chunk's principal list, and that mapping is where leaks usually come from.",
       "targets": [
         "vector_index",
         "connectors",

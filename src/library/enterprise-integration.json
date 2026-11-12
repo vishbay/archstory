@@ -128,6 +128,14 @@
         "target": 99.9
       },
       {
+        "id": "partner-api-latency",
+        "name": "Partner API latency",
+        "kind": "latency",
+        "sli": "Partner and internal API requests answered within the threshold, divided by all requests, measured at API management (integration latency included)",
+        "target": 99,
+        "threshold": "< 300 ms"
+      },
+      {
         "id": "order-integrity",
         "name": "Every order booked exactly once",
         "kind": "correctness",
@@ -149,6 +157,22 @@
         "severity": "page",
         "when": "Partner API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Partners cannot place or track orders, and their own systems start retrying on top of the outage.",
+        "target": "apim",
+        "slo": "partner-api-availability"
+      },
+      {
+        "id": "partner-api-slow",
+        "severity": "page",
+        "when": "More than 1% of partner API requests slower than 300 ms, over 10 minutes and over 1 hour",
+        "why": "Partners' own timeouts start firing and they retry, which adds load. Usually the integration store or a synchronous status lookup is slow.",
+        "target": "apim",
+        "slo": "partner-api-latency"
+      },
+      {
+        "id": "partner-api-slow-burn",
+        "severity": "ticket",
+        "when": "Partner API errors burning the error budget 2 times too fast over 6 hours and 3 days",
+        "why": "A small steady error rate, often one partner's bad requests or one route, that never pages but uses up the month's budget.",
         "target": "apim",
         "slo": "partner-api-availability"
       },
@@ -181,6 +205,13 @@
         "why": "A missing order is lost revenue and a duplicate is a double shipment or double invoice. Both mean a dedup or tracking bug that must be found before it repeats.",
         "target": "ops",
         "slo": "order-integrity"
+      },
+      {
+        "id": "credential-expiry",
+        "severity": "ticket",
+        "when": "Any connector's OAuth client secret or certificate (SAP, Salesforce, shop, WMS), or the shop webhook secret, expires within 21 days without a rotated successor",
+        "why": "An expired credential stops one integration completely, and it is the most common cause of a quiet Monday outage. Rotation is automated, so this catches rotation that failed.",
+        "target": "erp_conn"
       }
     ],
     "signals": [
@@ -219,6 +250,12 @@
         "name": "Rejected schema changes",
         "metric": "schema_compat_failures_total{subject}",
         "why": "A producer trying to register a breaking change is caught here, before any consumer sees it."
+      },
+      {
+        "target": "ops",
+        "name": "Orders booked in the ERP per hour against last week",
+        "metric": "orders_erp_booked_total / same hour last week",
+        "why": "The business view: a drop with no errors anywhere usually means a mapping or filter is silently skipping orders."
       }
     ],
     "debug": [
@@ -245,6 +282,18 @@
   },
   "nodes": [
     {
+      "id": "ilb",
+      "label": "Internal Load Balancer (L7)",
+      "kind": "load_balancer",
+      "tier": "services",
+      "subnet": "app",
+      "description": "Private, in the app subnets across three zones. API management reaches it through a private integration (a VPC link on AWS, Private Service Connect from Apigee); it routes /hooks and partner order paths to the commerce adapter and /ops to integration ops, and health-checks every task",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "Internal Application Load Balancer"
+      }
+    },
+    {
       "id": "partners",
       "label": "Partner and Internal Apps",
       "kind": "client",
@@ -264,7 +313,7 @@
       "id": "apim",
       "label": "API Management",
       "kind": "api_gateway",
-      "description": "Partner and internal APIs: OAuth, API keys, per-partner quotas, versioned routes; the public endpoint for webhooks",
+      "description": "Partner and internal APIs: OAuth, API keys, per-partner quotas, versioned routes; the public endpoint for webhooks. A web application firewall sits on it (AWS WAF on the API Gateway REST API stage, Cloud Armor in front of Apigee), and it reaches the services only through a private integration to the internal load balancer",
       "cloud": {
         "aws": "API Gateway",
         "gcp": "Apigee"
@@ -337,7 +386,7 @@
       "id": "wms_conn",
       "label": "WMS Connector",
       "kind": "worker",
-      "description": "Consumer group wms-connector: creates outbound orders; publishes InventoryAdjusted from the warehouse",
+      "description": "Consumer group wms-connector: creates outbound orders; polls the WMS stock movements API every minute and publishes InventoryAdjusted",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -363,7 +412,7 @@
       "id": "erp",
       "label": "ERP (SAP S/4HANA)",
       "kind": "external_api",
-      "description": "System of record for products, prices, billing and credit; sales orders become invoices here"
+      "description": "System of record for products, prices, billing and credit; sales orders become invoices here. Reached over a site-to-site VPN or private connection, never the open internet; the SaaS systems (shop, WMS, Salesforce) are called through the NAT gateways"
     },
     {
       "id": "wms",
@@ -395,10 +444,14 @@
     },
     {
       "from": "apim",
+      "to": "ilb"
+    },
+    {
+      "from": "ilb",
       "to": "commerce"
     },
     {
-      "from": "apim",
+      "from": "ilb",
       "to": "ops"
     },
     {
@@ -486,11 +539,20 @@
         },
         {
           "from": "apim",
-          "to": "commerce",
+          "to": "ilb",
           "kind": "req",
           "phase": "Webhook in",
           "label": "forward raw body",
-          "detail": "The gateway applies a size limit and a rate limit but passes the body through byte for byte, because the signature is computed over the raw bytes."
+          "detail": "The web application firewall on the gateway checks managed rules and request size first; the gateway then applies a rate limit and passes the body through byte for byte, because the signature is computed over the raw bytes. It reaches the private load balancer through its VPC link, so no service has a public address.",
+          "payload": "POST /hooks/shop/orders-create HTTP/1.1\nX-Shopify-Hmac-Sha256: XWmrwMey6OsLMeiZKwP4FppHH3cmAiiJJAweH5Jo4bM=\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n(raw body unchanged)"
+        },
+        {
+          "from": "ilb",
+          "to": "commerce",
+          "kind": "req",
+          "phase": "Webhook in",
+          "label": "route /hooks/* to a commerce task",
+          "detail": "The internal load balancer picks a healthy task in any zone by path. The gateway starts a trace here, and the adapter copies its traceparent into the event headers, so the whole order is one trace."
         },
         {
           "from": "commerce",
@@ -547,15 +609,22 @@
           "kind": "res",
           "phase": "Publish",
           "label": "partition 7, offset 88213",
-          "detail": "acks=all means the event is on three brokers before the adapter answers the shop."
+          "detail": "acks=all with min.insync.replicas=2 means the event is on every in-sync replica, at least two of the three brokers in different zones, before the adapter answers the shop."
         },
         {
           "from": "commerce",
-          "to": "apim",
+          "to": "ilb",
           "kind": "res",
           "phase": "Ack",
           "label": "200 OK",
           "detail": "Answer only after the backbone has the event. If anything failed, a 5xx makes the shop retry for hours, so the shop's retry is the safety net for this hop."
+        },
+        {
+          "from": "ilb",
+          "to": "apim",
+          "kind": "res",
+          "phase": "Ack",
+          "label": "200 OK"
         },
         {
           "from": "apim",
@@ -578,7 +647,7 @@
           "kind": "req",
           "phase": "Book in ERP",
           "label": "claim event id",
-          "detail": "The unique key on (consumer, event id) turns at-least-once delivery into effectively-once processing for this connector.",
+          "detail": "The unique key on (consumer, event id) turns at-least-once delivery into effectively-once processing for this connector. If nothing comes back, the row already exists and the connector reads its status: done means skip, in_progress means an earlier attempt is in doubt.",
           "payload": "INSERT INTO processed_events (consumer, event_id, status, started_at)\nVALUES ('erp-connector', 'evt-shop-820982911946154508-placed', 'in_progress', now())\nON CONFLICT (consumer, event_id) DO NOTHING\nRETURNING status;"
         },
         {
@@ -792,7 +861,7 @@
           "kind": "req",
           "phase": "Apply in ERP",
           "label": "save applied version",
-          "payload": "UPDATE applied_versions SET version = 11850391245013\nWHERE consumer = 'erp-connector' AND entity_key = 'cus_58213' AND version < 11850391245013;"
+          "payload": "INSERT INTO applied_versions (consumer, entity_key, version)\nVALUES ('erp-connector', 'cus_58213', 11850391245013)\nON CONFLICT (consumer, entity_key) DO UPDATE SET version = EXCLUDED.version\nWHERE applied_versions.version < EXCLUDED.version;"
         },
         {
           "from": "bus",
@@ -916,7 +985,7 @@
           "kind": "req",
           "phase": "Dead-letter",
           "label": "park key SHOP-1002",
-          "detail": "While SHOP-1002 is parked, any later event for the same order, such as OrderCancelled, is parked behind it. Otherwise the cancel would reach SAP before the order exists."
+          "detail": "While SHOP-1002 is parked, any later event for the same order, such as OrderCancelled, goes to the same dead-letter topic behind it instead of to SAP, otherwise the cancel would reach SAP before the order exists. Replaying the key republishes all of its parked events in their original order."
         },
         {
           "from": "store",
@@ -998,11 +1067,19 @@
         },
         {
           "from": "apim",
-          "to": "ops",
+          "to": "ilb",
           "kind": "req",
           "phase": "Replay",
           "label": "forward, scope checked",
           "detail": "Replay can create business records, so only tokens with the replay scope get through, and every replay is written to an audit log with who, what and why."
+        },
+        {
+          "from": "ilb",
+          "to": "ops",
+          "kind": "req",
+          "phase": "Replay",
+          "label": "route /ops/* to an ops task",
+          "detail": "Same private hop: the load balancer routes /ops paths to the integration ops tasks."
         },
         {
           "from": "ops",
@@ -1021,6 +1098,13 @@
         },
         {
           "from": "ops",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Replay",
+          "label": "202 replay rp_311"
+        },
+        {
+          "from": "ilb",
           "to": "apim",
           "kind": "res",
           "phase": "Replay",
@@ -1078,7 +1162,7 @@
           "kind": "req",
           "phase": "Re-deliver and dedupe",
           "label": "mark done, save xref, unpark key",
-          "detail": "Unparking releases any events that queued behind SHOP-1002, which now apply in order."
+          "detail": "Unparking lets new events for SHOP-1002 go straight to SAP again; any that were parked behind it arrive in the same replay, in order, after this one."
         },
         {
           "from": "store",
@@ -1119,6 +1203,11 @@
       "target": "apim",
       "kind": "security",
       "text": "Partners get OAuth client credentials with per-partner scopes and quotas at API management. Inside, every connector has its own identity: its own OAuth client in SAP and Salesforce with a technical user limited to the objects it touches, its own Kafka ACLs (read its topics, write its retry and dead-letter topics), and its own secrets in Secrets Manager or Secret Manager, rotated automatically. One leaked credential then exposes one system, not all four."
+    },
+    {
+      "target": "apim",
+      "kind": "security",
+      "text": "The gateway is the only public entry, for partners and for the shop's webhooks, so it carries the web application firewall (managed rules, size limits, per-IP rate limits) in addition to per-partner OAuth and quotas. Webhook routes cannot use OAuth, so they are protected by the HMAC check in the adapter and, where the shop publishes its sending ranges, an IP allowlist. Behind the gateway nothing is public: the internal load balancer and the services sit in private subnets and accept traffic only from the gateway's private integration."
     }
   ],
   "questions": [
