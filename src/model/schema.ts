@@ -14,6 +14,7 @@ export const DR_STRATEGIES = ['backup-restore', 'pilot-light', 'warm-standby', '
 export const FOOTPRINTS = ['all', 'primary', 'global'] as const
 export const REPLICATION_MODES = ['sync', 'async', 'backup', 'none'] as const
 export const SITES = ['cloud', 'onprem'] as const
+export const DESIGN_KINDS = ['system', 'protocol'] as const
 
 const Id = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'ids are lowercase letters, digits, "-" or "_"')
 
@@ -84,6 +85,15 @@ export const StepSchema = z.object({
   label: z.string().describe('Short wire label, e.g. "GET /aZ3k9Q" or "SET key ttl=24h"'),
   detail: z.string().optional().describe('Why this hop happens; the teaching text'),
   payload: z.string().optional().describe('Example message: HTTP, SQL, JSON event…'),
+  state: z.record(Id, z.string().min(1)).optional()
+    .describe('Protocol designs: the named state of each listed actor (node id) AFTER this step, e.g. { "client": "ESTABLISHED" }. Actors not listed keep their state'),
+  fields: z.array(z.object({
+    name: z.string().min(1).describe('Header field or section, e.g. "flags" or "seq"'),
+    value: z.string().describe('Its value in this message, e.g. "SYN, ACK" or "5000"'),
+    note: z.string().optional().describe('Why it has this value'),
+  })).optional().describe('Protocol designs: the anatomy of the message on the wire (flags, sequence numbers, header bits, sections)'),
+  delay: z.number().nonnegative().optional()
+    .describe('One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes and 0 for a local step; use 0 for a message sent right behind the previous one'),
 })
 
 export const FlowSchema = z.object({
@@ -144,6 +154,9 @@ export const DesignSchema = z.object({
     difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
     author: z.string().optional(),
     source: z.string().optional(),
+    kind: z.enum(DESIGN_KINDS).optional()
+      .describe('"system" (default): a system design. "protocol": a step-by-step network protocol timeline, where nodes are the actors and flows are scenarios'),
+    order: z.number().optional().describe('Sort position among designs of the same kind (lower first); designs without one sort by title after those with one'),
   }),
   requirements: z.object({
     functional: z.array(z.string()).default([]),
@@ -185,6 +198,7 @@ export type DNode = z.infer<typeof NodeSchema>
 export type DEdge = z.infer<typeof EdgeSchema>
 export type Flow = z.infer<typeof FlowSchema>
 export type Step = z.infer<typeof StepSchema>
+export type WireField = NonNullable<Step['fields']>[number]
 export type Group = z.infer<typeof GroupSchema>
 export type Network = z.infer<typeof NetworkSchema>
 export type Observability = z.infer<typeof ObservabilitySchema>
@@ -228,6 +242,7 @@ export function parseDesign(input: unknown): ParseResult {
       for (const end of [s.from, s.to]) if (!nodeIds.has(end)) errors.push(`${at}: unknown node "${end}"`)
       if (s.kind === 'local' && s.from !== s.to) errors.push(`${at}: a "local" step must have from === to`)
       if (s.kind !== 'local' && s.from === s.to) errors.push(`${at}: from === to needs kind "local"`)
+      for (const k of Object.keys(s.state ?? {})) if (!nodeIds.has(k)) errors.push(`${at}: state for unknown node "${k}"`)
       if (s.kind !== 'local' && s.from !== s.to && nodeIds.has(s.from) && nodeIds.has(s.to) && !findEdge(d, s.from, s.to))
         errors.push(`${at}: no edge between "${s.from}" and "${s.to}" (a step must follow a connection, and a response retraces the request path one connection at a time)`)
     })
@@ -284,6 +299,9 @@ export function parseDesign(input: unknown): ParseResult {
   d.notes.forEach((n, i) => { if (n.target && !targets.has(n.target)) errors.push(`notes[${i}]: unknown target "${n.target}"`) })
   return errors.length ? { ok: false, errors } : { ok: true, design: d }
 }
+
+/** A step-by-step protocol timeline rather than a system design. */
+export const isProtocol = (d: Pick<Design, 'meta'>) => d.meta.kind === 'protocol'
 
 /** The edge a hop travels, and whether it travels it backwards (responses ride request edges in reverse). */
 export function findEdge(d: Pick<Design, 'edges'>, from: string, to: string): { edge: DEdge; index: number; reverse: boolean } | null {

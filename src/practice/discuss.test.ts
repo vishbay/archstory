@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
 import { discussPrompt } from './discuss'
+import { PROTOCOLS } from '../protocols'
 
 const saas = LIBRARY.find(d => d.id === 'multi-tenant-saas')!
 
@@ -75,5 +76,57 @@ describe('discussPrompt', () => {
   it('uses no em or en dashes in the text it writes', () => {
     const skeleton = discussPrompt({ ...saas, meta: { ...saas.meta, summary: '' }, requirements: { functional: [], nonFunctional: [], scale: [] }, nodes: [{ id: 'a', label: 'A', kind: 'service' }], edges: [], flows: [], notes: [], questions: [], observability: undefined, network: undefined, regions: undefined })
     expect(skeleton).not.toMatch(/[—–]/)
+  })
+})
+
+describe('discussPrompt for a protocol (Under the hood)', () => {
+  const tcp = PROTOCOLS.find(d => d.id === 'tcp')!
+  const dns = PROTOCOLS.find(d => d.id === 'dns')!
+
+  it('uses protocol wording, not system design wording', () => {
+    const p = discussPrompt(dns)
+    expect(p.startsWith('I am studying how DNS works')).toBe(true)
+    expect(p).not.toContain('system design')
+    expect(p).toContain(`It has ${dns.nodes.length} actors and ${dns.flows.length} scenarios (${dns.flows.map(f => f.title).join('; ')}).`)
+    expect(p).toContain('## Key ideas\nWhat it does:')
+    expect(p).toContain('Gotchas:')
+    expect(p).toContain('By the numbers:')
+    expect(p).toContain('## Actors')
+    expect(p).not.toContain('## Requirements')
+    expect(p).not.toContain('## Components')
+    expect(p).not.toContain('## Network')
+    expect(p).not.toContain('## Monitoring')
+    expect(p).not.toContain('Request flow:')
+    expect(p).toContain('Sources: RFC 1034')
+    expect(p.trimEnd().split('\n').at(-1)).toContain('I will send my questions in my next messages')
+    expect(p).toContain('saying how many actors and scenarios it has')
+  })
+
+  it('walks every message with its time, fields on the wire and the state after it', () => {
+    const p = discussPrompt(tcp)
+    for (const f of tcp.flows) expect(p).toContain(`## Scenario: ${f.title}`)
+    expect(p).toContain('2. [req] Client -> Server: SYN seq=1000 (at 0.5 RTT)')
+    expect(p).toContain('3. [res] Server -> Client: SYN, ACK seq=5000 ack=1001 (at 1 RTT)')
+    expect(p).toContain('On the wire: flags = SYN, ACK (Two jobs in one segment')
+    expect(p).toContain('ack = 1001 (1000 + 1')
+    expect(p).toContain('State after this step: Client SYN_SENT, Server SYN_RCVD')
+    expect(p).toContain('Total: 3.5 RTT.')
+    for (const q of tcp.questions) expect(p).toContain(q.q)
+    expect(p).not.toContain(tcp.questions[0].a)
+    expect(discussPrompt(tcp, { answers: true })).toContain(tcp.questions[0].a)
+  })
+
+  it('flags the watched scenario, takes a first question, and stays free of em and en dashes', () => {
+    const p = discussPrompt(dns, { flowId: 'nxdomain', question: 'Why 300 seconds?' })
+    expect(p).toContain('## Scenario: NXDOMAIN and negative caching  <- the scenario I am watching right now')
+    expect(p.trimEnd().endsWith('## My question\nWhy 300 seconds?')).toBe(true)
+    for (const d of PROTOCOLS) expect(discussPrompt(d, { answers: true }), d.id).not.toMatch(/[—–]/)
+  })
+
+  it('adds fields and state to a system design walkthrough only when its steps have them', () => {
+    expect(discussPrompt(saas)).not.toContain('On the wire:')
+    const f = saas.flows[0]
+    const withWire = { ...saas, flows: [{ ...f, steps: [{ ...f.steps[0], fields: [{ name: 'method', value: 'GET' }] }, ...f.steps.slice(1)] }] }
+    expect(discussPrompt(withWire)).toContain('On the wire: method = GET')
   })
 })

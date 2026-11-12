@@ -1,4 +1,5 @@
-import { isOnPrem, type Design, type Flow } from '../model/schema'
+import { isOnPrem, isProtocol, type Design, type Flow, type WireField } from '../model/schema'
+import { fmtRtt, rttTimes } from '../model/protocol'
 import { ScenarioPicker } from './ScenarioPicker'
 import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
@@ -50,6 +51,24 @@ function ImpactList({ impacts, cloud }: { impacts: { node: Design['nodes'][numbe
   )
 }
 
+/** The anatomy of a message on the wire (protocol steps): header fields, flags and sections. */
+export function WireTable({ fields }: { fields: WireField[] }) {
+  const notes = fields.some(f => f.note)
+  return (
+    <>
+      <h5 className="wire-title">On the wire</h5>
+      <table className="wire">
+        <thead><tr><th>Field</th><th>Value</th>{notes && <th>Why</th>}</tr></thead>
+        <tbody>
+          {fields.map((f, i) => (
+            <tr key={i}><td className="wire-name">{f.name}</td><td className="wire-value">{f.value}</td>{notes && <td className="wire-note">{f.note}</td>}</tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
 const NOTE_ICON = { tradeoff: '⚖️', scaling: '📈', failure: '💥', security: '🔐', note: '📝' } as const
 
 export function Inspector({ design, flow, player, cloud, network, monitoring = false, zone, regionFailed = null, selected, tab, onTab, onFlow, onSelect }: {
@@ -79,6 +98,8 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const regionDownHere = cur && regionFailed !== null && regions && !byRegion
     ? [cur.from, cur.to].map(id => byId[id]).find(n => regionImpactOf(design, n, regionFailed)?.level === 'down') : undefined
   const res = zones ? resilience(design, zoneFailed ?? 0, cloud) : null
+  const proto = isProtocol(design)
+  const at = proto && flow && cur ? rttTimes(flow.steps)[step] : null
   const drill = regions ? regionDrill(design, regionFailed ?? homeRegion(design)) : null
 
   return (
@@ -101,7 +122,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             {cur ? (
               <div className="card current-card">
                 <div className="card-meta">
-                  <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}</span>
+                  <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}{at !== null ? ` · at ${fmtRtt(at)}` : ''}</span>
                   <span className="pill" style={{ color: KIND_VAR[cur.kind], borderColor: KIND_VAR[cur.kind] }}>{KIND_TEXT[cur.kind]}</span>
                 </div>
                 <div className="card-hop">
@@ -118,9 +139,14 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
                 {downHere && <p className="net-note bad">✕ This hop fails: {downHere.label} is down while {zoneName(zoneFailed!, cloud)} is out.</p>}
                 {regionDownHere && <p className="net-note bad">✕ This hop fails: {regionDownHere.label} is down while {design.regions!.regions[regionFailed!].name} is out.</p>}
                 {cur.payload && <pre>{cur.payload}</pre>}
+                {cur.state && Object.keys(cur.state).length > 0 && (
+                  <div className="step-state"><span className="muted">State after:</span>
+                    {Object.entries(cur.state).map(([id, v]) => <span key={id} className="pill">{byId[id] ? name(id) : id} {v}</span>)}</div>
+                )}
+                {cur.fields && cur.fields.length > 0 && <WireTable fields={cur.fields} />}
               </div>
             ) : (
-              <div className="card muted">Press ▶ or space to send a request through the system. ← → step through it.</div>
+              <div className="card muted">{proto ? 'Press ▶ or space to play the messages on the wire. ← → step through them.' : 'Press ▶ or space to send a request through the system. ← → step through it.'}</div>
             )}
             <StepList flow={flow} step={step} jump={jump} name={name} />
           </>
@@ -131,7 +157,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
         {shown === 'component' && node && (
           <>
             <h3 className="with-icon"><NodeIcon node={node} cloud={cloud} size={24} /> {node.label}</h3>
-            <p className="muted">{kindInfo(node.kind).label} · {TIER_INFO[tierOf(node)].title} tier{node.replicas ? ` · ×${node.replicas}` : ''}</p>
+            {!proto && <p className="muted">{kindInfo(node.kind).label} · {TIER_INFO[tierOf(node)].title} tier{node.replicas ? ` · ×${node.replicas}` : ''}</p>}
             {node.description && <p>{node.description}</p>}
             {placement(design, node, cloud, placementsOf(design, node).length) && <p className="net-note">🔒 {placement(design, node, cloud, placementsOf(design, node).length)}</p>}
             {network && haOf(design, node) && (
@@ -143,18 +169,18 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
               <p className="net-note">🌍 {FOOTPRINT_TEXT[footprintOf(design, node)!]}{replicationOf(design, node) ? `, with ${REPLICATION_TEXT[replicationOf(design, node)!]}` : ''}.
                 {regionFailed !== null && <> If {design.regions!.regions[regionFailed].name} fails: {regionImpactOf(design, node, regionFailed)!.text}</>}</p>
             )}
-            <table className="kv">
+            {!proto && <table className="kv">
               <tbody>
                 <tr><th>Neutral</th><td>{node.label}</td></tr>
                 <tr><th>AWS</th><td className="with-icon">{cloudIconUrl(node, 'aws') && <NodeIcon node={node} cloud="aws" size={18} />}{node.cloud?.aws ?? 'n/a'}</td></tr>
                 <tr><th>GCP</th><td className="with-icon">{cloudIconUrl(node, 'gcp') && <NodeIcon node={node} cloud="gcp" size={18} />}{node.cloud?.gcp ?? 'n/a'}</td></tr>
                 {node.cloud?.azure && <tr><th>Azure</th><td>{node.cloud.azure}</td></tr>}
               </tbody>
-            </table>
+            </table>}
             {design.notes.filter(n => n.target === node.id).map((n, i) => (
               <div key={i} className="note"><b>{NOTE_ICON[n.kind]} {n.kind}</b><p>{n.text}</p></div>
             ))}
-            <h4>Used in flows</h4>
+            <h4>{proto ? 'In scenarios' : 'Used in flows'}</h4>
             <ul className="links">
               {design.flows.filter(f => f.steps.some(s => s.from === node.id || s.to === node.id)).map(f => (
                 <li key={f.id}><button className="link" onClick={() => { onFlow(f.id); onTab('step') }}>{f.title}</button></li>

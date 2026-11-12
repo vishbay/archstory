@@ -1,0 +1,784 @@
+{
+  "schema": "archstory/v1",
+  "id": "dns",
+  "meta": {
+    "title": "DNS",
+    "summary": "How a name like www.example.com becomes an IP address: the stub resolver, the recursive resolver, and the walk from the root to .com to the domain's own servers, with caching at every step.",
+    "tags": [
+      "naming",
+      "caching",
+      "udp"
+    ],
+    "difficulty": "easy",
+    "source": "RFC 1034 and RFC 1035 (DNS), RFC 2308 (negative caching), RFC 6891 (EDNS0), RFC 7766 (DNS over TCP), RFC 9156 (QNAME minimisation)",
+    "kind": "protocol",
+    "order": 1
+  },
+  "requirements": {
+    "functional": [
+      "Turns a name like www.example.com into the records behind it: an IPv4 address in an A record, IPv6 in AAAA",
+      "A recursive resolver walks the hierarchy for you: the root, then the top-level domain, then the domain's own authoritative servers",
+      "Each level only delegates: it answers with a referral to the next level's name servers, with glue addresses when they are needed",
+      "Every answer carries a TTL, and every cache on the way (resolver, OS, browser) may keep it that long",
+      "A name that does not exist gets NXDOMAIN, and that answer is cached too (negative caching)"
+    ],
+    "nonFunctional": [
+      "A cold lookup takes several round trips; a warm resolver cache answers in one, which is why most lookups are fast",
+      "A TTL cannot be taken back: a changed record reaches users only as old copies expire, so lower the TTL well before a planned change",
+      "Only the authoritative server sets AA; an answer from a resolver's cache is not authoritative",
+      "Classic DNS over UDP is neither encrypted nor signed: anyone on the path can read the names, and a spoofer only has to guess the 16-bit ID and the source port (DNSSEC signs answers; DNS over TLS or HTTPS encrypts the hop to the resolver)",
+      "An answer too big for UDP comes back with TC (truncated) set and the client retries over TCP, which RFC 7766 requires every implementation to support"
+    ],
+    "scale": [
+      {
+        "label": "Port",
+        "value": "53, UDP first, TCP when needed"
+      },
+      {
+        "label": "Root server identities",
+        "value": "13 (a to m.root-servers.net), each anycast from many sites"
+      },
+      {
+        "label": "Classic UDP limit (RFC 1035)",
+        "value": "512 bytes without EDNS0"
+      },
+      {
+        "label": "Common EDNS0 UDP size",
+        "value": "1232 bytes"
+      },
+      {
+        "label": "Name limits (RFC 1035)",
+        "value": "63 bytes per label, 255 per name"
+      },
+      {
+        "label": "Query ID",
+        "value": "16 bits"
+      },
+      {
+        "label": "Cold lookup here",
+        "value": "4 round trips; a cache hit at the resolver, 1"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Browser (stub resolver)",
+      "kind": "web_client",
+      "description": "The browser and the operating system's stub resolver: they keep small caches and hand every lookup to one recursive resolver"
+    },
+    {
+      "id": "resolver",
+      "label": "Recursive resolver",
+      "kind": "dns",
+      "tier": "edge",
+      "description": "Your ISP's resolver or a public one such as 1.1.1.1 or 8.8.8.8. It walks the hierarchy for you and caches everything it learns"
+    },
+    {
+      "id": "root",
+      "label": "Root server",
+      "kind": "dns",
+      "tier": "external",
+      "description": "One of the 13 root server identities (a to m.root-servers.net), each run as many anycast instances. Knows only who serves each top-level domain"
+    },
+    {
+      "id": "tld",
+      "label": "TLD server (.com)",
+      "kind": "dns",
+      "tier": "external",
+      "description": "The .com servers (a to m.gtld-servers.net) run by the registry. Know which name servers each .com domain delegates to"
+    },
+    {
+      "id": "auth",
+      "label": "Authoritative server (example.com)",
+      "kind": "dns",
+      "tier": "external",
+      "description": "The name servers the domain owner set up (ns1 and ns2.example.com here). The only place the real records live"
+    }
+  ],
+  "edges": [
+    {
+      "from": "browser",
+      "to": "resolver",
+      "label": "recursive queries",
+      "protocol": "DNS over UDP 53"
+    },
+    {
+      "from": "resolver",
+      "to": "root",
+      "label": "iterative query",
+      "protocol": "DNS over UDP 53"
+    },
+    {
+      "from": "resolver",
+      "to": "tld",
+      "label": "iterative query",
+      "protocol": "DNS over UDP 53"
+    },
+    {
+      "from": "resolver",
+      "to": "auth",
+      "label": "iterative query",
+      "protocol": "DNS over UDP 53"
+    }
+  ],
+  "flows": [
+    {
+      "id": "cold",
+      "title": "Cold lookup of www.example.com",
+      "summary": "Nothing is cached anywhere: the resolver walks from the root to .com to example.com's own server, then caches what it learned.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Local caches",
+          "label": "Browser cache: miss",
+          "detail": "Before anything goes on the wire, the browser checks its own small DNS cache. This is the first visit to www.example.com, so there is nothing there."
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "OS cache and hosts file: miss",
+          "detail": "Next the operating system's stub resolver checks its cache and the hosts file. Also a miss. The stub resolver does not walk the DNS itself: it hands the whole job to one recursive resolver."
+        },
+        {
+          "from": "browser",
+          "to": "resolver",
+          "kind": "req",
+          "phase": "Ask the resolver",
+          "label": "A? www.example.com (RD=1)",
+          "detail": "The stub sends one small UDP packet to port 53 of the configured recursive resolver (from DHCP, or a public one such as 1.1.1.1). RD (recursion desired) says: do the whole lookup and give me the final answer.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x1a2b",
+              "note": "Random 16-bit query ID; the answer must echo it"
+            },
+            {
+              "name": "QR",
+              "value": "0",
+              "note": "0 = query, 1 = response"
+            },
+            {
+              "name": "OPCODE",
+              "value": "0",
+              "note": "Standard query"
+            },
+            {
+              "name": "RD",
+              "value": "1",
+              "note": "Recursion desired: resolve it all for me"
+            },
+            {
+              "name": "question",
+              "value": "www.example.com. IN A",
+              "note": "Name, class IN (internet), type A (IPv4 address)"
+            },
+            {
+              "name": "transport",
+              "value": "UDP to port 53",
+              "note": "From a random source port, so a spoofer has to guess the port as well as the ID"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "label": "Cache miss: start at the root",
+          "detail": "The resolver has just started, so its cache is empty except for the root hints: the names and addresses of the 13 root server identities, a.root-servers.net to m.root-servers.net, built into its configuration. It starts at the top."
+        },
+        {
+          "from": "resolver",
+          "to": "root",
+          "kind": "req",
+          "phase": "Walk the hierarchy",
+          "label": "A? www.example.com (RD=0)",
+          "detail": "The resolver asks a root server. It clears RD: it wants whatever the server itself knows, not recursion. This walkthrough sends the full name, the classic behaviour; resolvers that use QNAME minimisation (RFC 9156) send only what each level needs, here just com.",
+          "fields": [
+            {
+              "name": "RD",
+              "value": "0",
+              "note": "Iterative: answer from what you know, I will follow referrals myself"
+            },
+            {
+              "name": "question",
+              "value": "www.example.com. IN A"
+            },
+            {
+              "name": "EDNS0 (OPT record)",
+              "value": "UDP size 1232",
+              "note": "RFC 6891: the resolver can take UDP answers larger than the classic 512 bytes; 1232 is a common default"
+            }
+          ]
+        },
+        {
+          "from": "root",
+          "to": "resolver",
+          "kind": "res",
+          "label": "Referral: com. NS a.gtld-servers.net ...",
+          "detail": "The root does not know www.example.com. It answers with a referral: the name servers for com., in the authority section, with their addresses as glue in the additional section. It is not an answer, so AA is not set.",
+          "fields": [
+            {
+              "name": "QR / AA",
+              "value": "1 / 0",
+              "note": "A response, but not an authoritative answer for this name"
+            },
+            {
+              "name": "RCODE",
+              "value": "0 (NOERROR)",
+              "note": "Nothing wrong: here is where to ask next"
+            },
+            {
+              "name": "answer",
+              "value": "0 records"
+            },
+            {
+              "name": "authority",
+              "value": "com. 172800 IN NS a.gtld-servers.net. (13 NS records, a to m)",
+              "note": "The delegation of com., cacheable for 2 days"
+            },
+            {
+              "name": "additional",
+              "value": "a.gtld-servers.net. 172800 IN A 192.5.6.30, and the others",
+              "note": "Glue: addresses of those servers, so the resolver can reach them"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "tld",
+          "kind": "req",
+          "label": "A? www.example.com (RD=0)",
+          "detail": "The resolver caches the com. delegation and asks one of the .com servers the same question.",
+          "fields": [
+            {
+              "name": "RD",
+              "value": "0"
+            },
+            {
+              "name": "question",
+              "value": "www.example.com. IN A"
+            },
+            {
+              "name": "to",
+              "value": "a.gtld-servers.net (192.5.6.30)",
+              "note": "Address taken from the glue"
+            }
+          ]
+        },
+        {
+          "from": "tld",
+          "to": "resolver",
+          "kind": "res",
+          "label": "Referral: example.com. NS ns1.example.com, ns2.example.com",
+          "detail": "The .com server knows which name servers example.com delegates to, but not the address of www. Another referral. Here the name servers live inside the domain they serve, so without glue the resolver would need example.com to find ns1.example.com: a loop. The glue addresses break it.",
+          "fields": [
+            {
+              "name": "QR / AA",
+              "value": "1 / 0",
+              "note": "Another referral, not an answer"
+            },
+            {
+              "name": "RCODE",
+              "value": "0 (NOERROR)"
+            },
+            {
+              "name": "answer",
+              "value": "0 records"
+            },
+            {
+              "name": "authority",
+              "value": "example.com. 172800 IN NS ns1.example.com. / ns2.example.com.",
+              "note": "Set by the registrar on the domain owner's behalf"
+            },
+            {
+              "name": "additional",
+              "value": "ns1.example.com. A 192.0.2.53, ns2.example.com. A 198.51.100.53",
+              "note": "Glue: required because the name servers are inside example.com (illustrative addresses)"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "auth",
+          "kind": "req",
+          "label": "A? www.example.com (RD=0)",
+          "detail": "Third question, now to the domain's own authoritative server, reached at the glue address.",
+          "fields": [
+            {
+              "name": "RD",
+              "value": "0"
+            },
+            {
+              "name": "question",
+              "value": "www.example.com. IN A"
+            },
+            {
+              "name": "to",
+              "value": "ns1.example.com (192.0.2.53)"
+            }
+          ]
+        },
+        {
+          "from": "auth",
+          "to": "resolver",
+          "kind": "res",
+          "label": "Answer: www.example.com. 3600 A 203.0.113.10 (AA=1)",
+          "detail": "The authoritative server holds the zone, so it answers with AA (authoritative answer) set. The TTL of 3600 seconds, chosen by the domain owner, says how long anyone may cache it.",
+          "fields": [
+            {
+              "name": "QR / AA",
+              "value": "1 / 1",
+              "note": "Authoritative: this server holds the example.com zone"
+            },
+            {
+              "name": "RCODE",
+              "value": "0 (NOERROR)"
+            },
+            {
+              "name": "answer",
+              "value": "www.example.com. 3600 IN A 203.0.113.10",
+              "note": "Illustrative address"
+            },
+            {
+              "name": "TTL",
+              "value": "3600 s",
+              "note": "May be cached for an hour"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "phase": "Answer",
+          "label": "Cache the answer and both referrals",
+          "detail": "The resolver caches the A record for 3600 s and the com. and example.com. delegations for their own TTLs. The next lookup of any .com name skips the root, and any example.com name skips .com too."
+        },
+        {
+          "from": "resolver",
+          "to": "browser",
+          "kind": "res",
+          "label": "Answer: 203.0.113.10 (RA=1, AA=0)",
+          "detail": "The resolver echoes the query ID and returns the address. RA says it offers recursion; AA is clear because it is passing on what it learned, not serving the zone itself.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x1a2b",
+              "note": "Echoes the query, so the stub can match it"
+            },
+            {
+              "name": "QR / AA",
+              "value": "1 / 0",
+              "note": "From the resolver, not authoritative"
+            },
+            {
+              "name": "RD / RA",
+              "value": "1 / 1",
+              "note": "RD copied from the query; RA = recursion available"
+            },
+            {
+              "name": "RCODE",
+              "value": "0 (NOERROR)"
+            },
+            {
+              "name": "answer",
+              "value": "www.example.com. 3600 IN A 203.0.113.10"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "Cache it, connect to 203.0.113.10",
+          "detail": "The OS and the browser cache the answer (for at most its TTL, often less) and the browser opens a TCP connection to the address. Four round trips went into this cold lookup; almost every later one is answered from a cache."
+        }
+      ]
+    },
+    {
+      "id": "cached",
+      "title": "Cache hit: the TTL counts down",
+      "summary": "Twenty minutes later another device asks the same resolver, which answers from its cache with the remaining TTL.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Local caches",
+          "label": "Browser and OS cache: miss",
+          "detail": "Twenty minutes later another laptop on the same network wants www.example.com. Its own caches are empty, so it asks the same recursive resolver."
+        },
+        {
+          "from": "browser",
+          "to": "resolver",
+          "kind": "req",
+          "phase": "Ask the resolver",
+          "label": "A? www.example.com (RD=1)",
+          "detail": "The same query as before, with a new random ID.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x7c41",
+              "note": "A new random ID for this query"
+            },
+            {
+              "name": "RD",
+              "value": "1"
+            },
+            {
+              "name": "question",
+              "value": "www.example.com. IN A"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "label": "Cache hit: 2400 s of 3600 s left",
+          "detail": "The resolver cached the answer 1200 seconds ago with a TTL of 3600, so it has 2400 seconds left. No root, .com or authoritative server is contacted.",
+          "fields": [
+            {
+              "name": "cached at",
+              "value": "TTL 3600 s"
+            },
+            {
+              "name": "elapsed",
+              "value": "1200 s"
+            },
+            {
+              "name": "remaining",
+              "value": "2400 s",
+              "note": "3600 - 1200: the TTL counts down in the cache"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "browser",
+          "kind": "res",
+          "label": "Answer: 203.0.113.10, TTL 2400",
+          "detail": "The answer goes back with the remaining TTL, not the original one, so every cache downstream expires at the same moment the resolver's copy does. A whole lookup in one round trip to a nearby resolver.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x7c41"
+            },
+            {
+              "name": "QR / AA",
+              "value": "1 / 0",
+              "note": "From cache, so not authoritative"
+            },
+            {
+              "name": "RA",
+              "value": "1"
+            },
+            {
+              "name": "answer",
+              "value": "www.example.com. 2400 IN A 203.0.113.10",
+              "note": "TTL counted down, never reset"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "Cache for up to 2400 s",
+          "detail": "The laptop caches the answer for at most the remaining 2400 seconds. When the resolver's copy expires, the next lookup goes back to the authoritative server (the com. and example.com. delegations, cached for 2 days, still let it skip the root and .com)."
+        }
+      ]
+    },
+    {
+      "id": "nxdomain",
+      "title": "NXDOMAIN and negative caching",
+      "summary": "A name that does not exist: the authoritative server says NXDOMAIN with its SOA record, and the resolver caches the 'no' for the SOA's negative TTL.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "resolver",
+          "kind": "req",
+          "phase": "Ask the resolver",
+          "label": "A? wwww.example.com (RD=1)",
+          "detail": "Someone types an extra w. The browser and OS caches miss, so the stub asks the resolver as usual.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x3f90"
+            },
+            {
+              "name": "RD",
+              "value": "1"
+            },
+            {
+              "name": "question",
+              "value": "wwww.example.com. IN A",
+              "note": "A name that does not exist"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "label": "Cached: example.com NS, skip root and .com",
+          "detail": "The resolver has no answer for this name, but it still holds the example.com. delegation from the earlier lookup. It goes straight to the authoritative server: one question instead of three."
+        },
+        {
+          "from": "resolver",
+          "to": "auth",
+          "kind": "req",
+          "phase": "Ask the authority",
+          "label": "A? wwww.example.com (RD=0)",
+          "detail": "The resolver asks the authoritative server directly.",
+          "fields": [
+            {
+              "name": "RD",
+              "value": "0"
+            },
+            {
+              "name": "question",
+              "value": "wwww.example.com. IN A"
+            },
+            {
+              "name": "to",
+              "value": "ns1.example.com (192.0.2.53)",
+              "note": "From the cached glue"
+            }
+          ]
+        },
+        {
+          "from": "auth",
+          "to": "resolver",
+          "kind": "res",
+          "label": "NXDOMAIN, SOA in authority (AA=1)",
+          "detail": "The name does not exist. The server answers with RCODE 3 (NXDOMAIN) and puts the zone's SOA record in the authority section. RFC 2308: the SOA's TTL in this response is the smaller of the SOA record's own TTL and its MINIMUM field, and that is how long the 'no such name' may be cached.",
+          "fields": [
+            {
+              "name": "QR / AA",
+              "value": "1 / 1",
+              "note": "Authoritative: the zone owner says this name does not exist"
+            },
+            {
+              "name": "RCODE",
+              "value": "3 (NXDOMAIN)",
+              "note": "No such name, for any record type"
+            },
+            {
+              "name": "answer",
+              "value": "0 records"
+            },
+            {
+              "name": "authority",
+              "value": "example.com. 300 IN SOA ns1.example.com. hostmaster.example.com. 2026111201 7200 3600 1209600 300",
+              "note": "Serial, refresh, retry, expire, then MINIMUM = 300"
+            },
+            {
+              "name": "negative TTL",
+              "value": "300 s",
+              "note": "min(SOA TTL 3600, MINIMUM 300), per RFC 2308"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "phase": "Answer",
+          "label": "Cache NXDOMAIN for 300 s",
+          "detail": "Negative caching (RFC 2308): the resolver remembers that wwww.example.com does not exist for 300 seconds, so repeated typos and broken links do not hammer the authoritative servers.",
+          "fields": [
+            {
+              "name": "cached",
+              "value": "wwww.example.com: NXDOMAIN"
+            },
+            {
+              "name": "for",
+              "value": "300 s"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "browser",
+          "kind": "res",
+          "label": "NXDOMAIN",
+          "detail": "The browser shows its 'site cannot be reached' page. NXDOMAIN is different from NODATA, a NOERROR answer with no records, which means the name exists but has no record of the type asked for.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x3f90"
+            },
+            {
+              "name": "QR / AA",
+              "value": "1 / 0"
+            },
+            {
+              "name": "RA",
+              "value": "1"
+            },
+            {
+              "name": "RCODE",
+              "value": "3 (NXDOMAIN)"
+            },
+            {
+              "name": "authority",
+              "value": "example.com. 300 IN SOA ...",
+              "note": "Passed on so downstream caches know how long to keep the negative answer"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "resolver",
+          "kind": "req",
+          "phase": "Ten seconds later",
+          "label": "A? wwww.example.com (RD=1)",
+          "detail": "Another device makes the same typo ten seconds later (the clock here does not count the gap).",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x51d2"
+            },
+            {
+              "name": "RD",
+              "value": "1"
+            },
+            {
+              "name": "question",
+              "value": "wwww.example.com. IN A"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "label": "Negative cache hit: 290 s left",
+          "detail": "The resolver answers from its negative cache without contacting anyone. The flip side: if someone creates wwww.example.com now, users of this resolver keep getting NXDOMAIN until the 300 seconds run out.",
+          "fields": [
+            {
+              "name": "remaining",
+              "value": "290 s",
+              "note": "300 - 10"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "browser",
+          "kind": "res",
+          "label": "NXDOMAIN (from cache)",
+          "detail": "One round trip, no authoritative server involved.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x51d2"
+            },
+            {
+              "name": "RCODE",
+              "value": "3 (NXDOMAIN)"
+            },
+            {
+              "name": "authority",
+              "value": "example.com. 290 IN SOA ...",
+              "note": "The negative TTL counts down too"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "auth",
+      "kind": "tradeoff",
+      "text": "TTL is the one dial: a long TTL means fewer queries and lookups that survive an outage of your name servers; a short TTL means changes and failovers take effect quickly at the cost of more queries. Many sites run long TTLs and lower them a day ahead of a planned move."
+    },
+    {
+      "target": "resolver",
+      "kind": "scaling",
+      "text": "Caching is what makes DNS scale: one resolver serves thousands of users, so popular names are almost always answered from its cache, and the root and TLD servers see only a small fraction of all lookups."
+    },
+    {
+      "target": "auth",
+      "kind": "failure",
+      "text": "If every authoritative server for a domain is down, resolvers keep answering from cache until the TTLs run out, then the name stops resolving. Some resolvers serve stale answers past the TTL in that case (RFC 8767). Put the name servers on separate networks."
+    },
+    {
+      "target": "resolver",
+      "kind": "security",
+      "text": "Cache poisoning: an off-path attacker races the real answer with forged ones. Random query IDs and random source ports make that guess much harder, and DNSSEC lets a validating resolver reject forged answers outright."
+    },
+    {
+      "target": "root",
+      "kind": "note",
+      "text": "With QNAME minimisation (RFC 9156) a resolver tells each level only what it needs: the root is asked about com., not www.example.com. Same referrals, less leaked to servers that do not need the full name."
+    }
+  ],
+  "questions": [
+    {
+      "id": "glue",
+      "topic": "data",
+      "targets": [
+        "tld",
+        "auth"
+      ],
+      "q": "What is glue, and why does the .com referral for example.com need it here?",
+      "a": "Glue records are addresses for name servers, sent in the additional section of a referral. example.com is served by ns1.example.com, a name inside example.com itself, so without an address the resolver would have to resolve example.com to find the server for example.com. The .com server includes the address it was given at registration, which breaks the loop. A name server in another domain needs no glue: the resolver looks it up separately."
+    },
+    {
+      "id": "ttl-migration",
+      "topic": "operations",
+      "targets": [
+        "auth",
+        "resolver"
+      ],
+      "q": "You lower a record's TTL from one day to 60 seconds an hour before moving servers. Why do some users still reach the old address for hours?",
+      "a": "Resolvers that cached the record before the change keep it for the old TTL, a full day, and only see the new 60-second TTL when that copy expires. The TTL has to be lowered at least one old TTL ahead of the move. Some clients and applications also cache longer than they should or keep open connections, so watch traffic on the old address before switching it off."
+    },
+    {
+      "id": "aa-ra",
+      "topic": "data",
+      "targets": [
+        "resolver",
+        "auth"
+      ],
+      "q": "What do the RD, RA and AA bits tell you in the answers of the cold lookup?",
+      "a": "RD in the browser's query asks for recursion, and RA in the resolver's answer says it provides it; the resolver clears RD on its own queries because it follows referrals itself. AA is set only by a server that holds the zone, so the authoritative server's answer has it and the resolver's copy, served from what it learned, does not."
+    },
+    {
+      "id": "negative",
+      "topic": "consistency",
+      "targets": [
+        "resolver",
+        "auth"
+      ],
+      "q": "A user hits a link to a hostname you have not created yet; you create it a minute later. Why does it still fail for them?",
+      "a": "Their resolver cached the NXDOMAIN. RFC 2308 lets it keep the negative answer for the smaller of the SOA record's TTL and its MINIMUM field, 300 seconds in this zone. Until that runs out the resolver answers NXDOMAIN without asking the authoritative server, so keep the SOA minimum short if names are created on demand."
+    },
+    {
+      "id": "tcp",
+      "topic": "reliability",
+      "targets": [
+        "browser",
+        "resolver"
+      ],
+      "q": "DNS uses UDP. When does it use TCP instead?",
+      "a": "When an answer does not fit in a UDP response, the server sets TC (truncated) and the client repeats the query over TCP; large DNSSEC responses and long record sets cause this. Zone transfers between name servers also use TCP, and RFC 7766 makes TCP support mandatory for all implementations. DNS over TLS runs on TCP too, on port 853."
+    },
+    {
+      "id": "fast",
+      "topic": "performance",
+      "targets": [
+        "resolver"
+      ],
+      "q": "The cold lookup takes four round trips. Why does DNS usually add almost nothing to page load time?",
+      "a": "Almost every lookup hits a cache: the browser's, the OS's, or the shared resolver's, which serves many users and keeps popular names warm. Even on a resolver miss, the cached com. and example.com. delegations let it go straight to the authoritative server. Browsers also prefetch DNS for links on the page, so the lookup is often done before the click."
+    }
+  ]
+}

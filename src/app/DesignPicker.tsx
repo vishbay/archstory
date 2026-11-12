@@ -2,8 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
 
-export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClose }: {
+export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClose, kind = 'system' }: {
   library: Design[]; mine: Design[]; currentId: string
+  /** Which designs this picker lists: system designs, or protocol timelines (Under the hood). Never both. */
+  kind?: 'system' | 'protocol'
   onOpen: (id: string) => void; onDelete: (id: string) => void; onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -14,9 +16,11 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
 
   const items = useMemo(() => {
     const s = q.trim().toLowerCase()
+    const ofKind = (d: Design) => (d.meta.kind ?? 'system') === kind
     const hit = (d: Design) => !s || d.meta.title.toLowerCase().includes(s) || d.meta.tags.some(t => t.includes(s)) || (d.meta.summary ?? '').toLowerCase().includes(s)
-    return [...library.filter(hit).map(d => ({ d, mine: false })), ...mine.filter(hit).map(d => ({ d, mine: true }))]
-  }, [library, mine, q])
+    return [...library.filter(ofKind).filter(hit).map(d => ({ d, mine: false })), ...mine.filter(ofKind).filter(hit).map(d => ({ d, mine: true }))]
+  }, [library, mine, q, kind])
+  const noun = kind === 'protocol' ? 'protocols' : 'designs'
   const at = Math.min(idx, Math.max(0, items.length - 1))
   useEffect(() => { list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [at, items])
 
@@ -28,8 +32,8 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
   }
 
   return (
-    <dialog ref={dialog} className="picker glass" onClose={onClose} onClick={e => { if (e.target === dialog.current) dialog.current?.close() }} aria-label="Choose a design">
-      <input className="picker-input" autoFocus placeholder="Search designs or tags…" value={q} aria-label="Search designs"
+    <dialog ref={dialog} className="picker glass" onClose={onClose} onClick={e => { if (e.target === dialog.current) dialog.current?.close() }} aria-label={kind === 'protocol' ? 'Choose a protocol' : 'Choose a design'}>
+      <input className="picker-input" autoFocus placeholder={`Search ${noun} or tags…`} value={q} aria-label={`Search ${noun}`}
         onChange={e => { setQ(e.target.value); setIdx(0) }} onKeyDown={onKey} role="combobox" aria-expanded aria-controls="picker-list" />
       <ul id="picker-list" ref={list} className="picker-list" role="listbox">
         {items.map(({ d, mine: m }, i) => (
@@ -40,7 +44,7 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
               {d.meta.difficulty && <span className={`diff diff-${d.meta.difficulty}`}>{d.meta.difficulty}</span>}
               {m && <span className="tag">mine</span>}
               {d.id === currentId && <span className="tag">open now</span>}
-              <span className="pick-counts">{d.nodes.length} components · {d.flows.length} flow{d.flows.length === 1 ? '' : 's'}</span>
+              <span className="pick-counts">{d.nodes.length} {kind === 'protocol' ? 'actors' : 'components'} · {d.flows.length} {kind === 'protocol' ? 'scenario' : 'flow'}{d.flows.length === 1 ? '' : 's'}</span>
             </div>
             <div className="pick-sub">{d.meta.summary}</div>
             <div className="design-tags">{d.meta.tags.slice(0, 4).map(t => <span key={t} className="tag">{t}</span>)}</div>
@@ -48,7 +52,7 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
               onClick={e => { e.stopPropagation(); onDelete(d.id) }}>×</button>}
           </li>
         ))}
-        {!items.length && <li className="pick-empty muted">No designs match “{q}”.</li>}
+        {!items.length && <li className="pick-empty muted">No {noun} match “{q}”.</li>}
       </ul>
       <div className="picker-foot muted"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
     </dialog>

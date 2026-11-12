@@ -65,8 +65,28 @@ function Card({ d, onExplore, onPractice, progress }: { d: Design; onExplore: ()
   )
 }
 
-export function Home({ library, mine, onExplore, onPractice, onImport, onGenerate, onTour }: {
+/** A protocol timeline (Under the hood): no map, just what it is and a button to watch it. */
+function ProtocolCard({ d, onWatch }: { d: Design; onWatch: () => void }) {
+  return (
+    <article className="design-card hood-card">
+      <div className="card-body">
+        <h3>{d.meta.title}</h3>
+        {d.meta.summary && <p className="card-summary">{d.meta.summary}</p>}
+        <div className="design-tags">
+          {d.meta.difficulty && <span className={`diff diff-${d.meta.difficulty}`}>{d.meta.difficulty}</span>}
+          {d.meta.tags.slice(0, 3).map(t => <span key={t} className="tag">{t}</span>)}
+        </div>
+        <p className="card-meta">{d.nodes.length} actors · {d.flows.length} scenario{d.flows.length === 1 ? '' : 's'}</p>
+        <div className="row"><button className="primary" onClick={onWatch}>Watch</button></div>
+      </div>
+    </article>
+  )
+}
+
+export function Home({ library, mine, protocols = [], onWatch, onExplore, onPractice, onImport, onGenerate, onTour }: {
   library: Design[]; mine: Design[]
+  /** Under the hood (labs): empty while the lab is locked, and then the section is not shown at all. */
+  protocols?: Design[]; onWatch?: (id: string) => void
   onExplore: (id: string) => void; onPractice: (id: string) => void
   onImport: () => void; onGenerate: () => void; onTour: () => void
 }) {
@@ -170,6 +190,17 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
             {!shown.length && <p className="muted">No designs match.</p>}
           </div>
         </section>
+
+        {protocols.length > 0 && (
+          <section id="under-the-hood">
+            <p className="eyebrow">Labs preview</p>
+            <div className="lib-head"><h2>Under the hood</h2></div>
+            <p className="lib-note muted">How the network protocols behind every design work, message by message: who sends what, the header fields on the wire, each side's state and how many round trips it costs.</p>
+            <div className="card-grid">
+              {protocols.map(d => <ProtocolCard key={d.id} d={d} onWatch={() => onWatch?.(d.id)} />)}
+            </div>
+          </section>
+        )}
 
         <section>
           <div className="lib-head"><h2>My designs</h2></div>

@@ -2,6 +2,7 @@
 // Profile data comes live from GitHub's public API. The avatar is fetched as data and shown from a blob URL, because the
 // page's security policy only allows images from this site; if GitHub cannot be reached the card still shows the links.
 import { useEffect, useRef, useState } from 'react'
+import { setLab, useLab } from './labs'
 
 const LOGIN = 'vishbay'
 const REPO = 'https://github.com/vishbay/archstory'
@@ -30,6 +31,7 @@ export function ProfileCard({ onClose }: { onClose: () => void }) {
     return () => { ctl.abort(); if (url) URL.revokeObjectURL(url) }
   }, [])
   const profileUrl = p.html_url ?? `https://github.com/${LOGIN}`
+  const hood = useLab('underhood')
 
   return (
     <dialog ref={dialog} className="dialog profile-card" onClose={onClose} aria-label="About the author">
@@ -50,6 +52,13 @@ export function ProfileCard({ onClose }: { onClose: () => void }) {
           {!!p.followers && <span><b>{p.followers}</b> followers</span>}
         </div>
       )}
+      <div className="labs">
+        <p className="eyebrow">Labs</p>
+        <button className={`lab-row${hood ? ' on' : ''}`} role="switch" aria-checked={hood} onClick={() => setLab('underhood', !hood)}>
+          <span className="lab-text"><b>Under the hood (preview)</b><span className="muted small">Protocol timelines: DNS, TCP and more</span></span>
+          <span className="sw" aria-hidden><i /></span>
+        </button>
+      </div>
       <div className="row wrap">
         <a className="button primary" href={profileUrl} target="_blank" rel="noreferrer">GitHub profile</a>
         <a className="button" href={REPO} target="_blank" rel="noreferrer">ArchStory on GitHub</a>

@@ -40,6 +40,18 @@
         },
         "source": {
           "type": "string"
+        },
+        "kind": {
+          "description": "\"system\" (default): a system design. \"protocol\": a step-by-step network protocol timeline, where nodes are the actors and flows are scenarios",
+          "type": "string",
+          "enum": [
+            "system",
+            "protocol"
+          ]
+        },
+        "order": {
+          "description": "Sort position among designs of the same kind (lower first); designs without one sort by title after those with one",
+          "type": "number"
         }
       },
       "required": [
@@ -422,6 +434,49 @@
                 "payload": {
                   "description": "Example message: HTTP, SQL, JSON event…",
                   "type": "string"
+                },
+                "state": {
+                  "description": "Protocol designs: the named state of each listed actor (node id) AFTER this step, e.g. { \"client\": \"ESTABLISHED\" }. Actors not listed keep their state",
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "fields": {
+                  "description": "Protocol designs: the anatomy of the message on the wire (flags, sequence numbers, header bits, sections)",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Header field or section, e.g. \"flags\" or \"seq\""
+                      },
+                      "value": {
+                        "type": "string",
+                        "description": "Its value in this message, e.g. \"SYN, ACK\" or \"5000\""
+                      },
+                      "note": {
+                        "description": "Why it has this value",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "value"
+                    ]
+                  }
+                },
+                "delay": {
+                  "description": "One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes and 0 for a local step; use 0 for a message sent right behind the previous one",
+                  "type": "number",
+                  "minimum": 0
                 }
               },
               "required": [

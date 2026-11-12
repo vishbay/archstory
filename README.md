@@ -219,6 +219,8 @@ For migration or hybrid questions, give a component that runs in the customer's 
 { "id": "erp", "label": "ERP", "kind": "service", "site": "onprem" }
 ```
 
+A design with `meta.kind: "protocol"` is a step-by-step protocol timeline (an unlisted labs feature) whose steps may add `state` (each actor's named state after the step), `fields` (the message's anatomy on the wire) and `delay` (its one-way delay in trips, for the round-trip clock).
+
 Other kinds for these questions: `mqtt_broker` (IoT devices), `vector_db` (embeddings for retrieval), `llm` (a model endpoint such as Amazon Bedrock or Vertex AI), `schema_registry` and `data_catalog`. Any other kind still works and draws as a generic component.
 
 </details>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Design, Question } from '../model/schema'
+import { isProtocol, type Design, type Question } from '../model/schema'
 import { nameOf, type Cloud } from '../model/kinds'
 import { cardKey, dueCards, INTERVALS, type DrillCard, type Rating } from '../practice/cards'
 import { openDrill, rateCard, today, useDeck } from './useDeck'
@@ -18,13 +18,17 @@ export function QuestionsPanel({ design, cloud, onSelect }: { design: Design; cl
   const deck = useDeck()
   const [open, setOpen] = useState<Set<string>>(new Set())
   const label = (id: string) => { const n = design.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
+  // Protocols (Under the hood, a labs preview) stay out of the daily drill, so their questions are not rated.
+  const proto = isProtocol(design)
   return (
     <>
       <div className="q-head">
-        <h3>Follow-up questions</h3>
-        <button className="primary" onClick={() => openDrill(design.id)}>Drill these</button>
+        <h3>{proto ? 'Check yourself' : 'Follow-up questions'}</h3>
+        {!proto && <button className="primary" onClick={() => openDrill(design.id)}>Drill these</button>}
       </div>
-      <p className="muted small">What an interviewer asks next about this design. Answer out loud first, then reveal the model answer and rate yourself; questions you miss come back sooner.</p>
+      <p className="muted small">{proto
+        ? 'Questions about how this protocol behaves. Answer out loud first, then reveal the model answer.'
+        : 'What an interviewer asks next about this design. Answer out loud first, then reveal the model answer and rate yourself; questions you miss come back sooner.'}</p>
       <ol className="q-list">
         {design.questions.map(q => {
           const k = cardKey(design.id, q), st = deck[k], shown = open.has(q.id)
@@ -36,7 +40,7 @@ export function QuestionsPanel({ design, cloud, onSelect }: { design: Design; cl
               {shown ? (
                 <>
                   <p className="q-answer">{q.a}</p>
-                  <div className="q-rate">{RATINGS.map(r => <button key={r.r} className={st?.last === r.r ? 'on' : ''} onClick={() => rateCard(k, r.r)}>{r.label}</button>)}</div>
+                  {!proto && <div className="q-rate">{RATINGS.map(r => <button key={r.r} className={st?.last === r.r ? 'on' : ''} onClick={() => rateCard(k, r.r)}>{r.label}</button>)}</div>}
                 </>
               ) : <button className="small-btn" onClick={() => setOpen(s => new Set(s).add(q.id))}>Show model answer</button>}
             </li>

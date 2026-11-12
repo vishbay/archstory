@@ -1,0 +1,761 @@
+{
+  "schema": "archstory/v1",
+  "id": "tcp",
+  "meta": {
+    "title": "TCP",
+    "summary": "How two machines open a reliable connection, send a request and a response, ramp up speed and close it again, segment by segment.",
+    "tags": [
+      "transport",
+      "handshake",
+      "congestion control"
+    ],
+    "difficulty": "medium",
+    "source": "RFC 9293 (TCP), RFC 6928 (initial window of 10 segments), RFC 5681 (congestion control), RFC 6298 (retransmission timer), RFC 6528 (initial sequence numbers)",
+    "kind": "protocol",
+    "order": 2
+  },
+  "requirements": {
+    "functional": [
+      "Turns unreliable IP packets into a reliable, ordered byte stream between two ports",
+      "Numbers every byte: an ACK names the next byte expected, and anything not acknowledged in time is sent again",
+      "Opens with a three-way handshake that agrees on both sides' starting sequence numbers, and closes each direction separately with a FIN",
+      "Paces the sender twice: the receive window protects the receiver, the congestion window protects the network"
+    ],
+    "nonFunctional": [
+      "The handshake costs one round trip before the first request byte can go out (and TLS adds more on top)",
+      "SYN and FIN each use up one sequence number although they carry no data; a bare ACK uses none",
+      "The side that closes first sits in TIME_WAIT for 2 MSL, so a client that opens and closes many short connections can run out of local ports",
+      "A new connection starts slow, about 10 segments in the first round trip, so short transfers are bound by round trips rather than bandwidth",
+      "Connection refused (a reset) comes back in one round trip; a firewall that silently drops the SYN leaves the client waiting through retransmission timeouts"
+    ],
+    "scale": [
+      {
+        "label": "Handshake cost",
+        "value": "1 RTT before the client can send data"
+      },
+      {
+        "label": "Initial window (RFC 6928)",
+        "value": "10 segments, 14,600 bytes with a 1,460-byte MSS"
+      },
+      {
+        "label": "MSS on Ethernet",
+        "value": "1,460 bytes (1,500 MTU minus 40 bytes of headers)"
+      },
+      {
+        "label": "Sequence numbers",
+        "value": "32 bits, wrapping after 4 GiB"
+      },
+      {
+        "label": "MSL (RFC 9293)",
+        "value": "2 minutes, so TIME_WAIT lasts 4; Linux uses 60 s"
+      },
+      {
+        "label": "Initial retransmission timeout (RFC 6298)",
+        "value": "1 second, doubling on each retry"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "The active opener: calls connect(), for example a browser opening a connection to a web server"
+    },
+    {
+      "id": "server",
+      "label": "Server",
+      "kind": "service",
+      "description": "The passive opener: listens on a port (443 here) and accepts connections"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "server",
+      "label": "TCP connection",
+      "protocol": "TCP"
+    }
+  ],
+  "flows": [
+    {
+      "id": "connect",
+      "title": "Connect, request, response, close",
+      "summary": "A full connection lifetime: the three-way handshake with real sequence and acknowledgment numbers, one request and response, then a FIN in each direction and TIME_WAIT on the side that closed first.",
+      "steps": [
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Before",
+          "label": "listen() on port 443",
+          "detail": "The server opens a socket, binds it to port 443 and calls listen(): a passive open. Nothing goes on the wire yet. The client has no connection at all, which TCP calls CLOSED.",
+          "state": {
+            "client": "CLOSED",
+            "server": "LISTEN"
+          }
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Three-way handshake",
+          "label": "SYN seq=1000",
+          "detail": "connect() is an active open: the client picks its initial sequence number (ISN) and sends a SYN. The client is now in SYN_SENT. When the SYN arrives, the server records a half-open connection, replies at once and moves to SYN_RCVD.",
+          "state": {
+            "client": "SYN_SENT",
+            "server": "SYN_RCVD"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN",
+              "note": "Synchronize: start a connection and agree on sequence numbers"
+            },
+            {
+              "name": "seq",
+              "value": "1000",
+              "note": "The client's ISN. Real stacks pick a hard-to-guess 32-bit value (RFC 6528); 1000 keeps the arithmetic readable"
+            },
+            {
+              "name": "ack",
+              "value": "not set",
+              "note": "The ACK bit is off, so the acknowledgment field means nothing yet"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes",
+              "note": "A SYN carries no data but still uses one sequence number, 1000"
+            },
+            {
+              "name": "options",
+              "value": "MSS 1460, SACK permitted, window scale",
+              "note": "These options may only be sent on a SYN, so this is the one chance to negotiate them"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "SYN, ACK seq=5000 ack=1001",
+          "detail": "The server answers with its own SYN and acknowledges the client's in the same segment. ack=1001 means 'I have everything up to 1000, send 1001 next'. When it arrives the client knows both ISNs and is ESTABLISHED: one round trip has passed.",
+          "state": {
+            "client": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK",
+              "note": "Two jobs in one segment: the server's own SYN, and the acknowledgment of the client's"
+            },
+            {
+              "name": "seq",
+              "value": "5000",
+              "note": "The server's ISN, chosen independently of the client's"
+            },
+            {
+              "name": "ack",
+              "value": "1001",
+              "note": "1000 + 1: the client's SYN used sequence number 1000, so the next byte expected is 1001"
+            },
+            {
+              "name": "options",
+              "value": "MSS 1460, SACK permitted, window scale",
+              "note": "The server's side of the negotiation"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACK seq=1001 ack=5001",
+          "detail": "The client acknowledges the server's SYN. When this ACK arrives the server leaves SYN_RCVD and is ESTABLISHED too. The client did not have to wait for it: it was free to send data as soon as the SYN, ACK arrived.",
+          "state": {
+            "server": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1001",
+              "note": "The client's next sequence number: its SYN used 1000"
+            },
+            {
+              "name": "ack",
+              "value": "5001",
+              "note": "5000 + 1: the server's SYN used 5000"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes",
+              "note": "A bare ACK uses no sequence number, so the client's next byte is still 1001"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Request and response",
+          "label": "PSH, ACK seq=1001 ack=5001, 100 bytes",
+          "detail": "The request leaves right behind the final ACK (delay 0 here: they travel together), so it reaches the server 1.5 RTT after the client called connect(). This is the cost of TCP: one full round trip before the first request byte can even be sent.",
+          "payload": "GET / HTTP/1.1\nHost: example.com",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "PSH, ACK",
+              "note": "PSH asks the receiver to hand the data to the application without waiting for more"
+            },
+            {
+              "name": "seq",
+              "value": "1001",
+              "note": "The first data byte takes the number right after the SYN"
+            },
+            {
+              "name": "ack",
+              "value": "5001",
+              "note": "Every segment after the SYN carries the ACK bit and the latest acknowledgment"
+            },
+            {
+              "name": "data",
+              "value": "100 bytes",
+              "note": "Bytes 1001 to 1100, so the client's next sequence number is 1101"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "PSH, ACK seq=5001 ack=1101, 1200 bytes",
+          "detail": "The server replies with the response and acknowledges the request in the same segment, so no separate ACK is needed. The first response byte reaches the client 2 RTT after connect().",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "PSH, ACK"
+            },
+            {
+              "name": "seq",
+              "value": "5001",
+              "note": "The server's first data byte follows its SYN, which used 5000"
+            },
+            {
+              "name": "ack",
+              "value": "1101",
+              "note": "1001 + 100: all 100 request bytes arrived"
+            },
+            {
+              "name": "data",
+              "value": "1200 bytes",
+              "note": "Bytes 5001 to 6200, so the server's next sequence number is 6201"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Close",
+          "label": "FIN, ACK seq=1101 ack=6201",
+          "detail": "The client is done and calls close(), which sends a FIN: 'I will send no more'. Closing is per direction, so the server may still send. The client goes to FIN_WAIT_1; the server learns the client is done and goes to CLOSE_WAIT, where it waits for its own application to close.",
+          "state": {
+            "client": "FIN_WAIT_1",
+            "server": "CLOSE_WAIT"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "FIN, ACK",
+              "note": "FIN ends the client's direction; ACK acknowledges the whole response"
+            },
+            {
+              "name": "seq",
+              "value": "1101",
+              "note": "The FIN takes the next sequence number and uses it up, like a SYN"
+            },
+            {
+              "name": "ack",
+              "value": "6201",
+              "note": "5001 + 1200: the whole response arrived"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "ACK seq=6201 ack=1102",
+          "detail": "The server's TCP acknowledges the FIN straight away. When it arrives the client moves to FIN_WAIT_2: its own direction is closed and it waits for the server's FIN.",
+          "state": {
+            "client": "FIN_WAIT_2"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "6201",
+              "note": "The server's next sequence number"
+            },
+            {
+              "name": "ack",
+              "value": "1102",
+              "note": "1101 + 1: the client's FIN used sequence number 1101"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "FIN, ACK seq=6201 ack=1102",
+          "detail": "The server application calls close() too, so the server sends its own FIN and moves to LAST_ACK. Here it goes right behind the ACK (delay 0); when the application closes at once, many stacks send one FIN, ACK instead of the two segments. When the FIN arrives the client moves to TIME_WAIT.",
+          "state": {
+            "server": "LAST_ACK",
+            "client": "TIME_WAIT"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "FIN, ACK"
+            },
+            {
+              "name": "seq",
+              "value": "6201",
+              "note": "Still 6201: the bare ACK before it used no sequence number"
+            },
+            {
+              "name": "ack",
+              "value": "1102",
+              "note": "Unchanged: nothing new from the client"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACK seq=1102 ack=6202",
+          "detail": "The client acknowledges the server's FIN. When it arrives the server deletes the connection and is CLOSED. The client cannot be sure this last ACK arrived, which is why it stays in TIME_WAIT.",
+          "state": {
+            "server": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1102",
+              "note": "The client's FIN used 1101"
+            },
+            {
+              "name": "ack",
+              "value": "6202",
+              "note": "6201 + 1: the server's FIN used sequence number 6201"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "TIME_WAIT for 2 MSL, then CLOSED",
+          "detail": "The side that closed first waits twice the maximum segment lifetime (MSL) before forgetting the connection: long enough to resend the final ACK if the server repeats its FIN, and for stray segments of this connection to die out before the same addresses and ports can be reused. RFC 9293 takes the MSL to be 2 minutes; Linux waits 60 seconds. Not drawn to scale.",
+          "state": {
+            "client": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "wait",
+              "value": "2 x MSL",
+              "note": "RFC 9293: MSL is 2 minutes, so 4 minutes; Linux uses a fixed 60 seconds"
+            },
+            {
+              "name": "why",
+              "value": "lost final ACK, old duplicates",
+              "note": "The four-tuple (addresses and ports) stays reserved meanwhile"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "slow-start",
+      "title": "Slow start: ramping up",
+      "summary": "On a fresh connection the sender starts with 10 segments and doubles its congestion window every round trip as ACKs come back.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Request",
+          "label": "GET /photo.jpg",
+          "detail": "The connection is already open (the handshake from the first scenario is done), so the clock here starts when the request is sent. The server has a large file to send and must not flood a network path it knows nothing about.",
+          "state": {
+            "client": "ESTABLISHED",
+            "server": "ESTABLISHED"
+          }
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Round 1",
+          "label": "cwnd = 10 segments",
+          "detail": "A new connection starts in slow start with an initial congestion window (cwnd) of 10 segments (RFC 6928). The sender may have at most min(cwnd, the receiver's window) bytes unacknowledged; we assume the receiver's window is large and is never the limit.",
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "10 x MSS = 14,600 bytes",
+              "note": "RFC 6928: min(10 x MSS, max(2 x MSS, 14,600)) with an MSS of 1,460"
+            },
+            {
+              "name": "ssthresh",
+              "value": "arbitrarily high",
+              "note": "RFC 5681: starts high, so slow start runs until the first loss"
+            },
+            {
+              "name": "MSS",
+              "value": "1,460 bytes",
+              "note": "1,500-byte Ethernet MTU minus 20 bytes of IP and 20 of TCP header"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segments 1 to 10",
+          "detail": "The first flight: ten full segments, sent back to back. Sequence numbers here are relative to the start of the response, as Wireshark shows them.",
+          "fields": [
+            {
+              "name": "segments",
+              "value": "10"
+            },
+            {
+              "name": "bytes",
+              "value": "1 to 14,600"
+            },
+            {
+              "name": "in flight",
+              "value": "14,600 bytes = cwnd"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACKs up to ack=14,601",
+          "detail": "The client acknowledges the data. We assume one ACK per segment; real receivers often delay ACKs and acknowledge every second segment, which makes the window grow more slowly than shown.",
+          "fields": [
+            {
+              "name": "ACKs",
+              "value": "10",
+              "note": "one per segment (no delayed ACKs assumed)"
+            },
+            {
+              "name": "ack",
+              "value": "14,601",
+              "note": "next byte expected: 14,600 + 1"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Round 2",
+          "label": "cwnd 10 -> 20 segments",
+          "detail": "In slow start each ACK that acknowledges new data grows cwnd by up to one segment (RFC 5681). Ten ACKs add ten segments, so the window doubles in one round trip.",
+          "fields": [
+            {
+              "name": "rule",
+              "value": "cwnd += 1 MSS per ACK",
+              "note": "RFC 5681: at most SMSS per ACK during slow start"
+            },
+            {
+              "name": "cwnd",
+              "value": "20 x MSS = 29,200 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segments 11 to 30",
+          "detail": "The second flight is twice as big.",
+          "fields": [
+            {
+              "name": "segments",
+              "value": "20"
+            },
+            {
+              "name": "bytes",
+              "value": "14,601 to 43,800"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACKs up to ack=43,801",
+          "detail": "Twenty ACKs come back over the next round trip.",
+          "fields": [
+            {
+              "name": "ACKs",
+              "value": "20"
+            },
+            {
+              "name": "ack",
+              "value": "43,801"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Round 3",
+          "label": "cwnd 20 -> 40 segments",
+          "detail": "Twenty ACKs add twenty segments: the window doubles again.",
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "40 x MSS = 58,400 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segments 31 to 70",
+          "detail": "The third flight. After three round trips of data, 70 segments (102,200 bytes) have been delivered: a short transfer on a fresh connection is limited by round trips, not by bandwidth.",
+          "fields": [
+            {
+              "name": "segments",
+              "value": "40"
+            },
+            {
+              "name": "bytes",
+              "value": "43,801 to 102,200"
+            },
+            {
+              "name": "delivered so far",
+              "value": "70 segments, 102,200 bytes"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACKs up to ack=102,201",
+          "detail": "Forty ACKs come back.",
+          "fields": [
+            {
+              "name": "ACKs",
+              "value": "40"
+            },
+            {
+              "name": "ack",
+              "value": "102,201"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "cwnd 40 -> 80 segments: until ssthresh or a loss",
+          "detail": "Doubling goes on until cwnd reaches ssthresh or a segment is lost. On loss, ssthresh drops to about half the data in flight and growth turns linear (congestion avoidance: about one segment per round trip). This growth curve is why reusing a warm connection beats opening a new one.",
+          "fields": [
+            {
+              "name": "next",
+              "value": "cwnd 80 x MSS = 116,800 bytes"
+            },
+            {
+              "name": "on loss",
+              "value": "ssthresh = max(FlightSize / 2, 2 x MSS)",
+              "note": "RFC 5681, equation 4"
+            },
+            {
+              "name": "after ssthresh",
+              "value": "about +1 MSS per RTT",
+              "note": "congestion avoidance"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "refused",
+      "title": "Connection refused",
+      "summary": "A SYN to a port where nothing listens is answered with a reset, and connect() fails after one round trip.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Connect",
+          "label": "SYN seq=1000 to port 8080",
+          "detail": "The client tries to connect to port 8080, but no process on the server is listening there. For that port the server has no connection record at all: it is CLOSED.",
+          "state": {
+            "client": "SYN_SENT",
+            "server": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "seq",
+              "value": "1000",
+              "note": "the client's ISN"
+            },
+            {
+              "name": "dst port",
+              "value": "8080",
+              "note": "nothing listening"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "phase": "Refused",
+          "label": "RST, ACK seq=0 ack=1001",
+          "detail": "A segment that arrives for a CLOSED port is answered with a reset. The SYN had no ACK bit, so the reset takes sequence number 0 and acknowledges the SYN (RFC 9293, section 3.10.7.1). The client accepts it because its ACK covers the SYN it sent, and drops back to CLOSED.",
+          "state": {
+            "client": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "RST, ACK",
+              "note": "Reset: this connection does not exist"
+            },
+            {
+              "name": "seq",
+              "value": "0",
+              "note": "The incoming SYN had no ACK bit, so the reset uses sequence number zero"
+            },
+            {
+              "name": "ack",
+              "value": "1001",
+              "note": "SEG.SEQ + SEG.LEN = 1000 + 1 (the SYN counts as one): proves the reset answers this SYN"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "connect() fails: ECONNREFUSED",
+          "detail": "The application gets 'connection refused' after one round trip. Compare a firewall that silently drops the SYN: then nothing comes back, the client retransmits the SYN after the initial retransmission timeout of 1 second (RFC 6298), doubling the wait each time, and the application waits a long time before it hears of a timeout."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "client",
+      "kind": "tradeoff",
+      "text": "TIME_WAIT keeps a closed connection's addresses and ports out of use so delayed segments cannot be mistaken for a new connection, and so the final ACK can be resent if it was lost. The cost is a lingering socket on the side that closed first, which is why busy proxies and clients reuse connections (HTTP keep-alive) instead of opening one per request."
+    },
+    {
+      "target": "server",
+      "kind": "scaling",
+      "text": "Slow start is why connection reuse matters: a fresh connection needs several round trips to reach full speed, while a kept-alive connection keeps its congestion window (RFC 5681 lets a sender shrink it again after an idle period)."
+    },
+    {
+      "target": "client",
+      "kind": "failure",
+      "text": "A lost SYN is resent after the initial retransmission timeout of 1 second (RFC 6298), and each retry doubles the wait, so one dropped SYN adds a whole second to a page load."
+    },
+    {
+      "target": "server",
+      "kind": "security",
+      "text": "SYN flood: an attacker sends SYNs from spoofed addresses and never finishes the handshake, filling the server's queue of half-open (SYN_RCVD) connections. SYN cookies encode the connection details in the server's ISN, so the server keeps nothing until the final ACK proves the client is real."
+    },
+    {
+      "kind": "security",
+      "text": "Initial sequence numbers are hard to guess (RFC 6528), so an attacker who cannot see the traffic cannot inject data or resets into a connection by guessing where its numbers are."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-three",
+      "topic": "reliability",
+      "targets": [
+        "client",
+        "server"
+      ],
+      "q": "Why does TCP need three messages to open a connection, not two?",
+      "a": "Each side picks its own initial sequence number and needs the other to confirm it. The SYN carries the client's, the SYN, ACK confirms it and carries the server's, and the final ACK confirms the server's. With only two messages the server would never learn that its sequence number arrived, and an old duplicate SYN could open a connection nobody asked for."
+    },
+    {
+      "id": "ack-plus-one",
+      "topic": "data",
+      "targets": [
+        "client",
+        "server"
+      ],
+      "q": "The client's SYN has seq=1000 and carries no data. Why does the server answer ack=1001?",
+      "a": "An acknowledgment names the next byte the receiver expects, and a SYN uses up one sequence number even though it carries no data. So after the SYN at 1000 the next expected number is 1001, and the client's first data byte is 1001. A FIN uses one number the same way, while a bare ACK uses none."
+    },
+    {
+      "id": "time-wait",
+      "topic": "operations",
+      "targets": [
+        "client"
+      ],
+      "q": "Why does the side that closes first wait in TIME_WAIT, and when does that become a problem?",
+      "a": "It waits 2 MSL so it can resend the final ACK if the other side repeats its FIN, and so stray segments of the old connection die out before the same addresses and ports are reused. It becomes a problem on a machine that opens and closes many short connections to the same server: thousands of sockets sit in TIME_WAIT and local ports run out. Reusing connections avoids it."
+    },
+    {
+      "id": "fresh-100kb",
+      "topic": "performance",
+      "targets": [
+        "server"
+      ],
+      "q": "Roughly how many round trips does a 100 KB response take on a brand-new connection?",
+      "a": "One round trip for the handshake, then slow start: with an initial window of 10 segments (14,600 bytes) doubling each round trip, three flights deliver 14.6, 29.2 and 58.4 KB, about 102 KB in all. So about 4 RTT from connect() to the last byte (more with TLS), and on a 100 ms path that is 400 ms however fast the link is. Delayed ACKs make the ramp a little slower in practice."
+    },
+    {
+      "id": "refused-vs-timeout",
+      "topic": "operations",
+      "targets": [
+        "client",
+        "server"
+      ],
+      "q": "A client reports 'connection refused' for one service and 'connection timed out' for another. What does each tell you?",
+      "a": "Refused means a reset came back: the host is reachable but nothing listens on that port (the service is down or on another port). A timeout means nothing came back at all: the SYN or its answer was dropped by a firewall, a security group or a dead host, so the client retransmitted the SYN with growing waits until it gave up. Refused is fast and points at the service; a timeout is slow and points at the network path."
+    },
+    {
+      "id": "syn-flood",
+      "topic": "security",
+      "targets": [
+        "server"
+      ],
+      "q": "What is a SYN flood and how do SYN cookies defend against it?",
+      "a": "An attacker sends many SYNs from spoofed addresses and never sends the final ACK, so the server's queue of half-open connections fills and real clients are turned away. With SYN cookies the server keeps no state for a SYN: it encodes what it needs in its own initial sequence number. A real client's final ACK returns that number plus one, so the server can rebuild the connection only for clients that complete the handshake."
+    }
+  ]
+}

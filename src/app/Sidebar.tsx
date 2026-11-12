@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import type { Design } from '../model/schema'
+import { isProtocol, type Design } from '../model/schema'
 import { store } from './hooks'
 import { openNumbers } from './numbersBus'
 import { isConfigured, providerLabel } from '../ai/providers'
@@ -27,24 +27,28 @@ export function Sidebar({ current, onBrowse, onAsk, onImport, onExport, onGenera
 }) {
   const r = current.requirements
   const has = !!current.meta.summary || r.functional.length + r.nonFunctional.length + r.scale.length > 0
+  // A protocol (Under the hood) has key ideas rather than requirements, and its numbers sit here: there is no Numbers pill.
+  const proto = isProtocol(current)
   return (
     <>
       <div className="panel-body req-body">
-        <h4 className="req-title">Requirements</h4>
+        <h4 className="req-title">{proto ? 'Key ideas' : 'Requirements'}</h4>
         {current.meta.summary && <p className="small req-summary">{current.meta.summary}</p>}
-        {r.functional.length > 0 && <><h5>Functional</h5><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></>}
-        {r.nonFunctional.length > 0 && <><h5>Non-functional</h5><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></>}
-        <NumbersHint />
+        {r.functional.length > 0 && <><h5>{proto ? 'What it does' : 'Functional'}</h5><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></>}
+        {r.nonFunctional.length > 0 && <><h5>{proto ? 'Gotchas' : 'Non-functional'}</h5><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></>}
+        {proto
+          ? r.scale.length > 0 && <><h5>By the numbers</h5><table className="kv"><tbody>{r.scale.map(x => <tr key={x.label}><th>{x.label}</th><td>{x.value}</td></tr>)}</tbody></table></>
+          : <NumbersHint />}
         {!has && <p className="muted small">This design has no requirements listed.</p>}
       </div>
       <div className="panel-foot side-actions">
-        <button className="browse" onClick={onBrowse} title="Search all designs (⌘K / Ctrl+K)">Browse designs<kbd>⌘K</kbd></button>
-        <button className="primary ask-ai" onClick={onAsk} title="Copy this design as a prompt for ChatGPT, Claude, Gemini or any assistant, then ask your questions about it">✦ Ask AI about this design</button>
+        <button className="browse" onClick={onBrowse} title={`Search all ${proto ? 'protocols' : 'designs'} (⌘K / Ctrl+K)`}>Browse {proto ? 'protocols' : 'designs'}<kbd>⌘K</kbd></button>
+        <button className="primary ask-ai" onClick={onAsk} title={`Copy this ${proto ? 'protocol walkthrough' : 'design'} as a prompt for ChatGPT, Claude, Gemini or any assistant, then ask your questions about it`}>✦ Ask AI about this {proto ? 'protocol' : 'design'}</button>
         <div className="row wrap">
-          <button onClick={onImport} title="Add any other system design question as a JSON design, then explore and practise it">Import</button>
-          <button onClick={onViewJson} title="See the JSON behind the design you are viewing">View JSON</button>
+          {!proto && <button onClick={onImport} title="Add any other system design question as a JSON design, then explore and practise it">Import</button>}
+          <button onClick={onViewJson} title={`See the JSON behind the ${proto ? 'protocol' : 'design'} you are viewing`}>View JSON</button>
           <button onClick={onExport}>Export</button>
-          <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant to make a new design">Make a design with AI</button>
+          {!proto && <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant to make a new design">Make a design with AI</button>}
         </div>
       </div>
     </>

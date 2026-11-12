@@ -3,6 +3,8 @@ import { ReactFlowProvider } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './app.css'
 import { LIBRARY } from '../library'
+import { PROTOCOLS } from '../protocols'
+import { getLab, useLab } from './labs'
 import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
 import { COMPACT_BELOW, panelInsets, useBars, store, usePlayer, useTheme, useViewportWidth } from './hooks'
@@ -40,18 +42,26 @@ const loadMine = (): Design[] =>
   store.get<unknown[]>(MINE_KEY, []).flatMap(raw => { const r = parseDesign(raw); return r.ok ? [r.design] : [] })
 
 const params = new URLSearchParams(location.search)
+// Under the hood is a labs feature: while it is locked, protocol links fall back like an unknown design.
+const protoAtStart = getLab('underhood') ? PROTOCOLS.find(p => p.id === params.get('d')) ?? (params.get('mode') === 'hood' ? PROTOCOLS[0] : undefined) : undefined
+type Mode = 'home' | 'explore' | 'practice' | 'hood'
 
 export function App() {
   const theme = useTheme()
   const [mine, setMine] = useState(loadMine)
   const all = [...LIBRARY, ...mine]
-  const [designId, setDesignId] = useState(() => params.get('d') ?? LIBRARY[0].id)
+  const [designId, setDesignId] = useState(() => (protoAtStart ? LIBRARY[0].id : params.get('d') ?? LIBRARY[0].id))
+  const hoodOn = useLab('underhood')
+  const [protoId, setProtoId] = useState(() => protoAtStart?.id ?? PROTOCOLS[0]?.id ?? '')
   // A bare URL opens the home page; links with a design or a practice problem open that directly.
-  const [mode, setMode] = useState<'home' | 'explore' | 'practice'>(() =>
-    params.get('mode') === 'practice' ? 'practice' : params.get('d') ? 'explore' : 'home')
+  const [rawMode, setMode] = useState<Mode>(() =>
+    params.get('mode') === 'practice' ? 'practice' : protoAtStart ? 'hood' : params.get('d') ? 'explore' : 'home')
+  // Switching the lab off while watching a protocol drops back to Explore.
+  const mode: Mode = rawMode === 'hood' && (!hoodOn || !PROTOCOLS.length) ? 'explore' : rawMode
+  const hood = mode === 'hood'
   const [tour, setTour] = useState<'explore' | 'practice' | null>(null)
   useEffect(() => {
-    if (mode === 'home' || store.get(`archstory.tour.${mode}`, false)) return
+    if (mode === 'home' || mode === 'hood' || store.get(`archstory.tour.${mode}`, false)) return
     const t = setTimeout(() => setTour(mode), 700)   // let the canvas lay out before measuring targets
     return () => clearTimeout(t)
   }, [mode])
@@ -60,10 +70,14 @@ export function App() {
   const [generating, setGenerating] = useState(false)
   const [picking, setPicking] = useState(false)
   const [jsonOf, setJsonOf] = useState<Design | null>(null)
-  const design = all.find(d => d.id === designId) ?? LIBRARY[0]
+  const system = all.find(d => d.id === designId) ?? LIBRARY[0]
+  const design = hood ? PROTOCOLS.find(p => p.id === protoId) ?? PROTOCOLS[0] : system
   const [flowId, setFlowId] = useState(() => params.get('f') ?? '')
   const flow = design.flows.find(f => f.id === flowId) ?? design.flows[0]
-  const [view, setView] = useState<View>(() => (params.get('view') === 'timeline' ? 'timeline' : 'canvas'))
+  const [sysView, setSysView] = useState<View>(() => (!protoAtStart && params.get('view') === 'timeline' ? 'timeline' : 'canvas'))
+  // Protocols open on the Timeline; the Architecture view stays one click away.
+  const [hoodView, setHoodView] = useState<View>(() => (protoAtStart && params.get('view') === 'canvas' ? 'canvas' : 'timeline'))
+  const view = hood ? hoodView : sysView, setView = hood ? setHoodView : setSysView
   const [network, setNetwork] = useState(() => params.get('net') === '1')
   const [zonesView, setZonesView] = useState(() => params.get('zones') === '1')
   const [monitoring, setMonitoring] = useState(() => params.get('mon') === '1')
@@ -116,6 +130,14 @@ export function App() {
       history.replaceState(null, '', u)
       return
     }
+    if (mode === 'hood') {
+      u.search = ''; u.hash = ''
+      u.searchParams.set('mode', 'hood'); u.searchParams.set('d', design.id)
+      if (flow) u.searchParams.set('f', flow.id)
+      u.searchParams.set('view', view)
+      history.replaceState(null, '', u)
+      return
+    }
     u.searchParams.delete('mode'); u.searchParams.delete('p')
     u.searchParams.set('d', design.id)
     if (flow) u.searchParams.set('f', flow.id); else u.searchParams.delete('f')
@@ -138,6 +160,7 @@ export function App() {
   useEffect(() => { store.set('archstory.right', rightPref) }, [rightPref])
 
   const open = (id: string) => { setDesignId(id); setFlowId(''); setSelected(null); setTab('step') }
+  const openProto = (id: string) => { setProtoId(id); setFlowId(''); setSelected(null); setTab('step'); setHoodView('timeline') }
   const select = (id: string | null) => { setSelected(id); if (id) { setTab(t => (t === 'monitoring' || t === 'questions' ? t : 'component')); setRightOpen(true) } }
   const saveMine = (list: Design[]) => { setMine(list); store.set(MINE_KEY, list) }
   const importDesign = (d: Design) => {
@@ -173,7 +196,7 @@ export function App() {
         {mode !== 'home' && <>
           <span className="sep" />
           <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog"
-            title={mode === 'practice' ? 'Switch problem (⌘K / Ctrl+K)' : 'Switch design (⌘K / Ctrl+K)'}>
+            title={mode === 'practice' ? 'Switch problem (⌘K / Ctrl+K)' : hood ? 'Switch protocol (⌘K / Ctrl+K)' : 'Switch design (⌘K / Ctrl+K)'}>
             {mode === 'practice' ? (all.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title : design.meta.title}<span className="chev-down" aria-hidden>▾</span>
           </button>
         </>}
@@ -181,11 +204,15 @@ export function App() {
           <nav className="seg" aria-label="Mode">
             <button className={mode === 'explore' ? 'on' : ''} onClick={() => setMode('explore')}>Explore</button>
             <button className={mode === 'practice' ? 'on' : ''}
-              onClick={() => { setProblemId(design.id); setMode('practice') }}>Practice</button>
+              onClick={() => { setProblemId(system.id); setMode('practice') }}>Practice</button>
+            {hoodOn && PROTOCOLS.length > 0 && (
+              <button className={hood ? 'on' : ''} onClick={() => { setSelected(null); setMode('hood') }}
+                title="Labs preview: step-by-step timelines of how network protocols work">Under the hood</button>
+            )}
           </nav>
         )}
         <span className="spacer" />
-        {mode !== 'home' && (
+        {mode !== 'home' && !hood && (
           <div className="seg" role="group" aria-label="Cloud">
             {(['neutral', 'aws', 'gcp'] as Cloud[]).map(c => (
               <button key={c} className={cloud === c ? 'on' : ''} onClick={() => setCloud(c)}>{c === 'neutral' ? 'Neutral' : c.toUpperCase()}</button>
@@ -202,7 +229,8 @@ export function App() {
 
       {mode === 'home' ? (
         <main className="home-main">
-          <Home library={LIBRARY} mine={mine}
+          <Home library={LIBRARY} mine={mine} protocols={hoodOn ? PROTOCOLS : []}
+            onWatch={id => { openProto(id); setMode('hood') }}
             onExplore={id => { open(id); setMode('explore') }}
             onPractice={id => { setProblemId(id); setMode('practice') }}
             onImport={() => { setImportText(''); setImporting(true) }} onGenerate={() => setGenerating(true)}
@@ -224,7 +252,7 @@ export function App() {
         <Toolbar barRef={bar.ref}>
           <Seg label="View" value={view} onChange={setView}
             options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow }]} />
-          {view === 'canvas' && <>
+          {view === 'canvas' && !hood && <>
             <ToolbarSep />
             <ToolbarLabel>Layers</ToolbarLabel>
             <Toggle on={net} disabled={!design.network} onClick={() => setNetwork(v => !v)}
@@ -246,7 +274,7 @@ export function App() {
           <ExportImageButton title={design.meta.title} disabled={view !== 'canvas'} />
         </Toolbar>
         <div className="stage-body">
-          <Numbers design={design} cloud={cloud} onCalculator={() => setEstimating(true)} />
+          {!hood && <Numbers design={design} cloud={cloud} onCalculator={() => setEstimating(true)} />}
           {view === 'timeline' && flow
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
@@ -273,8 +301,9 @@ export function App() {
       {profile && <ProfileCard onClose={() => setProfile(false)} />}
       {estimating && <EstimateDialog problem={design} cloud={cloud} onClose={() => setEstimating(false)} />}
       {drill && <DrillDialog designs={[...LIBRARY, ...mine]} onlyId={drill.id} onClose={() => setDrill(null)} />}
-      {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
-        onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}
+      {picking && <DesignPicker kind={hood ? 'protocol' : 'system'} library={hood ? PROTOCOLS : LIBRARY} mine={hood ? [] : mine}
+        currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
+        onOpen={id => { if (mode === 'practice') setProblemId(id); else if (hood) openProto(id); else { open(id); setMode('explore') } }}
         onDelete={id => { saveMine(mine.filter(d => d.id !== id)); if (id === design.id) open(LIBRARY[0].id); if (id === problemId) setProblemId(LIBRARY[0].id) }} />}
       {generating && <GenerateDialog example={LIBRARY.find(d => d.id === 'url-shortener') ?? LIBRARY[0]}
         onClose={() => setGenerating(false)} onPasteAnswer={reply => { setGenerating(false); setImportText(reply ?? ''); setImporting(true) }}
