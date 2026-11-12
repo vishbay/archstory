@@ -250,3 +250,17 @@ function Feedback() {
     </div>
   )
 }
+
+/** The landing hero's product shot: a request moving through a small design, with the Flow caption and a check result floating over it. */
+export function HeroPreview() {
+  return (
+    <div className="hero-shot" aria-hidden>
+      <div className="hti-screen">
+        <div className="hti-bar"><i /><i /><i /><span>Hotel Booking · Explore</span></div>
+        <div className="hero-shot-body"><Diagram packet /></div>
+      </div>
+      <div className="hero-chip hero-chip-flow"><span className="hero-chip-step">Step 4 of 9</span><b>Booking service → Bookings DB</b><span>Hold the room for 10 minutes</span></div>
+      <div className="hero-chip hero-chip-check"><span className="ok">✓</span> 8 of 9 checks pass</div>
+    </div>
+  )
+}

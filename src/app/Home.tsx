@@ -8,7 +8,7 @@ import { percent, practised, practisedCount, progressOf, type Progress } from '.
 import { storeKv } from './hooks'
 import { openAiSettings } from './useAiConfig'
 import { deckStats } from '../practice/cards'
-import { HowToImport, HowToInterview } from './HowTo'
+import { HeroPreview, HowToImport, HowToInterview } from './HowTo'
 import { openDrill, today, useDeck } from './useDeck'
 
 /** A miniature of the tier-band canvas: bands, connections and coloured component blocks. */
@@ -88,28 +88,52 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
   return (
     <div className="home">
       <section className="hero">
-        <h1>System design, one request at a time.</h1>
-        <p>Explore real architectures and watch each request travel through them hop by hop, with an explanation at every step.
-          Then build your own answer, check it against a reference, and get it reviewed.</p>
-        <div className="row wrap">
-          <button className="primary big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
-          <button className="big" onClick={() => onPractice(first.id)}>Start practising</button>
-          <button className="link" onClick={onTour}>Take the 1-minute tour</button>
+        <div className="hero-copy">
+          <a className="hero-pill" href="#library" onClick={e => { e.preventDefault(); document.getElementById('library')?.scrollIntoView({ behavior: 'smooth' }) }}>
+            <span className="hero-pill-tag">New</span> Solutions architect scenarios, regions and DR <span aria-hidden>→</span>
+          </a>
+          <h1>System design, <span className="hero-grad">one request at a time.</span></h1>
+          <p>Watch real architectures handle each request hop by hop, build your own answer, and get it checked and reviewed. Then rehearse it as a timed or AI mock interview.</p>
+          <div className="row wrap hero-ctas">
+            <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
+            <button className="big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
+            <button className="link" onClick={onTour}>Take the 1-minute tour</button>
+          </div>
+          <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span></p>
+        </div>
+        <HeroPreview />
+      </section>
+
+      <section className="stats" aria-label="At a glance">
+        {[
+          [String(library.length), 'designs, from URL shortener to multi-region'],
+          [String(library.reduce((n, d) => n + d.questions.length, 0)), 'follow-up questions with model answers'],
+          ['3', 'clouds: neutral names, AWS or GCP'],
+          ['Any', 'AI: paste into your assistant or use your key'],
+        ].map(([n, label]) => <div key={label} className="stat"><b>{n}</b><span>{label}</span></div>)}
+      </section>
+
+      <section className="features">
+        <p className="eyebrow">How it works</p>
+        <h2 className="section-title">From watching to rehearsing</h2>
+        <div className="how">
+          {[
+            { icon: <path d="M8 5v14l11-7z" />, title: 'Watch', body: 'Pick a design and press play. Each request moves hop by hop, with the real message and why it happens.' },
+            { icon: <path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" />, title: 'Build', body: 'In Practice, add components, connect them and record how your requests flow.' },
+            { icon: <path d="M5 12l5 5L20 7" />, title: 'Check', body: 'Automatic checks against a reference design, then an optional review by your own AI assistant, with a score and follow-up questions.' },
+            { icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>, title: 'Rehearse', body: 'Timed mock interviews with a checklist for each phase, an AI interviewer you can talk to, and questions that come back until you know them.' },
+          ].map(s => (
+            <div key={s.title} className="how-step">
+              <span className="how-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{s.icon}</svg></span>
+              <b>{s.title}</b><p>{s.body}</p>
+            </div>
+          ))}
         </div>
       </section>
 
-      <section className="how">
-        {[
-          { icon: '▶', title: 'Watch', body: 'Pick a design and press play. Each request moves hop by hop, with the real message and why it happens.' },
-          { icon: '✎', title: 'Build', body: 'In Practice, add components, connect them and record how your requests flow.' },
-          { icon: '✓', title: 'Check', body: 'Automatic checks against a reference design, then an optional review by your own AI assistant, with a score and follow-up questions.' },
-          { icon: '◷', title: 'Rehearse', body: 'Timed mock interviews with a checklist for each phase, an estimate calculator, and follow-up questions that come back until you know them.' },
-        ].map(s => (
-          <div key={s.title} className="how-step"><span className="how-icon">{s.icon}</span><b>{s.title}</b><p>{s.body}</p></div>
-        ))}
-      </section>
-
+      <p className="eyebrow">Bring your own question</p>
       <HowToImport onImport={onImport} onGenerate={onGenerate} />
+      <p className="eyebrow">Mock interviews</p>
       <HowToInterview onPractice={() => onPractice(first.id)} onConnect={openAiSettings} />
 
       {cards.total > 0 && (
@@ -125,9 +149,10 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
         </section>
       )}
 
-      <section>
+      <section id="library">
+        <p className="eyebrow">Library</p>
         <div className="lib-head">
-          <h2>Library</h2>
+          <h2>Designs to explore and practise</h2>
           {done > 0 && <span className="lib-progress">Practised {done} of {everything.length}</span>}
           <div className="seg" role="group" aria-label="Difficulty">
             {(['all', 'easy', 'medium', 'hard'] as const).map(l => (
@@ -150,10 +175,23 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
           : <p className="muted">The {library.length} designs above are just a start. Any other interview question works too: <button className="link" onClick={onImport}>import a design</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>, and it appears here with the same Explore, Practice, checks and review as the library.</p>}
       </section>
 
-      <section className="home-foot">
-        <p>Not limited to these {library.length}: <button className="link" onClick={onImport}>import a JSON file</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button> for any system design question, then explore and practise it like the others. Optional: <button className="link" onClick={openAiSettings}>connect your own API key</button> to send reviews and prompts from here.</p>
-        <p className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</p>
+      <section className="cta-band">
+        <h2>Ready for your next system design round?</h2>
+        <p>Start with a classic, or bring the question you are worried about.</p>
+        <div className="row wrap">
+          <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
+          <button className="big" onClick={onGenerate}>Prompt for your AI</button>
+          <button className="big" onClick={onImport}>Import a design</button>
+        </div>
       </section>
+
+      <footer className="home-foot">
+        <span className="foot-brand">Arch<span>Story</span></span>
+        <span className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</span>
+        <span className="spacer" />
+        <button className="link small" onClick={openAiSettings}>AI settings</button>
+        <a className="small" href="https://github.com/vishbay/archstory" target="_blank" rel="noreferrer">GitHub</a>
+      </footer>
     </div>
   )
 }
