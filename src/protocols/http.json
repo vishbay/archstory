@@ -1,0 +1,1136 @@
+{
+  "schema": "archstory/v1",
+  "id": "http",
+  "meta": {
+    "title": "HTTP/1.1 vs HTTP/2 vs HTTP/3",
+    "summary": "The same page (an HTML document, then a stylesheet, a script and an image) loaded three ways: HTTP/1.1 over several connections, HTTP/2 multiplexed over one TCP connection, and HTTP/3 over QUIC. The server is 50 ms away (one round trip, so one one-way trip is 25 ms), the stylesheet takes it 50 ms to build, and the name is already resolved.",
+    "tags": [
+      "application",
+      "multiplexing",
+      "quic"
+    ],
+    "difficulty": "medium",
+    "source": "RFC 9110 (HTTP semantics), RFC 9112 (HTTP/1.1), RFC 9113 (HTTP/2), RFC 7541 (HPACK), RFC 9114 (HTTP/3), RFC 9204 (QPACK), RFC 9000 (QUIC), RFC 9001 (TLS in QUIC), RFC 7301 (ALPN), RFC 7838 (Alt-Svc), RFC 9460 (HTTPS DNS record), RFC 9218 (priorities)",
+    "kind": "protocol",
+    "order": 5
+  },
+  "requirements": {
+    "functional": [
+      "All three versions carry the same messages (RFC 9110): a method, a path, header fields and a body in each direction; only the framing on the wire changes",
+      "HTTP/1.1 sends one request at a time on a connection and reads the whole response before the next one, so browsers open several connections per host to load files in parallel",
+      "HTTP/2 splits every request and response into frames on numbered streams and interleaves them on one TCP connection, with headers compressed by HPACK",
+      "HTTP/3 maps each request to a QUIC stream; QUIC runs over UDP, builds TLS 1.3 into its own handshake and delivers each stream in order independently of the others",
+      "TLS ALPN picks the version during the handshake (\"http/1.1\", \"h2\"); a browser learns that h3 is available from an Alt-Svc header or an HTTPS DNS record"
+    ],
+    "nonFunctional": [
+      "Connection setup before the first request: TCP plus TLS 1.3 costs 2 RTT, QUIC with TLS 1.3 inside costs 1 RTT, and a resumed QUIC connection can send a request in its first flight (0-RTT)",
+      "HTTP/1.1 suffers head-of-line blocking per connection: a slow response holds up every request queued behind it",
+      "HTTP/2 removes that, but TCP delivers bytes in order, so one lost segment stalls every stream until it is resent",
+      "HTTP/3 limits a loss to the streams whose data was in the lost packet",
+      "UDP is blocked or throttled on some networks, so browsers keep HTTP/2 over TCP as the fallback"
+    ],
+    "scale": [
+      {
+        "label": "Latency model here",
+        "value": "50 ms RTT, so one one-way trip is 25 ms"
+      },
+      {
+        "label": "Page load here",
+        "value": "HTTP/1.1 6 RTT (300 ms), HTTP/2 5 RTT (250 ms), HTTP/3 4 RTT (200 ms)"
+      },
+      {
+        "label": "Connections per host (HTTP/1.1)",
+        "value": "6 in current browsers; RFC 9112 sets no number"
+      },
+      {
+        "label": "HTTP/2 frame header",
+        "value": "9 bytes: length, type, flags, stream id"
+      },
+      {
+        "label": "HPACK static table",
+        "value": "61 entries; dynamic table 4,096 bytes by default"
+      },
+      {
+        "label": "QPACK static table",
+        "value": "99 entries"
+      },
+      {
+        "label": "Ports",
+        "value": "TCP 443 for HTTP/1.1 and HTTP/2, UDP 443 for HTTP/3"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Browser",
+      "kind": "web_client",
+      "description": "Loads https://example.com/: the HTML first, then the files it names"
+    },
+    {
+      "id": "server",
+      "label": "Web server (CDN edge)",
+      "kind": "cdn",
+      "description": "The HTTPS endpoint the browser talks to, in practice a CDN edge near the user that serves cached files and fetches the rest from the origin"
+    }
+  ],
+  "edges": [
+    {
+      "from": "browser",
+      "to": "server",
+      "label": "HTTPS",
+      "protocol": "TCP 443 (HTTP/1.1, HTTP/2) or UDP 443 (HTTP/3)"
+    }
+  ],
+  "flows": [
+    {
+      "id": "h1",
+      "title": "HTTP/1.1: one request at a time per connection",
+      "summary": "Keep-alive lets a connection carry many requests, but only one at a time, so the browser opens a second connection and pays its TCP and TLS setup again. A slow stylesheet blocks the script queued behind it. Page loaded at 6 RTT.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "Connection 1: TCP + TLS 1.3",
+          "label": "c1: SYN",
+          "detail": "The name is already resolved (see DNS), and the clock starts at connect(). The server is 50 ms away, so every arrow is one one-way trip of 25 ms (half a round trip). The TCP handshake comes first (see TCP); c1 and c2 label the browser's two connections.",
+          "state": {
+            "browser": "c1 TCP",
+            "server": "1 connection"
+          },
+          "fields": [
+            {
+              "name": "transport",
+              "value": "TCP, port 443"
+            },
+            {
+              "name": "connection",
+              "value": "c1",
+              "note": "The browser's first connection to example.com"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c1: SYN, ACK",
+          "detail": "One round trip has passed. The browser may now send, and it sends the ACK and the TLS ClientHello together."
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "c1: ACK, ClientHello",
+          "detail": "TLS 1.3 starts (see TLS). The ClientHello offers application protocols with ALPN, most preferred first. This server only speaks HTTP/1.1, which is the case this scenario shows.",
+          "state": {
+            "browser": "c1 TLS"
+          },
+          "fields": [
+            {
+              "name": "ALPN offered",
+              "value": "h2, http/1.1",
+              "note": "RFC 7301: the server picks one"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c1: ServerHello ... Finished",
+          "detail": "The server's TLS flight: ServerHello, then encrypted EncryptedExtensions (with the ALPN choice), Certificate, CertificateVerify and Finished. Two round trips have passed and no HTTP byte has moved yet.",
+          "fields": [
+            {
+              "name": "ALPN selected",
+              "value": "http/1.1",
+              "note": "Sent inside EncryptedExtensions"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "HTML",
+          "label": "c1: Finished, GET /",
+          "detail": "The browser's TLS Finished, with the first request right behind it. HTTP/1.1 is text: a request line, then header fields, then an empty line.",
+          "payload": "GET / HTTP/1.1\nHost: example.com\nUser-Agent: Mozilla/5.0 ...\nAccept: text/html\nAccept-Encoding: gzip, br",
+          "state": {
+            "browser": "c1 busy"
+          },
+          "fields": [
+            {
+              "name": "request line",
+              "value": "GET / HTTP/1.1"
+            },
+            {
+              "name": "Host",
+              "value": "example.com",
+              "note": "Required in HTTP/1.1 (RFC 9112): one IP address serves many sites"
+            },
+            {
+              "name": "persistence",
+              "value": "keep-alive by default",
+              "note": "HTTP/1.1 connections stay open unless a side sends Connection: close"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c1: 200 OK, index.html",
+          "detail": "The HTML arrives at 3 RTT (150 ms): 2 RTT of setup and 1 for the request. Content-Length tells the browser where this response ends, so the connection can carry the next request.",
+          "payload": "HTTP/1.1 200 OK\nContent-Type: text/html; charset=utf-8\nContent-Length: 14200\nCache-Control: max-age=60\n\n<!doctype html> ...",
+          "state": {
+            "browser": "c1 idle"
+          },
+          "fields": [
+            {
+              "name": "status line",
+              "value": "HTTP/1.1 200 OK"
+            },
+            {
+              "name": "Content-Length",
+              "value": "14200",
+              "note": "An example size; with Transfer-Encoding: chunked the end is marked by a zero-length chunk instead"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Subresources",
+          "label": "parse HTML: 3 more files",
+          "detail": "The parser finds style.css, app.js and hero.jpg. c1 can carry only one of them at a time: browsers do not use HTTP/1.1 pipelining (sending the next request before the response), because a broken proxy or server could mix up the responses. So the browser opens another connection. Real browsers open up to 6 per host; we draw 2 to keep the picture readable, and with 2 the script must wait for c1.",
+          "fields": [
+            {
+              "name": "style.css",
+              "value": "on c1 now"
+            },
+            {
+              "name": "app.js",
+              "value": "waits for a free connection"
+            },
+            {
+              "name": "hero.jpg",
+              "value": "on c2, once c2 is set up"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "c1: GET /style.css",
+          "detail": "The stylesheet goes on the warm connection at once.",
+          "payload": "GET /style.css HTTP/1.1\nHost: example.com\nAccept: text/css,*/*;q=0.1",
+          "state": {
+            "browser": "c1 busy"
+          },
+          "fields": [
+            {
+              "name": "request line",
+              "value": "GET /style.css HTTP/1.1"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "Connection 2: TCP + TLS 1.3 again",
+          "label": "c2: SYN",
+          "detail": "The second connection leaves at the same moment (delay 0) and pays the full setup again: 2 RTT of TCP and TLS before it can carry a request, and it starts with a small congestion window (see TCP slow start).",
+          "state": {
+            "browser": "c1 busy, c2 TCP",
+            "server": "2 connections"
+          },
+          "fields": [
+            {
+              "name": "cost",
+              "value": "2 RTT before its first request",
+              "note": "1 RTT for TCP, 1 RTT for TLS 1.3"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c2: SYN, ACK",
+          "detail": "Meanwhile the server is still building style.css on c1, and app.js has nowhere to go."
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "c2: ACK, ClientHello",
+          "detail": "TLS on the second connection, the same as on the first.",
+          "state": {
+            "browser": "c1 busy, c2 TLS"
+          }
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c2: ServerHello ... Finished",
+          "detail": "c2's handshake is done on the server side; the browser can send on c2 now."
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "phase": "Head-of-line blocking",
+          "label": "c1: 200 OK, style.css (slow)",
+          "detail": "The request reached the server at 3.5 RTT and took 50 ms (1 RTT) to build, so the response left at 4.5 and arrives at 5, together with c2's TLS flight (delay 0). All that time app.js sat in the browser's queue: c1 was busy with a response that was not ready, which is head-of-line blocking.",
+          "state": {
+            "browser": "c1 idle, c2 TLS"
+          },
+          "fields": [
+            {
+              "name": "status line",
+              "value": "HTTP/1.1 200 OK"
+            },
+            {
+              "name": "server time",
+              "value": "50 ms (1 RTT)",
+              "note": "An assumption of this example, the same in all three scenarios"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "c1: GET /app.js",
+          "detail": "c1 is free at last. Without the slow stylesheet in front of it, app.js could have left at 3 RTT; it leaves at 5.",
+          "state": {
+            "browser": "c1 busy, c2 busy"
+          },
+          "fields": [
+            {
+              "name": "request line",
+              "value": "GET /app.js HTTP/1.1"
+            },
+            {
+              "name": "queued for",
+              "value": "2 RTT (100 ms)",
+              "note": "From 3 RTT, when the HTML was parsed, to 5 RTT"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "c2: Finished, GET /hero.jpg",
+          "detail": "c2's first request leaves at the same moment (delay 0), 2 RTT after the connection was opened.",
+          "fields": [
+            {
+              "name": "request line",
+              "value": "GET /hero.jpg HTTP/1.1"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c1: 200 OK, app.js",
+          "detail": "The script arrives at 6 RTT.",
+          "state": {
+            "browser": "c1 idle, c2 busy"
+          }
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "c2: 200 OK, hero.jpg",
+          "detail": "The image arrives at the same time (delay 0). The page is loaded at 6 RTT, 300 ms. Each response is shown as one arrow; a large image really arrives as many TCP segments.",
+          "state": {
+            "browser": "c1 idle, c2 idle"
+          },
+          "fields": [
+            {
+              "name": "page loaded",
+              "value": "6 RTT = 300 ms"
+            },
+            {
+              "name": "connections",
+              "value": "2, each with its own setup and slow start"
+            }
+          ],
+          "delay": 0
+        }
+      ]
+    },
+    {
+      "id": "h2",
+      "title": "HTTP/2: many streams on one connection",
+      "summary": "One TCP and TLS connection, a SETTINGS exchange, then every request as HEADERS on its own odd-numbered stream, with responses interleaved as frames. HPACK makes later headers tiny. Page loaded at 5 RTT.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "TCP + TLS 1.3",
+          "label": "SYN",
+          "detail": "Same model as before: 50 ms RTT, 25 ms per arrow, name already resolved. HTTP/2 still runs on TCP and TLS, so setup still costs 2 RTT, but only once.",
+          "state": {
+            "browser": "TCP handshake",
+            "server": "TCP handshake"
+          },
+          "fields": [
+            {
+              "name": "transport",
+              "value": "TCP, port 443"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "SYN, ACK",
+          "detail": "One round trip. The ClientHello goes out with the final ACK."
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "ACK, ClientHello (ALPN)",
+          "detail": "The browser offers h2 first, then http/1.1 as a fallback.",
+          "state": {
+            "browser": "TLS handshake",
+            "server": "TLS handshake"
+          },
+          "fields": [
+            {
+              "name": "ALPN offered",
+              "value": "h2, http/1.1"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "ServerHello ... Finished (h2)",
+          "detail": "The server picks h2. Browsers only speak HTTP/2 over TLS, and ALPN is how both sides agree on it without an extra round trip.",
+          "fields": [
+            {
+              "name": "ALPN selected",
+              "value": "h2"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "Preface and SETTINGS",
+          "label": "Finished, preface, SETTINGS",
+          "detail": "After its TLS Finished the browser sends the HTTP/2 connection preface: a fixed 24-byte string, then a SETTINGS frame on stream 0 (stream 0 carries frames about the whole connection). The client need not wait for the server's SETTINGS before sending requests.",
+          "state": {
+            "browser": "h2 open"
+          },
+          "fields": [
+            {
+              "name": "preface",
+              "value": "PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n",
+              "note": "24 bytes; a server that only knows HTTP/1.1 would reject it"
+            },
+            {
+              "name": "frame",
+              "value": "SETTINGS (type 0x4), stream 0"
+            },
+            {
+              "name": "SETTINGS_ENABLE_PUSH",
+              "value": "0",
+              "note": "Browsers turn server push off"
+            },
+            {
+              "name": "SETTINGS_INITIAL_WINDOW_SIZE",
+              "value": "a large value, browser-specific",
+              "note": "Per-stream flow control window; the protocol default is 65,535 bytes"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "HTML",
+          "label": "HEADERS stream 1: GET /",
+          "detail": "The request leaves right behind the SETTINGS (delay 0). Client-initiated streams use odd ids, so the first is 1. The headers are HPACK-compressed: common fields come from a static table of 61 entries (:method GET is entry 2, a single byte), and new ones are added to a dynamic table that both sides keep for the connection.",
+          "fields": [
+            {
+              "name": "frame",
+              "value": "HEADERS (type 0x1), stream 1"
+            },
+            {
+              "name": "flags",
+              "value": "END_HEADERS, END_STREAM",
+              "note": "A GET has no body, so the browser's side of stream 1 is closed: the stream is half-closed (local)"
+            },
+            {
+              "name": "pseudo-headers",
+              "value": ":method GET, :scheme https, :authority example.com, :path /",
+              "note": "They replace the HTTP/1.1 request line and Host"
+            },
+            {
+              "name": "header bytes (illustration)",
+              "value": "about 400 as text, about 250 with HPACK",
+              "note": "Illustrative numbers, not a measurement: the first request still has to send user-agent, accept and cookie values literally, so HPACK saves little here"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "SETTINGS, SETTINGS ACK",
+          "detail": "The server's own SETTINGS (its preface) and an acknowledgment of the browser's. A server may send its SETTINGS earlier, right after its TLS Finished; either way it costs no extra round trip.",
+          "state": {
+            "server": "h2 open"
+          },
+          "fields": [
+            {
+              "name": "SETTINGS_MAX_CONCURRENT_STREAMS",
+              "value": "100",
+              "note": "An example value: how many streams the browser may have open at once"
+            },
+            {
+              "name": "SETTINGS ACK",
+              "value": "flags 0x1, empty",
+              "note": "Confirms the browser's settings are now in force"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "HEADERS + DATA stream 1",
+          "detail": "The HTML arrives at 3 RTT, as in HTTP/1.1: the setup costs the same. The difference starts now.",
+          "fields": [
+            {
+              "name": "HEADERS",
+              "value": ":status 200, content-type text/html",
+              "note": ":status 200 is HPACK static entry 8, one byte"
+            },
+            {
+              "name": "DATA (type 0x0)",
+              "value": "the HTML, last frame with END_STREAM"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Subresources",
+          "label": "parse HTML: 3 more files",
+          "detail": "Same three files. This time there is no queue and no second connection: each request gets its own stream on the connection that is already open and warm.",
+          "fields": [
+            {
+              "name": "style.css",
+              "value": "stream 3"
+            },
+            {
+              "name": "app.js",
+              "value": "stream 5"
+            },
+            {
+              "name": "hero.jpg",
+              "value": "stream 7"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "SETTINGS ACK",
+          "detail": "The browser acknowledges the server's SETTINGS, and the three requests follow in the same flight.",
+          "fields": [
+            {
+              "name": "frame",
+              "value": "SETTINGS, flags ACK (0x1), stream 0"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "HEADERS stream 3: GET /style.css",
+          "detail": "The next odd stream id. This request is sent at once, not queued behind anything.",
+          "state": {
+            "browser": "h2: 3 streams"
+          },
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "3",
+              "note": "Odd: client-initiated (even ids are for the server)"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "HEADERS stream 5: GET /app.js",
+          "detail": "HPACK pays off: user-agent, accept-encoding, cookie and the rest are already in the dynamic table from stream 1, so each is sent as a one or two byte index, and only :path is new.",
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "5"
+            },
+            {
+              "name": "header bytes (illustration)",
+              "value": "about 400 as text, about 20 with HPACK",
+              "note": "Illustrative numbers, not a measurement: indexed fields cost a byte or two each, :path /app.js is a short Huffman-coded literal"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "HEADERS stream 7: GET /hero.jpg",
+          "detail": "All three requests reach the server at 3.5 RTT, in one flight.",
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "7"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "phase": "Multiplexed responses",
+          "label": "HEADERS + DATA stream 5 (app.js)",
+          "detail": "The script is ready first and goes first, although it was asked for second: streams are independent, and the slow stylesheet blocks nobody at the HTTP level.",
+          "state": {
+            "server": "h2: 3 streams"
+          },
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "5"
+            },
+            {
+              "name": "frame header",
+              "value": "9 bytes per frame",
+              "note": "24-bit length, 8-bit type, 8-bit flags, 1 reserved bit and a 31-bit stream id"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "HEADERS + DATA stream 7 (hero.jpg)",
+          "detail": "The image's DATA frames are interleaved with the script's on the same connection (shown as one arrow each, delay 0). Both arrive at 4 RTT.",
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "7"
+            },
+            {
+              "name": "interleaving",
+              "value": "frames of streams 5 and 7 alternate",
+              "note": "Flow control windows and priorities decide the mix"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "HEADERS + DATA stream 3 (style.css)",
+          "detail": "The stylesheet reached the server at 3.5 RTT, took 50 ms (1 RTT) to build, left at 4.5 and arrives at 5 RTT (delay 2 counts from the image at 4). Page loaded at 5 RTT, 250 ms: 1 RTT faster than HTTP/1.1, because no request queued and no second connection was opened.",
+          "state": {
+            "browser": "h2 open",
+            "server": "h2 open"
+          },
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "3"
+            },
+            {
+              "name": "page loaded",
+              "value": "5 RTT = 250 ms"
+            }
+          ],
+          "delay": 2
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "If a packet were lost",
+          "label": "TCP head-of-line blocking",
+          "detail": "Not part of the timing above, a thought experiment: suppose one TCP segment carrying part of stream 7 had been lost. TCP hands bytes to HTTP/2 strictly in order, so every byte after the gap waits in the kernel until the retransmission arrives, at least one more RTT, even the frames of streams 3 and 5 that arrived intact. HTTP/2 fixed head-of-line blocking between requests, but not underneath them.",
+          "state": {
+            "browser": "loss: all wait"
+          },
+          "fields": [
+            {
+              "name": "stream 3",
+              "value": "stalled (flagged)",
+              "note": "Its bytes arrived, but sit behind the gap"
+            },
+            {
+              "name": "stream 5",
+              "value": "stalled (flagged)"
+            },
+            {
+              "name": "stream 7",
+              "value": "stalled: its segment was lost"
+            },
+            {
+              "name": "extra wait",
+              "value": "at least 1 RTT",
+              "note": "Fast retransmit after duplicate ACKs; a retransmission timeout costs far more"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "h3",
+      "title": "HTTP/3 over QUIC",
+      "summary": "The browser already knows the server speaks h3. QUIC over UDP 443 does the transport and TLS 1.3 handshakes in one round trip, requests go on QUIC streams with QPACK headers, and a lost packet would stall only its own stream. Page loaded at 4 RTT.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Discovery",
+          "label": "h3 is available: Alt-Svc",
+          "detail": "A browser cannot know in advance that a server listens on UDP. Here it learned it from an Alt-Svc header on an earlier HTTP/2 response from this site, cached for ma seconds; an HTTPS record in DNS (RFC 9460) can say the same before the first visit. Same latency model: 50 ms RTT, 25 ms per arrow.",
+          "state": {
+            "browser": "h3 known"
+          },
+          "fields": [
+            {
+              "name": "Alt-Svc",
+              "value": "h3=\":443\"; ma=86400",
+              "note": "RFC 7838: HTTP/3 on UDP port 443 of this host, remembered for a day"
+            },
+            {
+              "name": "or DNS",
+              "value": "example.com. HTTPS 1 . alpn=\"h3,h2\"",
+              "note": "RFC 9460 HTTPS record, found during name resolution"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "QUIC + TLS 1.3: 1 RTT",
+          "label": "Initial: ClientHello (UDP 443)",
+          "detail": "One UDP datagram opens the transport and the TLS 1.3 handshake at once: the ClientHello travels in a CRYPTO frame inside a QUIC Initial packet. The client pads it to at least 1,200 bytes, which limits how much a spoofed packet can make the server send.",
+          "state": {
+            "browser": "QUIC handshake",
+            "server": "QUIC handshake"
+          },
+          "fields": [
+            {
+              "name": "transport",
+              "value": "UDP, port 443"
+            },
+            {
+              "name": "packet",
+              "value": "Initial (long header), version 0x00000001",
+              "note": "QUIC version 1, RFC 9000"
+            },
+            {
+              "name": "Destination Connection ID",
+              "value": "<8 random bytes>",
+              "note": "Chosen by the client; Initial packets are protected with keys derived from it, so they are not secret"
+            },
+            {
+              "name": "CRYPTO frame",
+              "value": "TLS ClientHello, ALPN h3, quic_transport_parameters"
+            },
+            {
+              "name": "size",
+              "value": "padded to at least 1,200 bytes",
+              "note": "RFC 9000 section 14.1"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "Initial + Handshake: ServerHello ... Finished",
+          "detail": "The server answers with ServerHello in an Initial packet and the rest of its TLS flight (EncryptedExtensions, Certificate, CertificateVerify, Finished) in Handshake packets, usually in one datagram or a few. Until it has validated the client's address it may send at most 3 times the bytes it received.",
+          "fields": [
+            {
+              "name": "Initial",
+              "value": "CRYPTO: ServerHello, ACK"
+            },
+            {
+              "name": "Handshake",
+              "value": "CRYPTO: EncryptedExtensions ... Finished",
+              "note": "ALPN h3 and the server's transport parameters are in EncryptedExtensions"
+            },
+            {
+              "name": "anti-amplification",
+              "value": "at most 3 x bytes received",
+              "note": "RFC 9000 section 8.1; a large certificate chain can need an extra round trip"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "HTML",
+          "label": "Handshake: Finished",
+          "detail": "One round trip has passed and the browser has the 1-RTT keys, so its Finished and the first request leave together. Compare 2 RTT for TCP plus TLS: QUIC saves one round trip on every new connection.",
+          "state": {
+            "browser": "h3 open"
+          },
+          "fields": [
+            {
+              "name": "Handshake",
+              "value": "CRYPTO: TLS Finished, ACK"
+            },
+            {
+              "name": "setup cost",
+              "value": "1 RTT",
+              "note": "Transport and TLS 1.3 combined"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "1-RTT: HEADERS stream 0: GET /",
+          "detail": "In a short-header 1-RTT packet right behind the Finished (delay 0). The browser also opens its unidirectional streams: a control stream carrying SETTINGS and the two QPACK streams. Client-initiated bidirectional streams have ids 0, 4, 8, 12 and so on.",
+          "fields": [
+            {
+              "name": "request stream",
+              "value": "0",
+              "note": "RFC 9000 section 2.1: the low two bits of 0b00 mean client-initiated, bidirectional"
+            },
+            {
+              "name": "HTTP/3 frames",
+              "value": "HEADERS",
+              "note": "The stream's FIN ends the request, as END_STREAM did in HTTP/2"
+            },
+            {
+              "name": "control stream",
+              "value": "stream 2, type 0x00, SETTINGS",
+              "note": "Client unidirectional streams are 2, 6, 10"
+            },
+            {
+              "name": "QPACK streams",
+              "value": "encoder (type 0x02), decoder (type 0x03)"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "HANDSHAKE_DONE, SETTINGS",
+          "detail": "The server confirms the handshake and sends its own control stream with SETTINGS.",
+          "state": {
+            "server": "h3 open"
+          },
+          "fields": [
+            {
+              "name": "HANDSHAKE_DONE",
+              "value": "frame type 0x1e",
+              "note": "Only the server sends it; the client can discard its handshake keys"
+            },
+            {
+              "name": "control stream",
+              "value": "stream 3, SETTINGS",
+              "note": "Server-initiated unidirectional: 3, 7, 11"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "stream 0: HEADERS + DATA",
+          "detail": "The HTML arrives at 2 RTT (100 ms), a whole round trip earlier than over TCP and TLS.",
+          "fields": [
+            {
+              "name": "HEADERS",
+              "value": ":status 200, content-type text/html"
+            },
+            {
+              "name": "DATA",
+              "value": "the HTML, then the stream's FIN"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Subresources",
+          "label": "parse HTML: 3 more files",
+          "detail": "The same three files, each on a new QUIC stream.",
+          "fields": [
+            {
+              "name": "style.css",
+              "value": "stream 4"
+            },
+            {
+              "name": "app.js",
+              "value": "stream 8"
+            },
+            {
+              "name": "hero.jpg",
+              "value": "stream 12"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "stream 4: GET /style.css",
+          "detail": "Like HTTP/2, all three go out at once.",
+          "state": {
+            "browser": "h3: 3 streams"
+          },
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "4"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "stream 8: GET /app.js",
+          "detail": "QPACK replaces HPACK. HPACK assumes header blocks arrive in order, which QUIC streams do not promise, so QPACK sends dynamic table updates on the separate encoder stream; a header block that refers to an entry not yet received waits for it, and only that stream waits.",
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "8"
+            },
+            {
+              "name": "QPACK",
+              "value": "static table of 99 entries, plus a dynamic table",
+              "note": "Each header block starts with its Required Insert Count: how many dynamic table inserts it depends on"
+            },
+            {
+              "name": "header bytes (illustration)",
+              "value": "about 400 as text, about 20 with QPACK",
+              "note": "Illustrative numbers, not a measurement, as for HTTP/2"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "label": "stream 12: GET /hero.jpg",
+          "detail": "All three arrive at 2.5 RTT.",
+          "fields": [
+            {
+              "name": "stream id",
+              "value": "12"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "phase": "Responses",
+          "label": "stream 8: app.js",
+          "detail": "Ready first, sent first.",
+          "state": {
+            "server": "h3: 3 streams"
+          }
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "stream 12: hero.jpg",
+          "detail": "Interleaved with the script in the same packets or alternating ones (delay 0). Both arrive at 3 RTT.",
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "stream 4: style.css",
+          "detail": "The stylesheet reached the server at 2.5 RTT, took 50 ms (1 RTT), left at 3.5 and arrives at 4 RTT (delay 2 counts from the image at 3). Page loaded at 4 RTT, 200 ms: the one round trip saved in the handshake.",
+          "state": {
+            "browser": "h3 open",
+            "server": "h3 open"
+          },
+          "fields": [
+            {
+              "name": "page loaded",
+              "value": "4 RTT = 200 ms"
+            }
+          ],
+          "delay": 2
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "If a packet were lost",
+          "label": "only stream 12 would wait",
+          "detail": "The same thought experiment as for HTTP/2: suppose a packet carrying only image data were lost. QUIC orders bytes per stream, not per connection, so streams 4 and 8 are handed to the browser as soon as their own bytes arrive, and only stream 12 waits for the retransmission. A packet that carried frames of several streams would stall each of those streams.",
+          "state": {
+            "browser": "loss: 1 waits"
+          },
+          "fields": [
+            {
+              "name": "stream 4",
+              "value": "delivered (flagged: unaffected)"
+            },
+            {
+              "name": "stream 8",
+              "value": "delivered (flagged: unaffected)"
+            },
+            {
+              "name": "stream 12",
+              "value": "waits for the retransmission"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "server",
+      "kind": "note",
+      "text": "In practice the server here is a CDN edge: it terminates TCP, TLS or QUIC close to the user, so the round trips in these timelines are short ones, and it speaks to the origin over its own long-lived connections. Many origins only speak HTTP/1.1 or HTTP/2 while the edge offers HTTP/3 to browsers."
+    },
+    {
+      "target": "h2",
+      "kind": "tradeoff",
+      "text": "Why HTTP/2 helped: one warm connection instead of six cold ones, no queue behind a slow response, compressed repetitive headers, and none of the HTTP/1.1 workarounds (domain sharding, sprites, file bundling) needed any more. Where it did not: TCP still delivers in order, so on a lossy network one loss stalls every stream, and with everything on one connection a single loss slows the whole page more than it would with six connections."
+    },
+    {
+      "target": "h3",
+      "kind": "scaling",
+      "text": "HTTP/3 helps most where loss and latency are high, such as mobile networks: one handshake round trip fewer, losses that stall only their own streams, and connection migration. When a phone moves from Wi-Fi to cellular its address changes, which kills a TCP connection, but a QUIC connection is identified by connection IDs and continues on the new path after a path validation (PATH_CHALLENGE and PATH_RESPONSE). On a clean, fast wired network the gain is small."
+    },
+    {
+      "target": "h3",
+      "kind": "failure",
+      "text": "Some networks block or throttle UDP 443 (corporate firewalls, some middleboxes). Browsers race or fall back: if the QUIC handshake does not complete quickly they use HTTP/2 over TCP, and they may remember that h3 failed on that network. So h2 must stay enabled as the fallback."
+    },
+    {
+      "target": "h2",
+      "kind": "note",
+      "text": "Server push let an HTTP/2 server send files before they were asked for, in PUSH_PROMISE frames. It rarely helped, because it often pushed files the browser already had cached, and browsers have removed it (Chrome in 2022). 103 Early Hints (RFC 8297), which tells the browser what to fetch, is the replacement."
+    },
+    {
+      "target": "browser",
+      "kind": "note",
+      "text": "Prioritisation (RFC 9218): a request can carry a Priority header such as u=0, i (urgency 0 to 7, default 3, and whether it can be sent incrementally), and the client can change it later with a PRIORITY_UPDATE frame. It replaces the HTTP/2 dependency tree, which RFC 9113 deprecated."
+    },
+    {
+      "target": "h3",
+      "kind": "security",
+      "text": "0-RTT: on a resumed QUIC connection the browser can send a request in its very first flight, before the handshake completes, so the page needs no setup round trip at all. That early data can be replayed by an attacker, so browsers and servers only use it for safe requests such as GET, and a server can refuse it. Not shown in the timeline."
+    }
+  ],
+  "questions": [
+    {
+      "id": "setup-cost",
+      "topic": "performance",
+      "targets": [
+        "browser",
+        "server"
+      ],
+      "q": "With a 50 ms round trip, how long before the first byte of HTML arrives over HTTP/2 and over HTTP/3 on a new connection, and why the difference?",
+      "a": "HTTP/2 needs 1 RTT for the TCP handshake and 1 for TLS 1.3, then 1 for the request: 3 RTT, 150 ms. QUIC does the transport and TLS 1.3 handshake together in 1 RTT, so HTTP/3 gets the HTML at 2 RTT, 100 ms. On a resumed QUIC connection 0-RTT can send the request in the first flight and save one more round trip, for safe requests only."
+    },
+    {
+      "id": "h1-hol",
+      "topic": "performance",
+      "targets": [
+        "browser"
+      ],
+      "q": "What is head-of-line blocking in HTTP/1.1, and how did browsers work around it?",
+      "a": "A connection carries one request at a time and responses come back in order, so a slow response holds up every request behind it on that connection. Browsers open up to 6 connections per host, and sites spread files over several hostnames (domain sharding) and bundled files to cut requests. Every extra connection costs its own TCP and TLS setup and starts with a small congestion window."
+    },
+    {
+      "id": "h2-tcp-hol",
+      "topic": "reliability",
+      "targets": [
+        "browser"
+      ],
+      "q": "HTTP/2 multiplexes streams on one connection. Why can it be slower than HTTP/1.1 on a lossy network?",
+      "a": "TCP hands bytes to the application strictly in order, so one lost segment stalls every HTTP/2 stream until the retransmission arrives, even streams whose data got through. With six HTTP/1.1 connections a loss stalls one connection and the other five carry on. HTTP/3 fixes this by ordering bytes per QUIC stream instead of per connection."
+    },
+    {
+      "id": "hpack",
+      "topic": "data",
+      "targets": [
+        "browser",
+        "server"
+      ],
+      "q": "How does HPACK make the second request's headers so much smaller, and why does HTTP/3 need QPACK instead?",
+      "a": "Both sides keep a static table of common fields and a dynamic table of fields already sent on the connection, so a repeated user-agent or cookie becomes an index of a byte or two. HPACK relies on header blocks being decoded in the order they were sent, which TCP guarantees. QUIC streams arrive independently, so QPACK sends table updates on a separate encoder stream and lets a header block wait only for the entries it needs."
+    },
+    {
+      "id": "discover-h3",
+      "topic": "operations",
+      "targets": [
+        "browser"
+      ],
+      "q": "How does a browser know it can use HTTP/3, and what happens if UDP is blocked?",
+      "a": "The server advertises it, either with an Alt-Svc header such as h3=\":443\"; ma=86400 on an HTTP/2 or HTTP/1.1 response, or with an HTTPS record in DNS listing alpn h3. The first visit therefore often uses HTTP/2. If UDP 443 is blocked the QUIC handshake never completes, so browsers race or fall back to HTTP/2 over TCP, which is why h2 stays enabled."
+    },
+    {
+      "id": "when-h3",
+      "topic": "tradeoffs",
+      "targets": [
+        "server"
+      ],
+      "q": "When would you expect HTTP/3 to make a real difference, and when not?",
+      "a": "It helps most on high-latency, lossy or changing networks such as mobile: one handshake round trip fewer, losses that stall only their own streams, and connection migration when the device changes networks. On a fast, clean wired network with warm connections the gain is small. Costs include more CPU for UDP and encryption in user space, and the need to keep HTTP/2 as a fallback."
+    }
+  ]
+}

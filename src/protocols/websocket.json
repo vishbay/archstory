@@ -1,0 +1,889 @@
+{
+  "schema": "archstory/v1",
+  "id": "websocket",
+  "meta": {
+    "title": "WebSocket",
+    "summary": "How an HTTP/1.1 request turns into a two-way message channel through a load balancer: the Upgrade handshake, masked and unmasked frames, heartbeats against idle timeouts, and closing and reconnecting. The browser is 50 ms from the load balancer (25 ms per arrow); the load balancer and the server share a data centre, under a millisecond apart, drawn as 0.",
+    "tags": [
+      "application",
+      "realtime",
+      "connections"
+    ],
+    "difficulty": "medium",
+    "source": "RFC 6455 (WebSocket), RFC 7692 (permessage-deflate), RFC 9110 (HTTP semantics, Upgrade and Connection), RFC 9112 (HTTP/1.1), RFC 8441 (WebSocket over HTTP/2)",
+    "kind": "protocol",
+    "order": 6
+  },
+  "requirements": {
+    "functional": [
+      "Starts as an HTTP/1.1 GET with Upgrade: websocket; a 101 Switching Protocols answer turns the same TCP connection into a full-duplex channel",
+      "After the upgrade both sides send messages whenever they like, as frames with a 2 to 14 byte header instead of HTTP headers",
+      "Every frame from the client is masked with a fresh 4-byte key; frames from the server are never masked",
+      "Ping and Pong control frames check that the peer is alive and keep idle timers on the path from firing",
+      "Either side ends the connection with a Close frame carrying a status code; the other side answers with a Close, then the TCP connection closes"
+    ],
+    "nonFunctional": [
+      "A connection is long-lived and pinned to one server for its whole life, so one open connection per user is memory, file descriptors and load balancer capacity",
+      "Load balancers and proxies close connections that stay silent past their idle timeout, so long-lived connections need heartbeats",
+      "The browser API has no automatic reconnect and no backpressure; the application must reconnect with backoff and bound its send buffers",
+      "TCP and TLS setup cost the same 2 RTT as any HTTPS request; the upgrade adds 1 RTT on top"
+    ],
+    "scale": [
+      {
+        "label": "Latency model here",
+        "value": "50 ms RTT browser to load balancer; load balancer to server counted as 0"
+      },
+      {
+        "label": "Frame header",
+        "value": "2 bytes, plus 2 or 8 for longer lengths, plus 4 for a client's masking key"
+      },
+      {
+        "label": "Control frame payload",
+        "value": "125 bytes at most, never fragmented"
+      },
+      {
+        "label": "Idle timeout here",
+        "value": "60 s at the load balancer (an example; the default of several cloud load balancers)"
+      },
+      {
+        "label": "Heartbeat here",
+        "value": "a Ping every 30 s, below the idle timeout"
+      },
+      {
+        "label": "Version",
+        "value": "Sec-WebSocket-Version: 13"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Browser",
+      "kind": "web_client",
+      "description": "Page code calling new WebSocket(\"wss://example.com/chat\"); the browser does the handshake, masking and Pong replies itself"
+    },
+    {
+      "id": "lb",
+      "label": "Load balancer",
+      "kind": "load_balancer",
+      "description": "An L7 load balancer that terminates TLS, forwards the upgrade to one server and then relays the bytes both ways, with an idle timeout"
+    },
+    {
+      "id": "server",
+      "label": "Server",
+      "kind": "service",
+      "description": "A WebSocket server process holding many open connections, one per connected user"
+    }
+  ],
+  "edges": [
+    {
+      "from": "browser",
+      "to": "lb",
+      "label": "wss://",
+      "protocol": "WebSocket over TLS, TCP 443"
+    },
+    {
+      "from": "lb",
+      "to": "server",
+      "label": "upgraded connection",
+      "protocol": "WebSocket over TCP"
+    }
+  ],
+  "flows": [
+    {
+      "id": "upgrade",
+      "title": "Upgrade and message exchange",
+      "summary": "An HTTP/1.1 GET with Upgrade: websocket goes through the load balancer, the server answers 101 Switching Protocols, and then a masked text frame goes up and an unmasked one comes back. Open at 1 RTT after the GET.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Opening handshake",
+          "label": "new WebSocket(\"wss://example.com/chat\")",
+          "detail": "The page asks for a WebSocket with the subprotocol chat.v1. The TCP and TLS connection to the load balancer is already set up (2 RTT, see TCP and TLS), so the clock starts when the GET is sent. The browser is 50 ms from the load balancer, 25 ms per arrow; the hop from the load balancer to the server is inside one data centre and counted as 0.",
+          "state": {
+            "browser": "CONNECTING",
+            "lb": "HTTP"
+          },
+          "fields": [
+            {
+              "name": "readyState",
+              "value": "0 (CONNECTING)",
+              "note": "The browser API's states: CONNECTING, OPEN, CLOSING, CLOSED"
+            },
+            {
+              "name": "subprotocols",
+              "value": "[\"chat.v1\"]",
+              "note": "An example application protocol name"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "lb",
+          "kind": "req",
+          "label": "GET /chat, Upgrade: websocket",
+          "detail": "An ordinary HTTP/1.1 GET asking to switch protocols. Sec-WebSocket-Key is 16 random bytes in base64, new for every connection; it proves the server understood a WebSocket request, it is not a secret. The value here is the sample from RFC 6455 section 1.3. Cookies for example.com go with it, as on any request.",
+          "payload": "GET /chat HTTP/1.1\nHost: example.com\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\nSec-WebSocket-Version: 13\nOrigin: https://example.com\nSec-WebSocket-Protocol: chat.v1\nSec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\nCookie: session=<opaque>",
+          "fields": [
+            {
+              "name": "Upgrade",
+              "value": "websocket"
+            },
+            {
+              "name": "Connection",
+              "value": "Upgrade",
+              "note": "Marks Upgrade as a hop-by-hop field for the next hop only"
+            },
+            {
+              "name": "Sec-WebSocket-Key",
+              "value": "dGhlIHNhbXBsZSBub25jZQ==",
+              "note": "Base64 of 16 random bytes; this is the RFC's sample, a browser makes a new one each time"
+            },
+            {
+              "name": "Sec-WebSocket-Version",
+              "value": "13",
+              "note": "The only version in use; a server that does not support it answers 426 with the versions it does"
+            },
+            {
+              "name": "Origin",
+              "value": "https://example.com",
+              "note": "Sent by browsers; the server must check it (see the security note)"
+            },
+            {
+              "name": "Sec-WebSocket-Protocol",
+              "value": "chat.v1",
+              "note": "Optional: subprotocols the client can speak, the server picks one"
+            },
+            {
+              "name": "Sec-WebSocket-Extensions",
+              "value": "permessage-deflate; client_max_window_bits",
+              "note": "Optional: offers per-message compression (RFC 7692)"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "server",
+          "kind": "req",
+          "label": "GET /chat (Upgrade passed on)",
+          "detail": "Upgrade and Connection are hop-by-hop fields, which a proxy normally removes. A load balancer that supports WebSocket must recognise the upgrade and pass both fields on to the server (in nginx this has to be configured), and it adds X-Forwarded-For. It picks one server, and this connection stays on that server for its whole life.",
+          "state": {
+            "server": "CONNECTING"
+          },
+          "fields": [
+            {
+              "name": "Upgrade, Connection",
+              "value": "websocket, Upgrade",
+              "note": "Forwarded explicitly by the load balancer"
+            },
+            {
+              "name": "X-Forwarded-For",
+              "value": "198.51.100.7",
+              "note": "The browser's address, an example"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "label": "101 Switching Protocols",
+          "detail": "The server checks Origin and the session cookie, then accepts. Sec-WebSocket-Accept is the base64 of the SHA-1 of the key followed by the fixed GUID 258EAFA5-E914-47DA-95CA-C5AB0DC85B11, which proves this server read this request; the value shown is the RFC's own result for the sample key. With the 101 sent, the server's side is OPEN.",
+          "payload": "HTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\nSec-WebSocket-Protocol: chat.v1\nSec-WebSocket-Extensions: permessage-deflate",
+          "state": {
+            "server": "OPEN",
+            "lb": "TUNNEL"
+          },
+          "fields": [
+            {
+              "name": "status",
+              "value": "101 Switching Protocols",
+              "note": "Any other status means the handshake failed"
+            },
+            {
+              "name": "Sec-WebSocket-Accept",
+              "value": "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+              "note": "base64(SHA-1(key + \"258EAFA5-E914-47DA-95CA-C5AB0DC85B11\")), RFC 6455 section 1.3"
+            },
+            {
+              "name": "Sec-WebSocket-Protocol",
+              "value": "chat.v1",
+              "note": "The one subprotocol the server picked"
+            },
+            {
+              "name": "Sec-WebSocket-Extensions",
+              "value": "permessage-deflate",
+              "note": "Compression accepted"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "101 Switching Protocols",
+          "detail": "The load balancer now treats the connection as a tunnel: it relays bytes both ways and no longer parses HTTP. The browser checks the Accept value against its own key and is OPEN, 1 RTT after it sent the GET; the open event fires.",
+          "state": {
+            "browser": "OPEN"
+          },
+          "fields": [
+            {
+              "name": "check",
+              "value": "Sec-WebSocket-Accept matches the key",
+              "note": "Otherwise the browser fails the connection"
+            },
+            {
+              "name": "readyState",
+              "value": "1 (OPEN)"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Messages",
+          "label": "text frame \"Hello\" (masked)",
+          "detail": "ws.send(\"Hello\"). A client MUST mask every frame with a new random 4-byte key: payload byte i is XORed with key byte i mod 4. Masking is not secrecy (the key is in the frame); it stops a page from putting chosen bytes on the wire that a confused proxy cache might read as HTTP. These are the exact bytes of the RFC 6455 section 5.7 example. Short messages like this one are sent uncompressed, which permessage-deflate allows (RSV1 = 0).",
+          "fields": [
+            {
+              "name": "bytes",
+              "value": "81 85 37 fa 21 3d 7f 9f 4d 51 58",
+              "note": "11 bytes: 2 header, 4 masking key, 5 payload"
+            },
+            {
+              "name": "FIN, RSV1-3, opcode",
+              "value": "1, 000, 0x1 (text)",
+              "note": "First byte 0x81: a complete message in one frame"
+            },
+            {
+              "name": "MASK, payload length",
+              "value": "1, 5",
+              "note": "Second byte 0x85: mask bit set, length 5 in the 7-bit field"
+            },
+            {
+              "name": "masking key",
+              "value": "37 fa 21 3d"
+            },
+            {
+              "name": "masked payload",
+              "value": "7f 9f 4d 51 58",
+              "note": "\"Hello\" (48 65 6c 6c 6f) XOR the key"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "server",
+          "kind": "req",
+          "label": "frame relayed",
+          "detail": "The load balancer passes the bytes through unchanged. The server unmasks them; a server that receives an unmasked frame from a client MUST close the connection (it may send Close with 1002, protocol error).",
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "label": "text frame \"Hello\" (unmasked)",
+          "detail": "The server answers with a text frame of its own, at any time it likes: there is no request and response pairing after the upgrade. Server frames MUST NOT be masked. Again the exact bytes of the RFC example.",
+          "fields": [
+            {
+              "name": "bytes",
+              "value": "81 05 48 65 6c 6c 6f",
+              "note": "7 bytes: 2 header, 5 payload"
+            },
+            {
+              "name": "FIN, opcode",
+              "value": "1, 0x1 (text)",
+              "note": "Other opcodes: 0x0 continuation, 0x2 binary, 0x8 close, 0x9 ping, 0xA pong"
+            },
+            {
+              "name": "MASK, payload length",
+              "value": "0, 5"
+            },
+            {
+              "name": "length 0 to 125",
+              "value": "in the 7-bit field",
+              "note": "Header 2 bytes"
+            },
+            {
+              "name": "length 126 to 65,535",
+              "value": "7-bit field = 126, then a 16-bit length",
+              "note": "Header 4 bytes"
+            },
+            {
+              "name": "length 65,536 and up",
+              "value": "7-bit field = 127, then a 64-bit length",
+              "note": "Header 10 bytes; the most significant bit must be 0, and the shortest form must be used"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "frame relayed",
+          "detail": "The browser fires a message event with \"Hello\". From the first GET to the first reply: 2 RTT, 100 ms. Every later message costs only half a round trip in each direction, with no HTTP headers."
+        }
+      ]
+    },
+    {
+      "id": "heartbeat",
+      "title": "Keep-alive and an idle timeout",
+      "summary": "The load balancer closes connections that stay silent for 60 s. A Ping from the server every 30 s, answered by the browser's Pong, keeps the timer from firing; without it the connection is cut with no Close frame.",
+      "steps": [
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Idle timer",
+          "label": "idle timeout: 60 s",
+          "detail": "The connection is open, and for a while nobody has anything to say. The load balancer runs an idle timer per connection, 60 s in this example, reset by any bytes in either direction. Waits in this scenario are seconds, not drawn to scale.",
+          "state": {
+            "browser": "OPEN",
+            "lb": "TUNNEL",
+            "server": "OPEN"
+          },
+          "fields": [
+            {
+              "name": "idle timeout",
+              "value": "60 s",
+              "note": "An example value; it is configurable on every load balancer and proxy"
+            },
+            {
+              "name": "reset by",
+              "value": "any frame, either direction"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Heartbeat",
+          "label": "Ping (opcode 0x9)",
+          "detail": "After 30 s of silence the server sends a Ping, well below the 60 s timeout. The browser API cannot send pings, so heartbeats come from the server or are application messages. A control frame carries at most 125 bytes and cannot be fragmented.",
+          "fields": [
+            {
+              "name": "first byte",
+              "value": "0x89",
+              "note": "FIN 1, opcode 0x9 (ping)"
+            },
+            {
+              "name": "MASK, payload length",
+              "value": "0, 4",
+              "note": "Server frames are not masked"
+            },
+            {
+              "name": "application data",
+              "value": "<4 bytes, for example a counter>"
+            },
+            {
+              "name": "interval",
+              "value": "30 s",
+              "note": "An example: half the idle timeout leaves room for one lost heartbeat"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "Ping relayed",
+          "detail": "The Ping crosses the load balancer, so its idle timer starts again from 0."
+        },
+        {
+          "from": "browser",
+          "to": "lb",
+          "kind": "req",
+          "label": "Pong (opcode 0xA, masked)",
+          "detail": "The browser answers by itself, as soon as it can; page code never sees it. A Pong must carry exactly the Ping's application data, and like every client frame it is masked.",
+          "fields": [
+            {
+              "name": "first byte",
+              "value": "0x8A",
+              "note": "FIN 1, opcode 0xA (pong)"
+            },
+            {
+              "name": "MASK, payload length",
+              "value": "1, 4"
+            },
+            {
+              "name": "application data",
+              "value": "the Ping's 4 bytes, masked",
+              "note": "RFC 6455 section 5.5.3: identical to the Ping's"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "server",
+          "kind": "req",
+          "label": "Pong relayed",
+          "detail": "The server now knows the browser is still there, 1 RTT after the Ping. If Pongs stop coming, the server closes the connection and frees its memory instead of holding a dead one: a phone that lost its network sends no FIN, so without heartbeats neither side would ever find out.",
+          "fields": [
+            {
+              "name": "liveness",
+              "value": "browser answered within 1 RTT"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Without heartbeats",
+          "label": "60 s with no frames: timeout",
+          "detail": "The other case: a connection where neither side sends anything, for example a server with no heartbeat configured and a chat with nobody typing. 60 s after the last byte the load balancer gives up on the connection and frees it.",
+          "state": {
+            "lb": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "last byte",
+              "value": "60 s ago"
+            },
+            {
+              "name": "action",
+              "value": "close both TCP connections",
+              "note": "The load balancer is not a WebSocket endpoint, so it sends no Close frame"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "server",
+          "kind": "req",
+          "label": "TCP FIN, no Close frame",
+          "detail": "The server sees its TCP connection end without a Close frame. Some load balancers send a reset instead of a FIN; either way the WebSocket was not closed cleanly.",
+          "state": {
+            "server": "CLOSED"
+          },
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "TCP FIN, no Close frame",
+          "detail": "The browser fires a close event with code 1006 and wasClean false: the connection ended without a Close frame. The page must reconnect (see Close and reconnect). The fix is a heartbeat interval below the shortest idle timeout on the whole path, including proxies and NAT gateways the team does not run.",
+          "state": {
+            "browser": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "close event",
+              "value": "code 1006, wasClean false",
+              "note": "1006 is reported locally, never sent on the wire"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "close",
+      "title": "Close and reconnect",
+      "summary": "A server crash ends a connection without a Close frame (code 1006). The browser reconnects with exponential backoff and jitter; the first try fails, the second succeeds. Then a clean close: Close 1000, the echo, and TCP closed by the server first.",
+      "steps": [
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Abnormal close",
+          "label": "crashes",
+          "detail": "The connection is open when the server process dies (a crash or an out-of-memory kill). It sends no Close frame; its operating system closes the socket, with a FIN or, if unread data was waiting, a reset. A server that loses power sends nothing at all, and only heartbeats find that out.",
+          "state": {
+            "browser": "OPEN",
+            "lb": "TUNNEL",
+            "server": "CLOSED"
+          }
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "label": "TCP FIN or RST, no Close",
+          "detail": "The load balancer sees its connection to the server end.",
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "TCP FIN, no Close frame",
+          "detail": "The load balancer cannot move a WebSocket to another server (the server held its state), so it closes the browser's connection too.",
+          "state": {
+            "lb": "CLOSED",
+            "browser": "CLOSED"
+          }
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "close event: code 1006",
+          "detail": "No Close frame arrived, so the browser reports 1006 (abnormal closure). 1006 is a reserved code: it MUST NOT be sent in a Close frame, it only exists so an API can report that the connection was lost. 1005 (no status received) is the other code that never goes on the wire.",
+          "fields": [
+            {
+              "name": "code",
+              "value": "1006",
+              "note": "Reported locally, never on the wire"
+            },
+            {
+              "name": "wasClean",
+              "value": "false"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Reconnect with backoff",
+          "label": "attempt 1: wait random(0, 1 s)",
+          "detail": "The browser API never reconnects by itself; page code does. If every client of a crashed server reconnected at once, the surviving servers would get a stampede. Exponential backoff doubles the maximum wait on each failed attempt, and full jitter picks a random wait below it so clients spread out. Waits are seconds, not drawn to scale.",
+          "fields": [
+            {
+              "name": "wait",
+              "value": "random(0, min(cap, base x 2^(attempt - 1)))",
+              "note": "Full jitter; base 1 s and cap 30 s are example values"
+            },
+            {
+              "name": "attempt 1",
+              "value": "up to 1 s"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "new TCP + TLS 1.3: 2 RTT",
+          "detail": "new WebSocket(...) again. A new connection to the load balancer needs the TCP and TLS handshakes, 2 RTT, collapsed into this step (see TCP and TLS).",
+          "state": {
+            "browser": "CONNECTING"
+          },
+          "fields": [
+            {
+              "name": "setup",
+              "value": "2 RTT = 100 ms"
+            }
+          ],
+          "delay": 4
+        },
+        {
+          "from": "browser",
+          "to": "lb",
+          "kind": "req",
+          "label": "GET /chat, Upgrade: websocket",
+          "detail": "The same upgrade request as before, with a new Sec-WebSocket-Key.",
+          "state": {
+            "lb": "HTTP"
+          },
+          "fields": [
+            {
+              "name": "Sec-WebSocket-Key",
+              "value": "<base64 of 16 new random bytes>"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "label": "no healthy server yet",
+          "detail": "The crashed server is still restarting and has not passed its health checks, so the load balancer has nowhere to send the request."
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "503 Service Unavailable",
+          "detail": "Any status other than 101 fails the WebSocket handshake. The browser fires error and then close (again code 1006) and closes the connection.",
+          "state": {
+            "browser": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "status",
+              "value": "503",
+              "note": "The handshake needs exactly 101"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "attempt 2: wait random(0, 2 s)",
+          "detail": "The maximum wait doubles. A Retry-After header on the 503, when present, is a better hint than the formula.",
+          "fields": [
+            {
+              "name": "attempt 2",
+              "value": "up to 2 s",
+              "note": "Then 4, 8, 16, and 30 s from the sixth attempt on, with these example values"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "new TCP + TLS 1.3: 2 RTT",
+          "detail": "Another new connection, another 2 RTT.",
+          "state": {
+            "browser": "CONNECTING"
+          },
+          "delay": 4
+        },
+        {
+          "from": "browser",
+          "to": "lb",
+          "kind": "req",
+          "label": "GET /chat, Upgrade: websocket",
+          "detail": "The third upgrade request in this story.",
+          "state": {
+            "lb": "HTTP"
+          }
+        },
+        {
+          "from": "lb",
+          "to": "server",
+          "kind": "req",
+          "label": "GET /chat (Upgrade passed on)",
+          "detail": "The server is healthy again (or another one took over), and gets the request.",
+          "state": {
+            "server": "CONNECTING"
+          },
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "label": "101 Switching Protocols",
+          "detail": "Accepted. Any state the old connection had in server memory (subscriptions, unsent messages) is gone, so the client must tell the server where it left off, for example the id of the last message it saw.",
+          "state": {
+            "server": "OPEN",
+            "lb": "TUNNEL"
+          },
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "101 Switching Protocols",
+          "detail": "OPEN again. The client resets its attempt counter so the next failure starts from a short wait.",
+          "state": {
+            "browser": "OPEN"
+          }
+        },
+        {
+          "from": "browser",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Clean close",
+          "label": "Close 1000 (masked)",
+          "detail": "Later the user leaves and the page calls ws.close(1000). A Close frame carries a 2-byte status code and an optional reason. The browser is now CLOSING: it may not send data frames any more.",
+          "state": {
+            "browser": "CLOSING"
+          },
+          "fields": [
+            {
+              "name": "first byte",
+              "value": "0x88",
+              "note": "FIN 1, opcode 0x8 (close)"
+            },
+            {
+              "name": "MASK, payload length",
+              "value": "1, 2"
+            },
+            {
+              "name": "status code",
+              "value": "1000 = 03 e8",
+              "note": "Normal closure, as a 16-bit big-endian number, then masked"
+            },
+            {
+              "name": "other codes",
+              "value": "1001 going away, 1002 protocol error, 1008 policy violation, 1009 message too big, 1011 internal error"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "server",
+          "kind": "req",
+          "label": "Close relayed",
+          "detail": "The server receives the Close and must answer with a Close of its own.",
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "label": "Close 1000 (echo)",
+          "detail": "The server echoes the status code, unmasked. It has now sent and received a Close, so the WebSocket is closed and only the TCP connection remains.",
+          "state": {
+            "server": "CLOSING"
+          },
+          "fields": [
+            {
+              "name": "first byte",
+              "value": "0x88"
+            },
+            {
+              "name": "status code",
+              "value": "1000",
+              "note": "RFC 6455 section 5.5.1: typically the code it received"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "lb",
+          "kind": "res",
+          "label": "TCP FIN",
+          "detail": "RFC 6455 says the server SHOULD close the TCP connection first, so the server, not the client, holds the TIME_WAIT state (see TCP).",
+          "state": {
+            "server": "CLOSED"
+          },
+          "delay": 0
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "Close 1000 (echo)",
+          "detail": "The browser receives the echo; it now waits for the TCP connection to close.",
+          "fields": [
+            {
+              "name": "status code",
+              "value": "1000"
+            }
+          ]
+        },
+        {
+          "from": "lb",
+          "to": "browser",
+          "kind": "res",
+          "label": "TCP FIN",
+          "detail": "The load balancer closes the browser's connection right behind the Close (delay 0). The close event fires with code 1000 and wasClean true, 1 RTT after ws.close().",
+          "state": {
+            "browser": "CLOSED",
+            "lb": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "close event",
+              "value": "code 1000, wasClean true"
+            }
+          ],
+          "delay": 0
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "kind": "tradeoff",
+      "text": "WebSocket vs SSE vs long polling: WebSocket is two-way and suits chat, games and collaborative editing. Server-Sent Events is one-way (server to browser) over a plain HTTP response, works through any HTTP proxy, multiplexes over HTTP/2 and reconnects by itself with Last-Event-ID; it suits feeds and notifications. Long polling (a request the server holds until it has news) works everywhere but costs a request per message. Pick the simplest one that carries the traffic."
+    },
+    {
+      "target": "server",
+      "kind": "scaling",
+      "text": "Backpressure: ws.send() never blocks, it queues, and bufferedAmount is the only signal that the network is not keeping up. On the server a slow client lets its send queue grow without limit, so bound the queue per connection and drop messages or close the slow consumer (for example with 1008, policy violation) rather than run out of memory."
+    },
+    {
+      "target": "lb",
+      "kind": "scaling",
+      "text": "Fan-out and sticky routing: each connection lives on one server for its whole life, so a message for a room must reach every server holding a member of that room, usually through a pub/sub backplane (Redis, NATS, Kafka). Stickiness is not needed for an established WebSocket (it cannot move anyway), only for fallbacks that use several HTTP requests, such as long polling. Balance new connections by least connections, not round robin, because connections last for hours."
+    },
+    {
+      "target": "server",
+      "kind": "security",
+      "text": "Authentication happens at upgrade time: the browser API cannot set custom headers, so either the cookie on the upgrade request is checked, together with Origin (otherwise any site can open a connection with the user's cookies: cross-site WebSocket hijacking), or the client sends a token in its first message and the server closes the connection if it does not arrive. Do not put tokens in the URL query: URLs end up in access logs and proxies."
+    },
+    {
+      "target": "server",
+      "kind": "scaling",
+      "text": "One connection per user at scale: a million connected users is a million open sockets, each with kernel buffers, a file descriptor and application state, plus a million connections on the load balancer. Deploys drop every connection on a server at once, so drain servers slowly (send Close 1001, going away) and rely on jittered backoff to avoid a reconnect storm."
+    },
+    {
+      "target": "lb",
+      "kind": "failure",
+      "text": "Idle timeouts exist on every hop: the load balancer, reverse proxies, corporate proxies and mobile carriers' NAT. A heartbeat below the shortest one keeps the path open and also finds dead peers that never sent a FIN."
+    },
+    {
+      "kind": "note",
+      "text": "RFC 8441 runs WebSocket over HTTP/2: the client sends an extended CONNECT request with :protocol websocket on one stream (after the server sends SETTINGS_ENABLE_CONNECT_PROTOCOL = 1), so many WebSockets and ordinary requests can share one TCP connection. The frames inside are the same as RFC 6455."
+    }
+  ],
+  "questions": [
+    {
+      "id": "accept-key",
+      "topic": "security",
+      "targets": [
+        "browser",
+        "server"
+      ],
+      "q": "What do Sec-WebSocket-Key and Sec-WebSocket-Accept prove, and what do they not prove?",
+      "a": "The server must return base64(SHA-1(key + a fixed GUID)), which shows it understood a WebSocket handshake rather than being a plain HTTP server or cache replaying an old response. It is not authentication or encryption: the key is random but public and anyone can compute the answer. Authentication comes from cookies or tokens, and confidentiality from TLS (wss://)."
+    },
+    {
+      "id": "masking",
+      "topic": "security",
+      "targets": [
+        "browser"
+      ],
+      "q": "Why must clients mask frames but servers must not?",
+      "a": "Masking stops a script in a web page from putting bytes of its choosing on the wire. Without it, a page could send frames that look like HTTP requests and responses to an old proxy that does not understand WebSocket, and poison its cache. The attacker controls the client's payload, not the server's, so only client frames are masked, with a fresh random key per frame; it adds 4 bytes and is not a form of encryption."
+    },
+    {
+      "id": "idle",
+      "topic": "reliability",
+      "targets": [
+        "lb",
+        "server"
+      ],
+      "q": "Users report chat connections dropping after exactly one minute of inactivity. What is happening and how do you fix it?",
+      "a": "Something on the path, most likely the load balancer, has a 60 s idle timeout and closes silent connections, which the browser reports as close code 1006. Send heartbeats (server Pings, or application messages) at an interval well below the shortest timeout on the path, for example every 30 s, or raise the timeout. Heartbeats also let the server detect clients that vanished without a FIN."
+    },
+    {
+      "id": "reconnect",
+      "topic": "reliability",
+      "targets": [
+        "browser"
+      ],
+      "q": "A server holding 50,000 connections crashes. How should the clients reconnect?",
+      "a": "With exponential backoff and jitter: each client waits a random time below a limit that doubles after each failed attempt, up to a cap. Without jitter all 50,000 reconnect in the same instant and can overload the surviving servers or the load balancer. After reconnecting, the client tells the server the last message it saw so it can catch up, since the old server's state is gone."
+    },
+    {
+      "id": "fanout",
+      "topic": "scale",
+      "targets": [
+        "lb",
+        "server"
+      ],
+      "q": "Two users in the same chat room are connected to different servers. How does a message from one reach the other?",
+      "a": "Each server only holds its own connections, so it publishes the message to a backplane (Redis pub/sub, NATS or Kafka) on the room's channel, and every server subscribed to that room pushes it to its local members. The load balancer cannot route by room for an established connection, because each connection is pinned to the server it upgraded on. The backplane's fan-out cost grows with rooms times servers, so large systems shard rooms across servers."
+    },
+    {
+      "id": "ws-vs-sse",
+      "topic": "tradeoffs",
+      "targets": [
+        "server"
+      ],
+      "q": "A dashboard only needs the server to push updates. WebSocket or Server-Sent Events?",
+      "a": "Server-Sent Events: it is one-way, an ordinary HTTP response that works through any proxy and load balancer, shares an HTTP/2 connection with other requests and reconnects automatically with Last-Event-ID. WebSocket needs an upgrade-aware path, its own reconnect logic and heartbeats. Choose WebSocket when the client also sends frequent messages or needs binary, low-latency two-way traffic."
+    }
+  ]
+}
