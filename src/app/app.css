@@ -409,7 +409,10 @@ button.brand:hover { background: var(--surface-2); }
 .hero-grad { background: linear-gradient(90deg, var(--accent), #8b5cf6 45%, #06b6d4); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .hero p { font-size: 17px; color: var(--muted); max-width: 560px; margin: 0 0 24px; line-height: 1.6; }
 .hero-ctas { gap: 10px; }
-.hero p.hero-trust { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 18px 0 0; font-size: 13px; color: var(--faint); }
+.hero p.hero-trust { display: flex; flex-wrap: wrap; gap: 6px 14px; max-width: none; margin: 18px 0 0; font-size: 13px; color: var(--faint); }
+.hero-trust span { white-space: nowrap; }
+@media (min-width: 901px) and (max-width: 1180px) { .hero p.hero-trust { font-size: 12px; gap: 6px 10px; } }
+@media (max-width: 520px) { .hero p.hero-trust { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 6px 16px; } }   /* phones: a tidy 2 by 2 */
 .hero-shot { position: relative; padding: 18px 18px 28px; }
 .hero-shot .hti-screen { box-shadow: 0 24px 60px color-mix(in srgb, var(--accent) 18%, transparent), 0 8px 24px #0f172a1f; }
 .hero-shot-body { display: grid; place-items: center; height: 300px; padding: 16px; }
