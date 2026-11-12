@@ -8,7 +8,7 @@ import { percent, practised, practisedCount, progressOf, type Progress } from '.
 import { storeKv } from './hooks'
 import { openAiSettings } from './useAiConfig'
 import { deckStats } from '../practice/cards'
-import { HowToImport } from './HowTo'
+import { HowToImport, HowToInterview } from './HowTo'
 import { openDrill, today, useDeck } from './useDeck'
 
 /** A miniature of the tier-band canvas: bands, connections and coloured component blocks. */
@@ -110,6 +110,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
       </section>
 
       <HowToImport onImport={onImport} onGenerate={onGenerate} />
+      <HowToInterview onPractice={() => onPractice(first.id)} onConnect={openAiSettings} />
 
       {cards.total > 0 && (
         <section className="home-drill">

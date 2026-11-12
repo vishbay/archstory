@@ -839,14 +839,70 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 
 @media (max-width: 760px) {
   .howto-import { grid-template-columns: 1fr; padding: 16px; }
-  .hti-body-area { height: 300px; padding: 10px; }
+  .hti-body-area { height: 330px; padding: 10px; }
+  .hti-dialog { padding: 11px; }
   .hti-canvas { grid-template-columns: 1fr; justify-items: center; }
   .hti-svg { max-width: 180px; }
   .hti-code { font-size: 10px; }
+  .hti-canvas:has(.hti-review) { grid-template-columns: 110px minmax(0, 1fr); align-items: center; }
+  .hti-score { grid-template-columns: 66px 1fr 10px; gap: 4px; }
   .hti-checks { max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .hti-in, .hti-pop, .hti-type, .hti-press { animation: none; opacity: 1; width: auto; transform: none; }
   .hti-type { border-right: 0; }
   .hti-packet { display: none; }
+}
+
+/* walkthrough mocks: reasoning, review and interview */
+.hti-tabs { display: flex; gap: 10px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 5px; overflow: hidden; white-space: nowrap; }
+.hti-tabs .on { color: var(--accent-text); font-weight: 600; box-shadow: 0 6px 0 -4px var(--accent); }
+.hti-area { padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-size: 11.5px; line-height: 1.45; min-height: 20px; }
+.hti-area:not(.hti-faint) { border-color: var(--accent); min-height: 72px; }
+.hti-faint { color: var(--muted); }
+.hti-lines { display: grid; }
+.hti-review { display: grid; gap: 5px; font-size: 11px; min-width: 0; }
+.hti-score { display: grid; grid-template-columns: 82px 1fr 12px; gap: 6px; align-items: center; }
+.hti-score i { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.hti-score b { display: block; height: 100%; background: var(--accent); transform-origin: left; animation: hti-grow .6s ease both; }
+.hti-score em { font-style: normal; font-weight: 700; }
+.hti-svg rect.hti-flagged { animation: hti-flag .4s ease forwards; }
+@keyframes hti-flag { to { stroke: var(--hard); stroke-width: 2; } }
+.hti-svg .hti-badge { fill: var(--hard); stroke: none; }
+.hti-svg .hti-badge-text { fill: #fff; font-size: 8px; }
+.hti-seg { display: inline-flex; justify-self: start; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-2); font-size: 11.5px; }
+.hti-seg span { padding: 3px 9px; border-radius: 6px; } .hti-seg span:first-child { background: var(--surface); font-weight: 600; }
+.hti-dim { color: var(--muted); }
+.hti-timer { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--accent-text); font-size: 12px; }
+.hti-phases { display: flex; gap: 3px; height: 8px; }
+.hti-phases span { border-radius: 3px; background: var(--surface-3); }
+.hti-phases .done { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.hti-phases .now { background: var(--accent); }
+.hti-checks.wide { max-width: none; }
+.hti-chat { gap: 7px; }
+.hti-msg { margin: 0; padding: 6px 9px; border-radius: 10px; font-size: 11.5px; line-height: 1.45; max-width: 88%; }
+.hti-msg.ai { justify-self: start; background: var(--surface-2); }
+.hti-msg.me { justify-self: end; background: var(--accent-soft); color: var(--accent-text); }
+.hti-msg u { text-decoration-color: var(--accent); }
+.hti-typing { display: inline-flex; gap: 3px; padding: 4px 2px; }
+.hti-typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: blink 1s infinite; }
+.hti-typing i:nth-child(2) { animation-delay: .2s; } .hti-typing i:nth-child(3) { animation-delay: .4s; }
+.hti-speaker { margin-right: 4px; }
+.hti-voice { font-size: 11.5px; min-height: 36px; }
+.hti-voice .hti-type { white-space: normal; animation: hti-type-wrap 3s steps(30) .3s forwards; width: auto; max-height: 0; border-right: 0; }
+@keyframes hti-type-wrap { to { max-height: 60px; } }
+.hti-type.slow { animation-duration: 3s; }
+.hti-mic { border-color: var(--hard); color: var(--hard); animation: hti-ring 1.2s ease-in-out infinite; }
+@keyframes hti-ring { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hard) 20%, transparent); } }
+.hti-wave { display: inline-flex; align-items: center; gap: 2px; height: 18px; }
+.hti-wave i { width: 3px; height: 100%; border-radius: 2px; background: var(--hard); transform-origin: center; animation: hti-wave .9s ease-in-out infinite; }
+.hti-wave i:nth-child(2) { animation-delay: .15s; } .hti-wave i:nth-child(3) { animation-delay: .3s; } .hti-wave i:nth-child(4) { animation-delay: .45s; } .hti-wave i:nth-child(5) { animation-delay: .6s; }
+@keyframes hti-wave { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
+.hti-fb { margin: 0; font-size: 11.5px; line-height: 1.45; }
+.hti-fb > span { display: inline-block; margin-right: 6px; font-weight: 700; }
+.hti-fb .ok { color: var(--easy); } .hti-fb .warn { color: var(--medium); } .hti-accent { color: var(--accent-text); }
+@media (prefers-reduced-motion: reduce) {
+  .hti-score b, .hti-mic, .hti-wave i, .hti-typing i { animation: none; }
+  .hti-svg rect.hti-flagged { animation: none; stroke: var(--hard); }
+  .hti-voice .hti-type { max-height: none; }
 }
