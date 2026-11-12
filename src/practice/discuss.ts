@@ -11,6 +11,8 @@ export interface DiscussOptions {
   answers?: boolean
   /** Add the raw archstory/v1 JSON after the walkthrough, as the exact source of truth. */
   json?: boolean
+  /** A first question to ask in the same message. Without one the AI is told to confirm it has read the design and wait. */
+  question?: string
 }
 
 const kindName = (n: DNode) => KINDS[n.kind]?.label ?? n.kind
@@ -29,9 +31,11 @@ How to answer:
 - Refer to components by their names here and to flow steps by number (for example "Cache miss, step 5"), so I can check your answer against the design.
 - Keep what is in this design apart from what you are adding: label general knowledge as "in general" or "an alternative would be".
 - If the design does not say something (a number, a technology choice, a failure behaviour), say "the design does not specify this" and then give your best reasoning, marked as an assumption. Do not present guesses as part of the design.
-- Be concrete about trade-offs, failure behaviour and scale. Ask me a short clarifying question if mine is ambiguous.`)
+- Be concrete about trade-offs, failure behaviour and scale. Ask me a short clarifying question if mine is ambiguous.
+- This applies to the whole conversation: keep answering about this design in my follow-up questions too.`)
 
-  const head = [d.meta.summary, d.meta.difficulty && `Difficulty: ${d.meta.difficulty}.`].filter(Boolean).join(' ')
+  const flows = d.flows.length ? `${d.flows.length} request flow${d.flows.length === 1 ? '' : 's'} (${d.flows.map(f => f.title).join('; ')})` : 'no request flows'
+  const head = [d.meta.summary, d.meta.difficulty && `Difficulty: ${d.meta.difficulty}.`, `It has ${d.nodes.length} components and ${flows}.`].filter(Boolean).join(' ')
   section(`Design: ${d.meta.title}`, head)
 
   const r = d.requirements
@@ -100,6 +104,7 @@ How to answer:
 
   if (o.json) out.push(`## The same design as JSON (archstory/v1)\nThis is the exact source the walkthrough above was written from.\n\`\`\`json\n${JSON.stringify(d, null, 2)}\n\`\`\``)
 
-  out.push('## My question\n')
+  const q = o.question?.trim()
+  out.push(q ? `## My question\n${q}` : `## What to do now\nReply with one short line: confirm that you have read the design, naming it and saying how many components and request flows it has. Do not summarise the design and do not suggest questions. I will send my questions in my next messages.`)
   return out.join('\n\n')
 }

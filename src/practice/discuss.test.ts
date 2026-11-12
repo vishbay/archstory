@@ -12,7 +12,24 @@ describe('discussPrompt', () => {
     expect(p).toContain('THIS design')
     expect(p).toContain('the design does not specify this')
     expect(p).toContain('by number')
-    expect(p.trimEnd().endsWith('## My question')).toBe(true)
+    expect(p).toContain('whole conversation')
+  })
+
+  it('names every flow up front, so the AI can confirm it saw them all', () => {
+    const p = discussPrompt(saas)
+    expect(p).toContain(`It has ${saas.nodes.length} components and ${saas.flows.length} request flows (${saas.flows.map(f => f.title).join('; ')}).`)
+    for (const d of LIBRARY) for (const f of d.flows) expect(discussPrompt(d), `${d.id}: ${f.title}`).toContain(`Request flow: ${f.title}`)
+  })
+
+  it('tells the AI to confirm and wait when no question is given, and asks it when one is', () => {
+    const wait = discussPrompt(saas)
+    expect(wait.trimEnd().split('\n').at(-1)).toContain('I will send my questions in my next messages')
+    expect(wait).toContain('do not suggest questions')
+    expect(wait).not.toContain('## My question')
+    const asked = discussPrompt(saas, { question: '  How does a tenant move to its own database?  ' })
+    expect(asked.trimEnd().endsWith('## My question\nHow does a tenant move to its own database?')).toBe(true)
+    expect(asked).not.toContain('What to do now')
+    expect(discussPrompt(saas, { question: '   ' })).toContain('What to do now')
   })
 
   it('carries every component, connection, flow step and note of every library design', () => {

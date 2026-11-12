@@ -1055,3 +1055,4 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 .side-pane .react-flow__panel.top { margin-top: 40px; }
 
 .side-actions .ask-ai { width: 100%; height: 34px; font-size: 12.5px; }
+.dialog textarea.ask-first { width: 100%; height: auto; min-height: 0; margin-top: 4px; resize: vertical; }

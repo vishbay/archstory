@@ -9,18 +9,22 @@ export function DiscussDialog({ design, flowId, onClose }: { design: Design; flo
   const preview = useRef<HTMLTextAreaElement>(null)
   const [answers, setAnswers] = useState(false)
   const [json, setJson] = useState(false)
+  const [question, setQuestion] = useState('')
   const [copied, setCopied] = useState<boolean | null>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
-  const prompt = useMemo(() => discussPrompt(design, { flowId, answers, json }), [design, flowId, answers, json])
+  const prompt = useMemo(() => discussPrompt(design, { flowId, answers, json, question }), [design, flowId, answers, json, question])
   const copy = async () => { const ok = await copyText(prompt); if (!ok) preview.current?.select(); setCopied(ok) }
 
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} aria-label="Ask AI about this design">
       <h3>Ask AI about {design.meta.title}</h3>
       <p className="muted small">
-        Copies the design as a readable walkthrough, with rules that keep the answers about this design and not a typical one.
-        Paste it into ChatGPT, Claude, Gemini or any assistant, then type your question under "My question" at the end.
+        Copies the whole design (all {design.flows.length} request flow{design.flows.length === 1 ? '' : 's'}, every component and note) as a readable walkthrough, with rules that keep the answers about this design and not a typical one.
+        Paste it into ChatGPT, Claude, Gemini or any assistant. It will confirm it has read the design and wait for your questions, which you send as normal messages.
       </p>
+      <label className="field">Your first question <span className="muted small">(optional: include it to get an answer straight away)</span>
+        <textarea rows={2} className="ask-first" value={question} placeholder="For example: why does the rate limit sit at the gateway and not in the app service?" onChange={e => { setQuestion(e.target.value); setCopied(null) }} />
+      </label>
       <label className="check-row"><input type="checkbox" checked={answers} onChange={e => { setAnswers(e.target.checked); setCopied(null) }} /> Include the model answers to the follow-up questions <span className="muted small">(off keeps them as spoilers-free topics)</span></label>
       <label className="check-row"><input type="checkbox" checked={json} onChange={e => { setJson(e.target.checked); setCopied(null) }} /> Also include the exact JSON <span className="muted small">(longer; the walkthrough already has everything)</span></label>
       <details className="prompt-preview">
