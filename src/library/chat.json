@@ -102,7 +102,7 @@
         "id": "delivery-latency",
         "name": "Delivery speed",
         "kind": "latency",
-        "sli": "Messages delivered to an online recipient within the threshold, divided by all such messages, from send to delivery acknowledgement",
+        "sli": "Messages delivered to an online recipient within the threshold, divided by all such messages, from the Message Service receiving the send to the recipient's delivery receipt",
         "target": 99,
         "threshold": "< 500 ms"
       },
@@ -110,14 +110,21 @@
         "id": "durability",
         "name": "No message lost",
         "kind": "durability",
-        "sli": "Acknowledged messages that can still be read, divided by acknowledged messages",
+        "sli": "Acknowledged messages that can still be read, divided by acknowledged messages, measured with canary conversations that send a message every minute from each zone and read it back later, plus repair checks on the store",
         "target": 99.9999
       },
       {
         "id": "connect-availability",
         "name": "Connection availability",
         "kind": "availability",
-        "sli": "Connection attempts that succeed, divided by all attempts, at the load balancer",
+        "sli": "Connection attempts that complete the WebSocket upgrade, divided by all attempts, measured at the gateways (the NLB only sees TCP)",
+        "target": 99.95
+      },
+      {
+        "id": "send-availability",
+        "name": "Sending works",
+        "kind": "availability",
+        "sli": "Sends acknowledged with ✓, divided by all sends, measured at the Message Service",
         "target": 99.95
       }
     ],
@@ -125,25 +132,64 @@
       {
         "id": "delivery-slow",
         "severity": "page",
-        "when": "p99 delivery latency above 500 ms for 10 minutes",
+        "when": "Deliveries over 500 ms burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Chat that is not instant feels broken.",
         "target": "chat_svc",
         "slo": "delivery-latency"
       },
       {
-        "id": "write-quorum",
+        "id": "delivery-slow-slow",
+        "severity": "ticket",
+        "when": "Deliveries over 500 ms burning the latency budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "Gradual slowdown, often the registry or the store getting hot.",
+        "target": "chat_svc",
+        "slo": "delivery-latency"
+      },
+      {
+        "id": "send-burn",
         "severity": "page",
-        "when": "Message store cannot reach write quorum",
-        "why": "Writes are failing, and acknowledged messages are at risk.",
+        "when": "Send failures burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "People cannot send; nothing acknowledged is lost, but nothing new gets through.",
+        "target": "chat_svc",
+        "slo": "send-availability"
+      },
+      {
+        "id": "send-burn-slow",
+        "severity": "ticket",
+        "when": "Send failures burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak of failed sends, often one store node or one zone.",
+        "target": "chat_svc",
+        "slo": "send-availability"
+      },
+      {
+        "id": "canary-lost",
+        "severity": "page",
+        "when": "Any canary message acknowledged but not readable afterwards",
+        "why": "The one promise the product cannot break: an acknowledged message is gone.",
         "target": "msg_db",
         "slo": "durability"
+      },
+      {
+        "id": "write-quorum",
+        "severity": "ticket",
+        "when": "Store write timeouts or unavailable errors at QUORUM above 0.1% for 5 minutes, or any store node down for 15 minutes",
+        "why": "With one replica down every write still reaches quorum, but there is no margin left; a second failure in the same replica set stops sends.",
+        "target": "msg_db"
       },
       {
         "id": "connect-burn",
         "severity": "page",
         "when": "Connection failures burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Users cannot get online.",
-        "target": "lb",
+        "target": "ws",
+        "slo": "connect-availability"
+      },
+      {
+        "id": "connect-burn-slow",
+        "severity": "ticket",
+        "when": "Connection failures burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "Some users or networks keep failing to connect; often a bad gateway node or certificate.",
+        "target": "ws",
         "slo": "connect-availability"
       },
       {
@@ -156,8 +202,8 @@
       {
         "id": "push-age",
         "severity": "ticket",
-        "when": "Oldest push queue message above 60 seconds",
-        "why": "Offline users learn about messages late.",
+        "when": "Oldest push queue message above 60 seconds, or any message in the dead-letter queue",
+        "why": "Offline users learn about messages late, or not at all.",
         "target": "push_q"
       },
       {
@@ -166,6 +212,13 @@
         "when": "Registered sessions differ from open connections by more than 2%",
         "why": "Messages get routed to gateways that no longer hold the user.",
         "target": "sessions"
+      },
+      {
+        "id": "tls-expiry",
+        "severity": "ticket",
+        "when": "Gateway TLS certificate or push provider credentials expiring within 14 days",
+        "why": "An expired certificate disconnects every user at once; an expired APNs key stops all iPhone pushes.",
+        "target": "ws"
       }
     ],
     "signals": [
@@ -192,24 +245,44 @@
         "name": "Upload failures",
         "metric": "object_errors_total{code}",
         "why": "Shows whether signed URLs or storage are the problem."
+      },
+      {
+        "target": "chat_svc",
+        "name": "Messages sent and delivered per second",
+        "metric": "messages_sent_total, messages_delivered_total",
+        "why": "Business view: the gap between sent and delivered is how much is waiting for offline users."
+      },
+      {
+        "target": "push_worker",
+        "name": "Provider responses by code",
+        "metric": "push_responses_total{provider,code}",
+        "why": "410 means a stale token; 429 means APNs or FCM is throttling us."
       }
     ],
     "debug": [
       {
         "symptom": "Messages are delayed",
         "steps": [
-          "Break delivery latency down by step: store write, session lookup or gateway hop.",
+          "Open a slow delivery's trace: is the time in the store write, the session lookup or the gateway hop?",
           "Check message store write latency and quorum errors.",
-          "Check the session registry hit rate: a miss sends the message down the offline path.",
+          "Check the session registry: a missing entry sends the message down the offline path, a stale one to the wrong gateway.",
           "Check gateway CPU and connection counts."
         ]
       },
       {
         "symptom": "Offline users get no push",
         "steps": [
-          "Check the push queue age and worker errors.",
-          "Check provider responses: unregistered tokens (410) should be removed.",
-          "Check provider throttling."
+          "Check the push queue age, the dead-letter queue and worker errors.",
+          "Check provider responses: many unregistered tokens (410) mean stale device rows that need cleaning.",
+          "Check provider throttling (429) and that the APNs key and FCM credentials are still valid."
+        ]
+      },
+      {
+        "symptom": "Many users disconnected at once",
+        "steps": [
+          "Check disconnects by reason: a deploy, one gateway node, or everything?",
+          "If one node, check whether it was drained or crashed; its users should reconnect elsewhere with backoff.",
+          "If everything, check the TLS certificate and the NLB, then watch the reconnect rate so the stampede does not overload the registry."
         ]
       }
     ]
@@ -229,7 +302,7 @@
       "id": "lb",
       "label": "Network Load Balancer",
       "kind": "network_load_balancer",
-      "description": "Layer 4: passes long-lived TCP connections straight to the gateways",
+      "description": "Layer 4: passes long-lived TCP connections straight to the gateways; network DDoS protection, since an L4 balancer cannot carry a WAF",
       "cloud": {
         "aws": "NLB",
         "gcp": "External passthrough Network Load Balancer"
@@ -239,27 +312,29 @@
       "id": "ws",
       "label": "Chat Gateway",
       "kind": "websocket_gateway",
-      "description": "Terminates WebSockets; each node holds ~1M connections",
+      "description": "Terminates TLS and WebSockets; each node holds ~1M connections, so ~200 nodes plus headroom",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "GKE"
-      }
+      },
+      "replicas": 240
     },
     {
       "id": "chat_svc",
       "label": "Message Service",
       "kind": "service",
-      "description": "Persists, routes and syncs messages",
+      "description": "Persists, routes and syncs messages (~2.8M operations/s at peak); gateways reach it by gRPC with client-side balancing across healthy instances",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
-      }
+      },
+      "replicas": 300
     },
     {
       "id": "sessions",
       "label": "Session Registry",
       "kind": "cache",
-      "description": "user → gateway node holding their connection, with a heartbeat TTL",
+      "description": "user → { device → gateway node }, refreshed by heartbeats with a short TTL",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -271,7 +346,7 @@
       "kind": "nosql_db",
       "subnet": "data",
       "ha": "quorum",
-      "description": "Cassandra-style: partition = conversation, clustering = message id",
+      "description": "Cassandra-style: partition = conversation, clustering = message id; also device rows with push tokens",
       "cloud": {
         "aws": "Cassandra on EC2",
         "gcp": "Cassandra on GKE"
@@ -284,7 +359,8 @@
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
-      }
+      },
+      "description": "Push jobs; dead-letter queue after 5 failed attempts"
     },
     {
       "id": "push_worker",
@@ -293,7 +369,8 @@
       "cloud": {
         "aws": "Lambda",
         "gcp": "Cloud Run"
-      }
+      },
+      "description": "Calls APNs / FCM over the internet through the NAT gateways"
     },
     {
       "id": "apns",
@@ -305,7 +382,7 @@
       "id": "dns",
       "label": "DNS",
       "kind": "dns",
-      "description": "Geo / latency routed: sends each client to the nearest region's load balancer",
+      "description": "Answers with the region's NLB; short TTL so traffic can move",
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
@@ -315,10 +392,22 @@
       "id": "cdn",
       "label": "CDN (media)",
       "kind": "cdn",
-      "description": "Caches encrypted media near recipients; chat traffic never goes through it",
+      "description": "Caches encrypted media near recipients, with a WAF attached; chat traffic never goes through it",
       "cloud": {
         "aws": "CloudFront",
         "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "waf",
+      "label": "WAF (media)",
+      "kind": "waf",
+      "tier": "entry",
+      "subnet": "none",
+      "description": "Rule set attached to the media CDN: managed rules, per-IP rate rules, bot control",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
       }
     },
     {
@@ -398,6 +487,10 @@
     {
       "from": "cdn",
       "to": "media"
+    },
+    {
+      "from": "cdn",
+      "to": "waf"
     }
   ],
   "flows": [
@@ -412,7 +505,7 @@
           "kind": "req",
           "phase": "DNS",
           "label": "resolve chat.example.com",
-          "detail": "Clients look the service up by name, and DNS answers with the nearest region's load balancer (geo or latency routing). A short TTL (about 60 s) lets traffic move away from a failing region. This happens once per connect, not per message.",
+          "detail": "Clients look the service up by name. A short TTL (about 60 s) lets traffic move to new load balancer addresses quickly. This happens once per connect, not per message.",
           "payload": "chat.example.com.  IN A"
         },
         {
@@ -420,7 +513,7 @@
           "to": "alice",
           "kind": "res",
           "phase": "DNS",
-          "label": "NLB address (nearest region)",
+          "label": "NLB address",
           "detail": "Apps also ship a fallback hostname and a list of IPs, because DNS can be slow or blocked on some networks.",
           "payload": "chat.example.com.  60  IN A  203.0.113.10"
         },
@@ -446,17 +539,17 @@
           "to": "chat_svc",
           "kind": "req",
           "phase": "Register session",
-          "label": "authenticate + register",
-          "detail": "The gateway checks the token, then tells the message service this user is online here."
+          "label": "authenticate + register phone-1",
+          "detail": "The gateway checks the token, then tells the Message Service this device is online here. The call goes by gRPC to any healthy Message Service instance; gateways balance per request on the client side, since a layer-4 balancer would pin long-lived HTTP/2 connections to one instance."
         },
         {
           "from": "chat_svc",
           "to": "sessions",
           "kind": "req",
           "phase": "Register session",
-          "label": "SET session:alice gateway-17 EX 60",
-          "detail": "This entry is how every later message finds Alice. The gateway refreshes it with a heartbeat every 30 s, so if the gateway dies the entry expires within a minute and she is treated as offline.",
-          "payload": "SET session:alice gateway-17 EX 60"
+          "label": "HSET session:alice phone-1",
+          "detail": "This entry is how every later message finds each of Alice's devices. The gateway sends a heartbeat every 30 s, batched per gateway, that the Message Service turns into a refresh; if the gateway dies the key expires within a minute and she is treated as offline. Each field carries its own expiry time, so a dead laptop entry is ignored even while the phone keeps the key alive.",
+          "payload": "HSET session:alice phone-1 \"gateway-17 exp=1762600060\"\nEXPIRE session:alice 60"
         },
         {
           "from": "sessions",
@@ -516,16 +609,18 @@
           "to": "chat_svc",
           "kind": "req",
           "phase": "Send",
-          "label": "send"
+          "label": "send",
+          "detail": "The gateway adds a trace id that follows the message through storage, routing and delivery, so one slow delivery can be traced end to end.",
+          "payload": "send { conv_id: c_alice_bob, client_msg_id: a1-0042, device: phone-1 }\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
           "from": "chat_svc",
           "to": "msg_db",
           "kind": "req",
           "phase": "Persist",
-          "label": "INSERT (QUORUM)",
-          "detail": "Write before delivering: if anything crashes after this, the message still exists. A quorum write survives one replica being down.",
-          "payload": "INSERT INTO messages (conv_id, msg_id, sender, body)\nVALUES ('c_alice_bob', 0x18f3…, 'alice', <ciphertext>)\nIF NOT EXISTS;  -- dedupe on client_msg_id"
+          "label": "dedupe + INSERT (QUORUM)",
+          "detail": "Write before delivering: if anything crashes after this, the message still exists. A quorum write survives one replica being down. A resend with the same client_msg_id finds the first row and gets the same msg_id back, so it never duplicates; the read-then-write leaves a tiny race if two copies arrive at once, which the recipient's display dedupe covers.",
+          "payload": "SELECT msg_id FROM msg_by_client\nWHERE conv_id = 'c_alice_bob' AND client_msg_id = 'a1-0042';   -- empty: first attempt\nBEGIN BATCH   -- QUORUM\n  INSERT INTO messages (conv_id, msg_id, client_msg_id, sender, body)\n  VALUES ('c_alice_bob', 0x18f3…, 'a1-0042', 'alice', <ciphertext>);\n  INSERT INTO msg_by_client (conv_id, client_msg_id, msg_id)\n  VALUES ('c_alice_bob', 'a1-0042', 0x18f3…);\nAPPLY BATCH;"
         },
         {
           "from": "msg_db",
@@ -533,14 +628,15 @@
           "kind": "res",
           "phase": "Persist",
           "label": "OK, msg_id",
-          "detail": "The time-sortable msg_id fixes the order within the conversation for every reader."
+          "detail": "The server assigns the time-sortable msg_id, and every reader reads the same partition sorted by it, so everyone sees the same order."
         },
         {
           "from": "chat_svc",
           "to": "ws",
           "kind": "res",
           "phase": "Acknowledge sender",
-          "label": "ack ✓"
+          "label": "ack ✓",
+          "detail": "Internal RPC straight to the node that holds Bob's socket, by its address, not through any balancer. No broadcast to all gateways. If the node answers that Bob is no longer there (he reconnected elsewhere), the service falls back to the offline path."
         },
         {
           "from": "ws",
@@ -562,15 +658,15 @@
           "to": "sessions",
           "kind": "req",
           "phase": "Find recipient",
-          "label": "GET session:bob"
+          "label": "HGETALL session:bob"
         },
         {
           "from": "sessions",
           "to": "chat_svc",
           "kind": "res",
           "phase": "Find recipient",
-          "label": "gateway-17",
-          "detail": "Bob is online; his connection lives on gateway node 17."
+          "label": "phone-1 on gateway-17",
+          "detail": "Bob's phone is online on gateway node 17. Each online device is delivered to the same way, and Alice's own other devices get a copy too; devices that are offline catch up on sync."
         },
         {
           "from": "chat_svc",
@@ -578,7 +674,7 @@
           "kind": "req",
           "phase": "Deliver",
           "label": "deliver via gateway-17",
-          "detail": "Internal RPC straight to the node that holds Bob's socket. No broadcast to all gateways."
+          "detail": "Internal RPC straight to the node that holds Bob's socket, by its address, not through any balancer. No broadcast to all gateways. If the node answers that Bob is no longer there (he reconnected elsewhere), the service falls back to the offline path."
         },
         {
           "from": "ws",
@@ -592,7 +688,8 @@
           "to": "bob",
           "kind": "req",
           "phase": "Deliver",
-          "label": "new message"
+          "label": "new message",
+          "detail": "Bob's app places the message by its msg_id, so two messages arriving close together still show in stored order."
         },
         {
           "from": "bob",
@@ -614,7 +711,7 @@
           "kind": "req",
           "phase": "Receipt",
           "label": "delivered(msg_id)",
-          "detail": "Relayed to Alice the same way, turning ✓ into ✓✓."
+          "detail": "Stored as a status on the message so Alice's other devices and a later sync see it, and relayed to Alice the same way, turning ✓ into ✓✓."
         }
       ]
     },
@@ -664,7 +761,7 @@
           "to": "sessions",
           "kind": "req",
           "phase": "Recipient is offline",
-          "label": "GET session:bob"
+          "label": "HGETALL session:bob"
         },
         {
           "from": "sessions",
@@ -672,7 +769,23 @@
           "kind": "res",
           "phase": "Recipient is offline",
           "label": "(none)",
-          "detail": "No heartbeat for 60 s, so the session entry expired: Bob is offline."
+          "detail": "No heartbeat for 60 s, so the session key expired: none of Bob's devices is online."
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "phase": "Recipient is offline",
+          "label": "SELECT push tokens",
+          "detail": "Bob's devices and their push tokens are rows in the message store, written when each device registers.",
+          "payload": "SELECT device_id, push_token FROM devices WHERE user_id = 'bob';"
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Recipient is offline",
+          "label": "2 tokens"
         },
         {
           "from": "chat_svc",
@@ -680,7 +793,8 @@
           "kind": "async",
           "phase": "Notify & acknowledge",
           "label": "enqueue push",
-          "detail": "Push providers are slow and rate-limited; a queue keeps them off the send path."
+          "detail": "Push providers are slow and rate-limited; a queue keeps them off the send path. A job that keeps failing moves to the dead-letter queue.",
+          "payload": "{ \"user\": \"bob\", \"conv_id\": \"c_alice_bob\", \"tokens\": [\"apns:7c1e…\", \"fcm:d93a…\"], \"collapse_id\": \"c_alice_bob\" }"
         },
         {
           "from": "chat_svc",
@@ -716,7 +830,7 @@
           "kind": "async",
           "phase": "Push notification",
           "label": "send notification",
-          "detail": "With end-to-end encryption the push carries no message text, just \"New message\" and a conversation id."
+          "detail": "With end-to-end encryption the push carries no message text, just \"New message\" and a conversation id. The collapse id makes ten missed messages one notification. Calls leave the VPC through the NAT gateways."
         },
         {
           "from": "apns",
@@ -746,7 +860,7 @@
           "kind": "req",
           "phase": "Reconnect",
           "label": "sync since cursor",
-          "detail": "The gateway also registers Bob in the session registry again."
+          "detail": "The Message Service also registers Bob's device in the session registry again (not shown)."
         },
         {
           "from": "chat_svc",
@@ -962,6 +1076,21 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Download",
+          "label": "inspect",
+          "detail": "The WAF on the media CDN applies managed rules and per-IP rate rules, so nobody can use the CDN to pull files in bulk. The files are ciphertext anyway; this protects cost and capacity."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Download",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
           "to": "cdn",
           "kind": "local",
           "phase": "Download",
@@ -1015,7 +1144,7 @@
     {
       "target": "sessions",
       "kind": "failure",
-      "text": "If a gateway node dies, its clients reconnect to another node and re-register. Messages sent in between wait in the store and arrive on sync."
+      "text": "If a gateway node dies, its clients reconnect to another node and re-register. Messages sent in between wait in the store and arrive on sync. Sizing: ~200M sessions take only ~20 GB, but refreshing them every 30 s is ~7M writes/s, so the registry is a sharded cluster with dozens of shards, each with a replica in another zone; a longer heartbeat halves the load at the cost of slower offline detection."
     },
     {
       "target": "ws",
@@ -1024,7 +1153,7 @@
     },
     {
       "kind": "security",
-      "text": "End-to-end encryption (Signal protocol): the server stores and routes ciphertext only and never sees message content."
+      "text": "End-to-end encryption (Signal protocol): the server stores and routes ciphertext only and never sees message content. Gateways are the only public instances; the Message Service, registry and store sit in private subnets, the Message Service reaches media storage through a VPC endpoint, and the chat path relies on network DDoS protection at the NLB because a layer-4 balancer cannot carry a WAF."
     },
     {
       "kind": "tradeoff",
@@ -1033,24 +1162,29 @@
     {
       "target": "dns",
       "kind": "scaling",
-      "text": "Geo or latency routing keeps each user in the nearest region and lets you shift traffic away from a failing one. TTLs are short (about 60 s) for that reason; clients also keep fallback hostnames and IPs."
+      "text": "This design shows one region. DNS TTLs are short (about 60 s) so load balancer changes take effect quickly, and clients keep fallback hostnames and IPs. Serving users from several regions needs a home region per user or conversation and cross-region routing of messages, a larger extension than adding DNS geo routing."
     },
     {
       "target": "media",
       "kind": "tradeoff",
-      "text": "Sending media through the chat servers would tie up gateway connections and bandwidth. Direct-to-storage upload with signed URLs scales independently and makes uploads resumable."
+      "text": "Sending media through the chat servers would tie up gateway connections and bandwidth. Direct-to-storage upload with signed URLs scales independently, and multipart upload makes large files (up to ~100 MB) resumable."
     },
     {
       "target": "cdn",
       "kind": "scaling",
       "text": "Chat traffic is unique, long-lived connections, so a CDN cannot help there. It only serves media downloads, where one group photo is fetched by many recipients."
+    },
+    {
+      "target": "msg_db",
+      "kind": "tradeoff",
+      "text": "Order comes from the server-assigned time-sortable msg_id: everyone sees the same order because everyone reads the same sorted partition, but two messages sent within clock skew of each other may not be in true send order. A strict per-conversation sequence needs a single writer per conversation (route each conversation to one owner) or a lightweight transaction per message, which costs more at 460k messages/s."
     }
   ],
   "questions": [
     {
       "id": "ordering",
       "q": "How do you keep messages in the right order within a conversation?",
-      "a": "Assign a per-conversation sequence number on the server when the message is stored, not the client's clock. Clients display by that sequence and can detect gaps. Ordering across different conversations does not matter, which is what lets you partition the message store by conversation.",
+      "a": "Assign the order on the server when the message is stored, here a time-sortable msg_id, never the sender's clock, and have clients place messages by it. Everyone reads the same partition sorted by that id, so everyone sees the same order. A strict gap-free sequence per conversation would need one owner per conversation or a lightweight transaction, and ordering across conversations does not matter, which is what lets the store partition by conversation.",
       "topic": "consistency",
       "targets": [
         "chat_svc",
@@ -1060,7 +1194,7 @@
     {
       "id": "offline",
       "q": "Bob is offline when Alice sends a message. How does he get it?",
-      "a": "The message is stored first, so it is never lost. Because Bob has no live connection in the session registry, a push notification job goes on the queue and the workers send it through APNs or FCM. When Bob opens the app it syncs everything after the last sequence number it saw.",
+      "a": "The message is stored first, so it is never lost. Because none of Bob's devices has a live entry in the session registry, a push job with his device tokens goes on the queue and the workers send it through APNs or FCM. When Bob opens the app it syncs everything after the last msg_id it saw in each conversation.",
       "topic": "reliability",
       "targets": [
         "chat_svc",
@@ -1072,7 +1206,7 @@
     {
       "id": "delivery",
       "q": "How do you make sure a message is delivered exactly once even with retries?",
-      "a": "Delivery is at least once and display is exactly once. The client attaches a unique message id, the server stores it idempotently so a retry does not create a duplicate, and the recipient ignores ids it has already shown. Acks for sent, delivered and read are separate events on the same id.",
+      "a": "Delivery is at least once and display is exactly once. The client attaches a unique message id, the server keeps a lookup from that id to the stored message so a retry returns the same message instead of creating a duplicate, and the recipient ignores ids it has already shown. Acks for sent, delivered and read are separate events on the same id.",
       "topic": "reliability",
       "targets": [
         "alice",
@@ -1083,7 +1217,7 @@
     {
       "id": "routing",
       "q": "With millions of connections across many gateways, how does a message find the recipient's connection?",
-      "a": "The session registry maps each online user to the gateway holding their connection. The message service looks up Bob's gateway and forwards to it, or publishes on a channel that gateway subscribes to. Entries are refreshed by heartbeats and expire so a dead gateway does not keep stale routes.",
+      "a": "The session registry maps each online user's devices to the gateways holding their connections. The message service looks up Bob's gateway and calls that node directly. Entries are refreshed by heartbeats and expire so a dead gateway does not keep stale routes, and a node that no longer holds the user says so, which sends the message down the offline path.",
       "topic": "scale",
       "targets": [
         "ws",

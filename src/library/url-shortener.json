@@ -124,12 +124,36 @@
         "slo": "redirect-availability"
       },
       {
+        "id": "redirect-burn-slow",
+        "severity": "ticket",
+        "when": "Redirect errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak of failed redirects that would use up the month's 4 minutes of budget before anyone is paged.",
+        "target": "lb",
+        "slo": "redirect-availability"
+      },
+      {
         "id": "redirect-slow",
         "severity": "page",
-        "when": "p99 redirect latency above 100 ms for 10 minutes",
+        "when": "Redirects over 100 ms burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Redirects are the whole product; slow ones feel broken.",
         "target": "lb",
         "slo": "redirect-latency"
+      },
+      {
+        "id": "redirect-slow-slow",
+        "severity": "ticket",
+        "when": "Redirects over 100 ms burning the latency budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "Gradual slowdown, usually a falling hit ratio or a growing replica, caught before users notice.",
+        "target": "lb",
+        "slo": "redirect-latency"
+      },
+      {
+        "id": "create-burn",
+        "severity": "page",
+        "when": "Create errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Nobody can make new links; integrations that create links in bulk fail.",
+        "target": "api",
+        "slo": "create-success"
       },
       {
         "id": "cache-hit",
@@ -152,6 +176,13 @@
         "why": "If keys run out, every create fails. Refill automatically, and ticket it if the pool keeps falling.",
         "target": "kgs",
         "slo": "create-success"
+      },
+      {
+        "id": "clicks-late",
+        "severity": "ticket",
+        "when": "Oldest click event in the queue older than 15 minutes, or any message in the dead-letter queue",
+        "why": "Click counts are falling behind or being dropped. Redirects are fine, so it waits for working hours.",
+        "target": "queue"
       }
     ],
     "signals": [
@@ -172,6 +203,24 @@
         "name": "Replication lag",
         "metric": "db_replication_lag_seconds",
         "why": "Replicas are written asynchronously: lag is the price of cheap reads."
+      },
+      {
+        "target": "db",
+        "name": "Duplicate-code insert errors",
+        "metric": "link_insert_unique_violations_total",
+        "why": "Should always be zero: a non-zero count means KGS issued a code twice, the one thing the design promises never happens."
+      },
+      {
+        "target": "queue",
+        "name": "Oldest click event age",
+        "metric": "queue_oldest_message_age_seconds",
+        "why": "How late the click counts are; the queue absorbs analytics outages, so this is where they show."
+      },
+      {
+        "target": "api",
+        "name": "Links created and clicks per minute",
+        "metric": "links_created_total, redirects_total",
+        "why": "Business view: a sudden drop in clicks with healthy servers means a DNS, CDN or WAF problem in front of them."
       }
     ],
     "debug": [
@@ -191,6 +240,14 @@
           "Check the key pool: an empty pool means the key generator cannot issue codes.",
           "Look at primary database errors and connection saturation.",
           "Check recent deploys of the API and the key generator."
+        ]
+      },
+      {
+        "symptom": "Click counts are missing or late",
+        "steps": [
+          "Check the oldest message age on the queue: a growing age means the workers are slow or failing.",
+          "Look at the dead-letter queue for batches that keep failing, and at the worker's errors writing to the analytics store.",
+          "Fix the cause, then send dead-lettered batches back; event ids make the replay safe."
         ]
       }
     ]
@@ -216,7 +273,7 @@
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
-      "description": "Edge cache + TLS",
+      "description": "Edge cache + TLS, with a WAF attached (AWS WAF / Cloud Armor)",
       "cloud": {
         "aws": "CloudFront",
         "gcp": "Cloud CDN"
@@ -226,7 +283,7 @@
       "id": "lb",
       "label": "Load Balancer (L7)",
       "kind": "load_balancer",
-      "description": "L7 load balancer",
+      "description": "Public L7 origin; accepts traffic only from the CDN",
       "cloud": {
         "aws": "ALB",
         "gcp": "External Application Load Balancer"
@@ -236,8 +293,8 @@
       "id": "api",
       "label": "API Service",
       "kind": "service",
-      "description": "Stateless API",
-      "replicas": 3,
+      "description": "Stateless API, 2 per zone; ~6 needed at peak",
+      "replicas": 6,
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -247,7 +304,7 @@
       "id": "kgs",
       "label": "Key Gen Service",
       "kind": "key_gen",
-      "description": "Pre-generated keys",
+      "description": "Hands out batches of pre-generated random codes; records each batch in the database",
       "cloud": {
         "aws": "ECS service",
         "gcp": "Cloud Run service"
@@ -257,7 +314,7 @@
       "id": "cache",
       "label": "Cache",
       "kind": "cache",
-      "description": "Hot links",
+      "description": "Hot links, ~35 GB",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -288,7 +345,7 @@
       "id": "queue",
       "label": "Event Queue",
       "kind": "queue",
-      "description": "Click events",
+      "description": "Click events; dead-letter queue after 5 failed deliveries",
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
@@ -312,7 +369,8 @@
       "cloud": {
         "aws": "Redshift",
         "gcp": "BigQuery"
-      }
+      },
+      "subnet": "data"
     }
   ],
   "groups": [],
@@ -366,6 +424,10 @@
     {
       "from": "client",
       "to": "dns"
+    },
+    {
+      "from": "kgs",
+      "to": "db"
     }
   ],
   "flows": [
@@ -404,8 +466,8 @@
           "to": "cdn",
           "kind": "local",
           "phase": "Request in",
-          "label": "POST: never cached",
-          "detail": "Writes bypass the cache entirely. The CDN still adds value: TLS close to the user and DDoS absorption."
+          "label": "WAF check; POST never cached",
+          "detail": "The WAF attached to the CDN checks the request first: managed rule sets, bot control, and a per-IP rate rule much stricter on POST /api/links than on redirects, since link creation is what spammers abuse. Writes then bypass the cache entirely; the CDN still terminates TLS close to the user and absorbs DDoS."
         },
         {
           "from": "cdn",
@@ -421,24 +483,25 @@
           "kind": "req",
           "phase": "Request in",
           "label": "route → api-1",
-          "detail": "Any instance can take the request. Stateless servers are what let us scale out horizontally."
+          "detail": "Any instance can take the request. Stateless servers are what let us scale out horizontally. The load balancer starts a W3C trace context that the API passes on to KGS, the database and the cache.",
+          "payload": "POST /api/links\nX-Forwarded-For: 203.0.113.7\ntraceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
         },
         {
           "from": "api",
           "to": "kgs",
           "kind": "req",
           "phase": "Generate key",
-          "label": "next key",
-          "detail": "Rather than hash the URL and check for collisions, take a pre-generated unique key. KGS hands each API instance a batch of keys, so this is usually an in-memory pop."
+          "label": "next batch (local batch empty)",
+          "detail": "Rather than hash the URL and check for collisions, take a pre-generated unique code. Each API instance holds a batch of 1,000 codes in memory, so most creates just pop one locally; this call happens once per batch."
         },
         {
           "from": "kgs",
           "to": "api",
           "kind": "res",
           "phase": "Generate key",
-          "label": "\"aZ3k9Q\"",
-          "detail": "6 base62 chars → 62⁶ ≈ 56.8B codes. A key batch is marked used atomically when issued, so two servers never get the same key.",
-          "payload": "{ \"key\": \"aZ3k9Q\" }"
+          "label": "1,000 codes, first \"aZ3k9Q\"",
+          "detail": "To fill the batch, KGS claimed it from a key_batches table in the primary database with one atomic UPDATE ... FOR UPDATE SKIP LOCKED, so two KGS instances never hand out the same batch and KGS itself keeps no state. 6 base62 chars give 62^6, about 56.8B random codes, enough for the ~6B links of five years, and they cannot be enumerated like a counter.",
+          "payload": "{ \"batch\": 48213, \"codes\": [\"aZ3k9Q\", \"Lr0x2b\", …] }"
         },
         {
           "from": "api",
@@ -446,7 +509,7 @@
           "kind": "req",
           "phase": "Persist & replicate",
           "label": "INSERT link",
-          "detail": "The primary is the source of truth. The short code is the primary key, so every later lookup is a single index seek.",
+          "detail": "The primary is the source of truth. The short code is the primary key, so every later lookup is a single index seek, and the unique key is the safety net if a code were ever issued twice.",
           "payload": "INSERT INTO links (code, long_url, created_at)\nVALUES ('aZ3k9Q', 'https://example.com/…', now());"
         },
         {
@@ -496,7 +559,7 @@
           "kind": "res",
           "phase": "Response",
           "label": "201 Created",
-          "detail": "Done. Server-side cost is dominated by the DB commit (~5–10 ms); the user sees roughly one network round trip on top."
+          "detail": "Done. Server-side cost is dominated by the DB commit (about 5 to 10 ms); the user sees roughly one network round trip on top."
         }
       ]
     },
@@ -535,8 +598,8 @@
           "to": "cdn",
           "kind": "local",
           "phase": "Request in",
-          "label": "MISS: 302s not cached",
-          "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
+          "label": "WAF check; 302s not cached",
+          "detail": "The WAF attached to the CDN checks every click with a looser rate rule than for creates, so bots scanning random codes are stopped before they become cache misses. Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
         },
         {
           "from": "cdn",
@@ -553,7 +616,7 @@
           "phase": "Request in",
           "label": "route → api-2",
           "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
-          "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\nX-Request-Id: 7f3c…"
+          "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
           "from": "api",
@@ -578,7 +641,7 @@
           "phase": "Respond & record click",
           "label": "publish click",
           "detail": "Fire-and-forget: the API publishes and does not wait. A slow analytics pipeline can never slow down a redirect.",
-          "payload": "{ \"code\": \"aZ3k9Q\", \"ts\": 1762600000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
+          "payload": "{ \"id\": \"evt_01HZX3\", \"code\": \"aZ3k9Q\", \"ts\": 1762600000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
         },
         {
           "from": "api",
@@ -611,7 +674,7 @@
           "kind": "async",
           "phase": "Analytics (background)",
           "label": "deliver batch (500)",
-          "detail": "Workers pull events in batches. If they fall behind, the queue absorbs the backlog instead of the API."
+          "detail": "Workers pull events in batches. If they fall behind, the queue absorbs the backlog instead of the API. Delivery is at least once, so a batch can arrive twice; a batch that keeps failing goes to the dead-letter queue."
         },
         {
           "from": "worker",
@@ -619,7 +682,7 @@
           "kind": "async",
           "phase": "Analytics (background)",
           "label": "INSERT batch",
-          "detail": "Aggregated into a columnar store for dashboards: clicks per link per hour, referrers, countries."
+          "detail": "Aggregated into a columnar store for dashboards: clicks per link per hour, referrers, countries. Rows carry the event id, so redelivered events are dropped when the hourly counts are built."
         }
       ]
     },
@@ -642,8 +705,8 @@
           "to": "cdn",
           "kind": "local",
           "phase": "Request in",
-          "label": "MISS: 302s not cached",
-          "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
+          "label": "WAF check; 302s not cached",
+          "detail": "The WAF attached to the CDN checks every click with a looser rate rule than for creates, so bots scanning random codes are stopped before they become cache misses. Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
         },
         {
           "from": "cdn",
@@ -660,7 +723,7 @@
           "phase": "Request in",
           "label": "route → api-2",
           "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
-          "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\nX-Request-Id: 7f3c…"
+          "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
           "from": "api",
@@ -693,7 +756,7 @@
           "kind": "res",
           "phase": "Read from replica",
           "label": "row",
-          "detail": "Single primary-key lookup, ~1–2 ms."
+          "detail": "Single primary-key lookup, about 1 to 2 ms. If the replica has no row, the API asks the primary once before answering 404, since the link may be newer than the replica; a short negative-cache entry stops scanners from repeating that."
         },
         {
           "from": "api",
@@ -755,22 +818,27 @@
     {
       "target": "queue",
       "kind": "failure",
-      "text": "If analytics is down, events back up in the queue; redirects are unaffected."
+      "text": "If analytics is down, events back up in the queue (kept for days); redirects are unaffected. Delivery is at least once, so counts are made idempotent by event id, and batches that keep failing go to a dead-letter queue instead of blocking the rest."
     },
     {
       "kind": "security",
-      "text": "Only the load balancer is in public subnets. API servers, caches and databases have no public IPs; the API reaches the queue through a private endpoint, and security groups only allow LB → API → data on the needed ports."
+      "text": "Only the load balancer is in public subnets, and it accepts traffic only from the CDN (the CDN's address list plus a secret origin header), so the WAF cannot be bypassed. API servers, caches and databases have no public IPs; the API reaches the queue through a private endpoint, and security groups only allow LB to API to data on the needed ports."
     },
     {
       "kind": "failure",
-      "text": "Every tier spans 3 availability zones: losing one zone removes a third of capacity, the database fails over to a replica in another zone, and redirects keep working."
+      "text": "Every tier spans 3 availability zones: losing one zone leaves 4 of the 6 API instances, so autoscaling adds 2 in the other zones to carry peak, the database fails over to a replica in another zone, and the cache promotes its standby. Redirects keep working throughout."
+    },
+    {
+      "kind": "security",
+      "text": "The CDN carries a WAF (AWS WAF / Cloud Armor) with managed rule sets, bot control and per-IP rate rules. Link creation is anonymous here, so it is the abuse target: the strict rate rule on POST /api/links limits spam, and a production shortener also checks new URLs against a malware and phishing list. Requiring an account or API key for creates is the usual next step.",
+      "target": "cdn"
     }
   ],
   "questions": [
     {
       "id": "unique-codes",
       "q": "How do you guarantee short codes never collide when many API servers create links at once?",
-      "a": "Hand out codes that are unique by construction instead of checking after the fact. The key generation service pre-allocates ranges (or batches of random codes) to each API server, so two servers never issue the same code and no write has to retry. A unique index on the code in the database is the safety net, not the mechanism.",
+      "a": "Hand out codes that are unique by construction instead of checking after the fact. The key generation service claims batches of pre-generated random codes from a table with one atomic update and gives each API server its own batch, so two servers never issue the same code and no write has to retry. A unique index on the code in the database is the safety net, not the mechanism.",
       "topic": "scale",
       "targets": [
         "kgs",
@@ -822,11 +890,11 @@
     {
       "id": "expiry",
       "q": "How would you support links that expire, and clean up old ones?",
-      "a": "Store an expiry time with each link and check it on redirect, so an expired link stops working immediately even before cleanup. Remove expired rows lazily on read and with a background job in small batches, so cleanup never competes with live traffic. Freed codes should not be reused for a while to avoid sending old links somewhere new.",
+      "a": "Store an expiry time with each link and check it on redirect, so an expired link stops working immediately even before cleanup, and give the cache entry a TTL no later than the expiry. Remove expired rows lazily on read and with a scheduled cleanup task (not drawn here) in small batches, so cleanup never competes with live traffic. Freed codes should not be reused for a while to avoid sending old links somewhere new.",
       "topic": "data",
       "targets": [
         "db",
-        "worker"
+        "cache"
       ]
     }
   ]

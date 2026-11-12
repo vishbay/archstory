@@ -27,11 +27,19 @@
     "scale": [
       {
         "label": "Notifications",
-        "value": "1B / day"
+        "value": "1B / day (~11.6k/s average)"
+      },
+      {
+        "label": "Channels",
+        "value": "~80% push, ~20% email (~2.3k emails/s average)"
+      },
+      {
+        "label": "Critical share",
+        "value": "~1% (one-time codes, security alerts), ~10M / day"
       },
       {
         "label": "Campaign bursts",
-        "value": "Several million in minutes"
+        "value": "Several million enqueued in minutes; ~60k/s at peak (5x)"
       }
     ],
     "estimate": {
@@ -60,6 +68,13 @@
     "egress": "nat",
     "subnets": [
       {
+        "id": "public",
+        "label": "Public (NAT gateways)",
+        "public": true,
+        "tiers": [],
+        "cidr": "10.9.0.0/20"
+      },
+      {
         "id": "app",
         "label": "App",
         "tiers": [
@@ -84,7 +99,7 @@
         "id": "critical-latency",
         "name": "Critical delivery speed",
         "kind": "latency",
-        "sli": "Critical notifications handed to the provider within the threshold, divided by all critical notifications",
+        "sli": "Critical notifications accepted by the provider within the threshold of the API accepting them, divided by all critical notifications, measured by the workers from the accept time in the message",
         "target": 99,
         "threshold": "< 5 s"
       },
@@ -92,39 +107,85 @@
         "id": "delivery-rate",
         "name": "Delivery rate",
         "kind": "availability",
-        "sli": "Notifications accepted by the provider divided by those sent, excluding invalid devices",
+        "sli": "Notifications accepted by the provider divided by those attempted, measured at the workers, excluding invalid devices and addresses",
         "target": 99.5
       },
       {
         "id": "no-duplicates",
         "name": "No duplicates",
         "kind": "correctness",
-        "sli": "Notifications sent once, divided by notifications requested, by idempotency key",
+        "sli": "Notifications sent at most once, divided by all sent. Detective: the workers count repeats their sent markers catch, and a daily audit of provider send logs by message id counts any that slipped through.",
         "target": 99.99
+      },
+      {
+        "id": "accept-availability",
+        "name": "API accepts requests",
+        "kind": "availability",
+        "sli": "POST /notify and /campaigns requests answered with a 2xx or a 4xx caused by the caller, divided by all, measured at the internal load balancer",
+        "target": 99.95
       }
     ],
     "alerts": [
       {
-        "id": "critical-age",
+        "id": "critical-burn",
         "severity": "page",
-        "when": "Oldest critical message above 30 seconds for 5 minutes",
+        "when": "Critical notifications later than 5 s burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Login codes and security alerts are late, and the person is waiting.",
+        "target": "push_worker",
+        "slo": "critical-latency"
+      },
+      {
+        "id": "critical-burn-slow",
+        "severity": "ticket",
+        "when": "Critical notifications later than 5 s burning the latency budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow drift, often workers under-scaled for the critical queue.",
+        "target": "push_worker",
+        "slo": "critical-latency"
+      },
+      {
+        "id": "critical-age",
+        "severity": "ticket",
+        "when": "Oldest critical message above 30 seconds for 5 minutes",
+        "why": "The cause behind late codes: workers are not keeping up with the critical queue.",
         "target": "critical_q",
         "slo": "critical-latency"
       },
       {
-        "id": "push-errors",
+        "id": "delivery-burn",
         "severity": "page",
-        "when": "Push provider error ratio above 10% for 5 minutes",
-        "why": "Notifications are not reaching phones.",
-        "target": "apns",
+        "when": "Provider rejections burning the delivery budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Notifications are not reaching phones or inboxes.",
+        "target": "push_worker",
         "slo": "delivery-rate"
+      },
+      {
+        "id": "delivery-burn-slow",
+        "severity": "ticket",
+        "when": "Provider rejections burning the delivery budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A gradual loss of deliverability, such as a bad template or growing bounces.",
+        "target": "email_worker",
+        "slo": "delivery-rate"
+      },
+      {
+        "id": "accept-burn",
+        "severity": "page",
+        "when": "API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Producers cannot hand off notifications, so login codes are not even queued.",
+        "target": "lb",
+        "slo": "accept-availability"
+      },
+      {
+        "id": "push-errors",
+        "severity": "ticket",
+        "when": "Push provider 5xx or timeout ratio above 10% for 5 minutes",
+        "why": "The cause behind a delivery rate drop: APNs or FCM is failing, so messages wait in the queues.",
+        "target": "push_worker"
       },
       {
         "id": "bulk-age",
         "severity": "ticket",
-        "when": "Oldest bulk message above 15 minutes",
-        "why": "A campaign is running late. Not urgent, but worth knowing.",
+        "when": "Oldest bulk message above 2 hours",
+        "why": "A campaign is draining far slower than its quota allows (a 5M campaign takes under 20 minutes at 5k/s). Not urgent, but worth knowing.",
         "target": "bulk_q"
       },
       {
@@ -148,6 +209,13 @@
         "why": "If keys are evicted early, duplicates get through.",
         "target": "dedupe",
         "slo": "no-duplicates"
+      },
+      {
+        "id": "credentials",
+        "severity": "ticket",
+        "when": "APNs key, FCM credentials or email sending identity expiring within 14 days",
+        "why": "An expired credential silently stops a whole channel.",
+        "target": "push_worker"
       }
     ],
     "signals": [
@@ -174,6 +242,18 @@
         "name": "Provider 429 share",
         "metric": "client_throttled_total",
         "why": "Shows whether pacing matches the provider quota."
+      },
+      {
+        "target": "dedupe",
+        "name": "Repeats caught",
+        "metric": "dedupe_hits_total{stage}",
+        "why": "How often producers retry (API stage) and queues redeliver (worker stage); evictions here would let repeats through."
+      },
+      {
+        "target": "notif_api",
+        "name": "Notifications by channel and priority",
+        "metric": "notifications_accepted_total{channel,priority}",
+        "why": "Business view: which teams and campaigns drive volume, and whether critical traffic is a stable ~1%."
       }
     ],
     "debug": [
@@ -184,6 +264,22 @@
           "Check worker concurrency and errors.",
           "Check provider latency and error codes.",
           "Check that critical messages are not stuck behind preference or quiet-hours logic."
+        ]
+      },
+      {
+        "symptom": "A user got the same notification twice",
+        "steps": [
+          "Find both sends by user and template in the worker logs; compare their message ids.",
+          "Different message ids: the producer retried without an idempotency key, or with a new one each time.",
+          "Same message id: the sent marker was missing; check dedupe store evictions and failovers at that time."
+        ]
+      },
+      {
+        "symptom": "A campaign is draining slowly",
+        "steps": [
+          "Check the bulk queue age and the email workers' send rate against the 5k/s quota.",
+          "Check provider 429s: the fleet may be pacing to a quota lower than it thinks.",
+          "Check that critical traffic is not unusually high, since it takes its share of the quota first."
         ]
       }
     ]
@@ -198,27 +294,39 @@
       "id": "producer",
       "label": "Internal Services",
       "kind": "service",
-      "description": "Auth, orders, marketing … any team that needs to notify users",
+      "description": "Auth, orders, marketing and any other team that needs to notify users",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Internal Load Balancer",
+      "kind": "load_balancer",
+      "subnet": "app",
+      "description": "Private L7 entry for producers; health-checks the API instances",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "Internal Application Load Balancer"
       }
     },
     {
       "id": "notif_api",
       "label": "Notification API",
       "kind": "service",
-      "description": "Validates, deduplicates, applies preferences, renders templates",
+      "description": "Validates, deduplicates, applies preferences, renders templates; ~60 instances at a 60k/s peak",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
-      }
+      },
+      "replicas": 60
     },
     {
       "id": "dedupe",
       "label": "Dedupe Store",
       "kind": "cache",
-      "description": "Idempotency keys with a 24 h TTL",
+      "description": "Idempotency keys (API) and sent markers (workers), 24 h TTL",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -241,7 +349,8 @@
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
-      }
+      },
+      "description": "One-time codes and security alerts, any channel; messages expire"
     },
     {
       "id": "bulk_q",
@@ -250,7 +359,8 @@
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
-      }
+      },
+      "description": "Campaigns and other non-urgent messages, any channel"
     },
     {
       "id": "dlq",
@@ -269,13 +379,14 @@
       "cloud": {
         "aws": "Lambda",
         "gcp": "Cloud Run"
-      }
+      },
+      "description": "Drain the critical queue first, then bulk pushes; leave the VPC through NAT"
     },
     {
       "id": "email_worker",
       "label": "Email Workers",
       "kind": "worker",
-      "description": "Throttled to the provider's send quota",
+      "description": "Drain the critical queue first; bulk sends paced to the provider's 5k/s quota",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -300,6 +411,10 @@
   "edges": [
     {
       "from": "producer",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
       "to": "notif_api"
     },
     {
@@ -349,6 +464,26 @@
     {
       "from": "apns",
       "to": "phone"
+    },
+    {
+      "from": "critical_q",
+      "to": "email_worker"
+    },
+    {
+      "from": "bulk_q",
+      "to": "push_worker"
+    },
+    {
+      "from": "push_worker",
+      "to": "dedupe"
+    },
+    {
+      "from": "email_worker",
+      "to": "dedupe"
+    },
+    {
+      "from": "push_worker",
+      "to": "prefs"
     }
   ],
   "flows": [
@@ -359,19 +494,29 @@
       "steps": [
         {
           "from": "producer",
-          "to": "notif_api",
+          "to": "lb",
           "kind": "req",
           "phase": "Accept request",
           "label": "POST /notify",
-          "payload": "POST /notify\nIdempotency-Key: otp-u_17-1762601000\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\" }"
+          "detail": "The auth service asks for a login code to be sent; the idempotency key makes its retries safe.",
+          "payload": "POST /notify\nIdempotency-Key: otp-u_17-1762601000\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\", \"expires_in\": 300 }"
+        },
+        {
+          "from": "lb",
+          "to": "notif_api",
+          "kind": "req",
+          "phase": "Accept request",
+          "label": "to a healthy instance",
+          "detail": "Producers reach the API fleet through an internal load balancer that only sends to instances passing health checks."
         },
         {
           "from": "notif_api",
           "to": "dedupe",
           "kind": "req",
           "phase": "Deduplicate",
-          "label": "SET NX idem:… EX 86400",
-          "detail": "Producers retry on timeouts. The first call wins; a repeat with the same key is acknowledged but not sent again."
+          "label": "SET NX idem:… processing EX 60",
+          "detail": "Producers retry on timeouts. The first call takes a short claim; a repeat while it is held, or after it is marked queued, is acknowledged but not sent again. If this instance dies before queueing, the claim expires in 60 s and the producer's retry goes through, so a crash cannot swallow a login code.",
+          "payload": "SET idem:otp-u_17-1762601000 processing NX EX 60"
         },
         {
           "from": "dedupe",
@@ -409,10 +554,33 @@
           "kind": "async",
           "phase": "Queue & respond",
           "label": "enqueue",
-          "detail": "Critical and bulk traffic use separate queues and workers, so a 5M-user campaign cannot delay a login code."
+          "detail": "Critical and bulk traffic use separate queues, and workers always drain the critical queue first, so a 5M-user campaign cannot delay a login code. The message carries an expiry: a code nobody can use any more is dropped, not sent late.",
+          "payload": "{ \"msg_id\": \"n_8f31\", \"user_id\": \"u_17\", \"channel\": \"push\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"], \"body\": \"Tu código es 482913\", \"expires_at\": 1762601300, \"traceparent\": \"00-4bf92f…-01\" }"
         },
         {
           "from": "notif_api",
+          "to": "dedupe",
+          "kind": "req",
+          "phase": "Queue & respond",
+          "label": "SET idem:… queued EX 86400",
+          "detail": "Only now is the key marked done, for 24 hours, which covers any producer's retry window."
+        },
+        {
+          "from": "dedupe",
+          "to": "notif_api",
+          "kind": "res",
+          "phase": "Queue & respond",
+          "label": "OK"
+        },
+        {
+          "from": "notif_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Queue & respond",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "lb",
           "to": "producer",
           "kind": "res",
           "phase": "Queue & respond",
@@ -423,14 +591,32 @@
           "to": "push_worker",
           "kind": "async",
           "phase": "Deliver",
-          "label": "message"
+          "label": "message n_8f31",
+          "detail": "Delivery from the queue is at least once."
+        },
+        {
+          "from": "push_worker",
+          "to": "dedupe",
+          "kind": "req",
+          "phase": "Deliver",
+          "label": "SET NX sent:n_8f31 sending EX 60",
+          "detail": "The worker-side check: a redelivered message finds the marker and is not sent twice. The short TTL means a worker that dies mid-send does not block the retry for long; after the provider accepts, the marker becomes sent for 24 h.",
+          "payload": "SET sent:n_8f31 sending NX EX 60"
+        },
+        {
+          "from": "dedupe",
+          "to": "push_worker",
+          "kind": "res",
+          "phase": "Deliver",
+          "label": "OK"
         },
         {
           "from": "push_worker",
           "to": "apns",
           "kind": "req",
           "phase": "Deliver",
-          "label": "send to 2 devices"
+          "label": "send to 2 devices",
+          "detail": "Over persistent HTTP/2 connections to APNs and FCM, leaving the VPC through the NAT gateways."
         },
         {
           "from": "apns",
@@ -438,14 +624,24 @@
           "kind": "res",
           "phase": "Deliver",
           "label": "200 / 410 Unregistered",
-          "detail": "410 means the app was uninstalled; the stale device token is removed so it is not retried forever."
+          "detail": "410 means the app was uninstalled."
+        },
+        {
+          "from": "push_worker",
+          "to": "prefs",
+          "kind": "async",
+          "phase": "Clean up",
+          "label": "remove token apns:9f…",
+          "detail": "The stale device token is removed so it is not retried forever.",
+          "payload": "UpdateItem u_17: REMOVE devices[0]   (condition: devices[0] = \"apns:9f…\")"
         },
         {
           "from": "apns",
           "to": "phone",
           "kind": "async",
-          "phase": "Deliver",
-          "label": "\"Your code is 482913\""
+          "phase": "Clean up",
+          "label": "\"Tu código es 482913\"",
+          "detail": "Apple delivers the push to the phone; the 200 above only meant APNs accepted it."
         }
       ]
     },
@@ -456,18 +652,27 @@
       "steps": [
         {
           "from": "producer",
-          "to": "notif_api",
+          "to": "lb",
           "kind": "req",
           "phase": "Accept campaign",
           "label": "POST /campaigns",
-          "payload": "{ \"segment\": \"inactive_30d\", \"template\": \"winback_nov\", \"channel\": \"email\", \"priority\": \"bulk\" }"
+          "detail": "Marketing schedules a campaign for a segment.",
+          "payload": "POST /campaigns\nIdempotency-Key: camp-winback-nov\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n\n{ \"segment\": \"inactive_30d\", \"template\": \"winback_nov\", \"channel\": \"email\", \"priority\": \"bulk\" }"
+        },
+        {
+          "from": "lb",
+          "to": "notif_api",
+          "kind": "req",
+          "phase": "Accept campaign",
+          "label": "to a healthy instance"
         },
         {
           "from": "notif_api",
           "to": "prefs",
           "kind": "req",
           "phase": "Filter recipients",
-          "label": "filter opted-in (paged)"
+          "label": "filter opted-in (paged)",
+          "detail": "Pages through the segment, applying opt-outs, quiet hours by time zone and per-user frequency caps."
         },
         {
           "from": "prefs",
@@ -482,10 +687,18 @@
           "to": "bulk_q",
           "kind": "async",
           "phase": "Queue & respond",
-          "label": "enqueue 1.4M (batches)"
+          "label": "enqueue 1.4M (batches)",
+          "detail": "Each recipient becomes one message with its own id, sent in batches of 10. The queue absorbs the burst; nothing else has to scale for it."
         },
         {
           "from": "notif_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Queue & respond",
+          "label": "202 campaign c_77"
+        },
+        {
+          "from": "lb",
           "to": "producer",
           "kind": "res",
           "phase": "Queue & respond",
@@ -500,11 +713,26 @@
         },
         {
           "from": "email_worker",
+          "to": "dedupe",
+          "kind": "req",
+          "phase": "Send in batches",
+          "label": "SET NX sent:… ×500 (pipelined)",
+          "detail": "The same worker-side check as for push: messages already sent are skipped."
+        },
+        {
+          "from": "dedupe",
+          "to": "email_worker",
+          "kind": "res",
+          "phase": "Send in batches",
+          "label": "498 new, 2 already sent"
+        },
+        {
+          "from": "email_worker",
           "to": "email_worker",
           "kind": "local",
           "phase": "Send in batches",
-          "label": "token bucket 2k/s",
-          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled."
+          "label": "token bucket, 5k/s fleet-wide",
+          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled: the 5k/s account quota is split across the worker fleet, and critical emails are taken first, so a campaign uses only what is left. 1.4M emails take about 5 minutes."
         },
         {
           "from": "email_worker",
@@ -543,17 +771,17 @@
   "notes": [
     {
       "kind": "tradeoff",
-      "text": "Separate queues per priority (and often per channel) isolate failures: an email provider outage backs up email only, while push keeps flowing."
+      "text": "Separate queues per priority isolate campaigns from critical traffic: both worker pools drain the critical queue first and keep part of each provider quota for it. Per-channel workers isolate providers: an email provider outage backs up email only, while push keeps flowing."
     },
     {
       "target": "dedupe",
       "kind": "tradeoff",
-      "text": "Delivery is at-least-once end to end. Idempotency keys at the API and message ids at the workers turn that into effectively-once for users."
+      "text": "Delivery is at least once end to end. Idempotency keys at the API and sent markers per message id at the workers turn that into effectively once for users. The dedupe store is replicated asynchronously, so a failover can lose recent markers and let a rare duplicate through; that is what the 99.99% target allows."
     },
     {
       "target": "email",
       "kind": "failure",
-      "text": "Keep a second provider configured. Workers switch over when the primary's error rate crosses a threshold."
+      "text": "Usual remedy for a long provider outage (not drawn): keep a second provider configured and switch over when the primary's error rate crosses a threshold. Until then, messages wait on the queues (kept for days), and critical ones are dropped once they expire."
     },
     {
       "target": "prefs",
@@ -562,29 +790,37 @@
     },
     {
       "kind": "scaling",
-      "text": "Track every message's state (queued, sent, delivered, opened) in an event log for debugging and campaign analytics."
+      "text": "Not drawn here: an event log of every message's state (queued, sent, delivered, opened) from worker records and provider callbacks, for debugging and campaign analytics. Without it, delivery is only visible as provider acceptance."
+    },
+    {
+      "target": "lb",
+      "kind": "security",
+      "text": "There are no public callers: producers reach the API through an internal load balancer in the app subnet, with IAM or mTLS identifying each producing team. The only public subnet holds the NAT gateways the workers use to reach APNs, FCM and the email provider; the queues and preference store are reached through VPC endpoints."
     }
   ],
   "questions": [
     {
       "id": "priority",
       "q": "Why separate critical and bulk queues?",
-      "a": "A marketing campaign can enqueue millions of messages; in one shared queue a login code would wait behind them. Separate queues and worker pools keep critical notifications fast regardless of bulk volume, and bulk can be throttled to protect providers and users.",
+      "a": "A marketing campaign can enqueue millions of messages; in one shared queue a login code would wait behind them. A separate critical queue that every worker drains first, with part of each provider quota kept for it, keeps critical notifications fast regardless of bulk volume, and bulk can be throttled to protect providers and users.",
       "topic": "performance",
       "targets": [
         "notif_api",
         "critical_q",
-        "bulk_q"
+        "bulk_q",
+        "push_worker",
+        "email_worker"
       ]
     },
     {
       "id": "dedupe",
       "q": "A service retries and sends the same notification request twice. How do you avoid notifying the user twice?",
-      "a": "Producers send an idempotency key; the API records it in the dedupe store with an expiry and drops repeats. Workers also deduplicate before sending, because queues deliver at least once. The expiry is long enough to cover retries but short enough to keep the store small.",
+      "a": "Producers send an idempotency key; the API claims it in the dedupe store with a short expiry, marks it done for 24 h once the message is queued, and drops repeats. Workers also check a sent marker per message id before sending, because queues deliver at least once. The expiry is long enough to cover retries but short enough to keep the store small.",
       "topic": "consistency",
       "targets": [
         "notif_api",
-        "dedupe"
+        "dedupe",
+        "push_worker"
       ]
     },
     {
@@ -622,7 +858,7 @@
     {
       "id": "tracking",
       "q": "How do you know notifications are actually being delivered?",
-      "a": "Track each message through accepted, sent, delivered and opened, using provider callbacks where available. Alert on drops in delivery rate and on queue age for the critical queue, which is the symptom users feel. Per-provider dashboards show which channel is failing.",
+      "a": "Record each message's state (accepted, sent, delivered, opened) using worker results and provider callbacks, in an event log this design does not draw. Alert on drops in delivery rate and on queue age for the critical queue, which is the symptom users feel. Per-provider dashboards show which channel is failing.",
       "topic": "operations",
       "targets": [
         "push_worker",

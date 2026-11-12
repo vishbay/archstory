@@ -31,13 +31,25 @@
       {
         "label": "Load skew",
         "value": "Top 20 tenants generate ~50% of traffic"
+      },
+      {
+        "label": "Daily active users",
+        "value": "1M across all tenants, ~20 writes each per day"
+      },
+      {
+        "label": "API requests",
+        "value": "~2,500/s average, ~10,000/s at weekday peak (4x), 10 reads per write"
+      },
+      {
+        "label": "Largest tenant",
+        "value": "Acme (silo), up to 2,000 requests/s"
       }
     ],
     "estimate": {
       "source": "users",
-      "dau": 2000000,
-      "writesPerUser": 50,
-      "volume": 100000000,
+      "dau": 1000000,
+      "writesPerUser": 20,
+      "volume": 20000000,
       "volumeUnit": "day",
       "readsPerWrite": 10,
       "peakFactor": 4,
@@ -92,14 +104,14 @@
         "id": "api-availability",
         "name": "API availability, per tenant",
         "kind": "availability",
-        "sli": "Requests that succeed divided by all requests, tracked per tenant so a large tenant cannot hide a small one's outage",
+        "sli": "Requests not answered with a 5xx, divided by all requests, measured at the gateway per tenant so a large tenant cannot hide a small one's outage. A 429 from the tenant's own limit counts as good.",
         "target": 99.95
       },
       {
         "id": "api-latency",
-        "name": "API speed",
+        "name": "API speed, per tenant",
         "kind": "latency",
-        "sli": "Requests within the threshold, divided by all requests, at the gateway",
+        "sli": "Requests answered within the threshold, divided by all requests, measured at the gateway per tenant, so one tenant slowing the pool shows up on its neighbours",
         "target": 99,
         "threshold": "< 300 ms"
       },
@@ -107,26 +119,26 @@
         "id": "isolation",
         "name": "Tenant isolation",
         "kind": "correctness",
-        "sli": "Requests that returned only the caller's data, verified by audit sampling",
+        "sli": "Responses whose records all carry the caller's tenant id. Detective, not preventive: checked on every response by the app's tenant guard (tenant_mismatch_total) and offline on a daily sample of logged responses. Row-level security and the signed context are what prevent leaks; this measures whether they held.",
         "target": 100
+      },
+      {
+        "id": "job-start",
+        "name": "Background jobs start on time",
+        "kind": "freshness",
+        "sli": "Jobs that start within the threshold of being queued, divided by all jobs, measured by the workers. Time a job waits because its own tenant is at its 2-job cap does not count against it.",
+        "target": 99,
+        "threshold": "< 5 min"
       }
     ],
     "alerts": [
       {
         "id": "cross-tenant",
         "severity": "page",
-        "when": "Any response that included another tenant's data",
-        "why": "A data leak is the worst failure this product can have.",
+        "when": "tenant_mismatch_total above zero: the app's tenant guard saw a record, cache entry or job whose tenant id differs from the signed context",
+        "why": "A data leak is the worst failure this product can have. The guard blocks that response, so the counter is the real-time signal; the daily sampled audit catches leaks the guard cannot see.",
         "target": "app",
         "slo": "isolation"
-      },
-      {
-        "id": "api-slow",
-        "severity": "page",
-        "when": "p99 API latency above 300 ms for 10 minutes",
-        "why": "Slow responses hurt every tenant at once when they come from shared infrastructure.",
-        "target": "gw",
-        "slo": "api-latency"
       },
       {
         "id": "api-burn",
@@ -137,24 +149,70 @@
         "slo": "api-availability"
       },
       {
+        "id": "api-burn-slow",
+        "severity": "ticket",
+        "when": "API errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak, often one tenant's errors, that would use up the month's budget before anyone is paged.",
+        "target": "gw",
+        "slo": "api-availability"
+      },
+      {
+        "id": "api-slow",
+        "severity": "page",
+        "when": "Requests over 300 ms burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Slow responses hurt every tenant at once when they come from shared infrastructure.",
+        "target": "gw",
+        "slo": "api-latency"
+      },
+      {
+        "id": "api-slow-slow",
+        "severity": "ticket",
+        "when": "Requests over 300 ms burning the latency budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "Gradual slowdown, typically a pooled database growing into its limits or a tenant outgrowing the pool.",
+        "target": "gw",
+        "slo": "api-latency"
+      },
+      {
+        "id": "jobs-late",
+        "severity": "ticket",
+        "when": "Jobs starting late burning the job-start budget 6 times too fast (checked over 30 minutes and 6 hours)",
+        "why": "Pooled workers are not keeping up; scale them out before tenants notice. Background work is not urgent enough to page.",
+        "target": "pool_worker",
+        "slo": "job-start"
+      },
+      {
         "id": "noisy-neighbour",
         "severity": "ticket",
-        "when": "One tenant above 50% of pool database CPU for 15 minutes",
-        "why": "A noisy neighbour. Rate-limit it or move it to its own silo.",
+        "when": "One tenant above 50% of the pooled database's total query time for 15 minutes (summed per tenant by the app, since the database cannot split CPU by tenant)",
+        "why": "A noisy neighbour that its statement timeout and connection cap are not containing. Tighten its plan limits or move it to its own silo.",
         "target": "pool_db"
+      },
+      {
+        "id": "db-saturation",
+        "severity": "ticket",
+        "when": "Pooled database connections above 80% of the maximum, or writer CPU above 75%, for 15 minutes",
+        "why": "At peak the App Service can open up to 480 connections; running out turns into errors for every pooled tenant at once.",
+        "target": "pool_db"
+      },
+      {
+        "id": "dead-letters",
+        "severity": "ticket",
+        "when": "Any message in either dead-letter queue",
+        "why": "A job failed 5 times and stopped retrying; some tenant is waiting for an export or bulk job that will never finish on its own.",
+        "target": "jobs_q"
       },
       {
         "id": "throttled",
         "severity": "ticket",
-        "when": "A tenant receiving 429 responses for over 30 minutes",
+        "when": "A tenant receiving 429 responses for over 30 minutes, or using over 80% of its plan's rate limit at peak",
         "why": "Either an abusive client or a limit set too low for their plan.",
         "target": "gw"
       },
       {
         "id": "auth-failures",
         "severity": "ticket",
-        "when": "Authentication failures above 3 times the baseline",
-        "why": "Could be an expired signing key, a misconfigured tenant or an attack.",
+        "when": "Authentication or context-signature failures above 3 times the baseline for 10 minutes, or the context-signing key within 14 days of expiry",
+        "why": "Could be an expired or rotated signing key, a misconfigured tenant or an attack.",
         "target": "auth"
       }
     ],
@@ -173,9 +231,33 @@
       },
       {
         "target": "app",
+        "name": "Database connections in use, per tenant",
+        "metric": "db_connections_in_use{tenant,db}",
+        "why": "Shows the per-tenant cap of 5 connections doing its job, and which tenant holds the pool when it is full."
+      },
+      {
+        "target": "app",
         "name": "Tenant context mismatches",
         "metric": "tenant_mismatch_total",
-        "why": "Should always be zero: the token tenant must match the tenant the code uses."
+        "why": "Should always be zero: before a response, cache write or job is sent, the guard checks every record's tenant id against the signed context."
+      },
+      {
+        "target": "pool_worker",
+        "name": "Jobs waiting per tenant, and oldest job age",
+        "metric": "jobs_waiting{tenant}",
+        "why": "Shows a tenant held back by its concurrency cap, and whether the pooled workers keep up overall."
+      },
+      {
+        "target": "catalog",
+        "name": "Tenant onboarding time",
+        "metric": "tenant_onboarding_seconds",
+        "why": "The business promise of onboarding in minutes, measured from sign-up to the catalog entry being ready."
+      },
+      {
+        "target": "gw",
+        "name": "Active tenants and requests by plan",
+        "metric": "requests_total{plan}",
+        "why": "Business view: usage per plan shows which tenants are close to an upgrade or to a silo."
       }
     ],
     "debug": [
@@ -187,14 +269,33 @@
           "Look for a heavy query or export from another tenant using the same database.",
           "Consider moving the heavy tenant to its own silo."
         ]
+      },
+      {
+        "symptom": "The cross-tenant alert fired",
+        "steps": [
+          "Take the trace id from the blocked response's log line and follow it from the gateway through the App Service.",
+          "Compare the signed context's tenant with the tenant of the record that failed the guard: a cache key, a job message or a query.",
+          "If a cache key lacked the tenant prefix, flush the affected keys; if a query ran without SET LOCAL, find the code path that took a connection outside a transaction.",
+          "Check the sampled audit for the same window to see whether any response got past the guard, and start the incident process if so."
+        ]
+      },
+      {
+        "symptom": "A tenant says its export or bulk job never finished",
+        "steps": [
+          "Look up the job row by id: still queued, running or failed.",
+          "If queued, check jobs_waiting for that tenant: it may simply be behind its own 2-job cap.",
+          "If running for long, check the slot lease: an expired lease means the worker died and the job will be retried.",
+          "If failed, read the message in the dead-letter queue, fix the cause and send it back to the main queue."
+        ]
       }
     ]
   },
   "nodes": [
     {
       "id": "client",
-      "label": "User at globex.app.com",
-      "kind": "web_client"
+      "label": "Tenant user",
+      "kind": "web_client",
+      "description": "Browser on the tenant's own subdomain, e.g. globex.app.com"
     },
     {
       "id": "dns",
@@ -207,9 +308,22 @@
       }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Rule set attached to the CDN: managed rules, IP rate rules, bot control",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      },
+      "tier": "entry",
+      "subnet": "none"
+    },
+    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
+      "description": "Caches static assets only; /api/* is never cached",
       "cloud": {
         "aws": "CloudFront",
         "gcp": "Cloud CDN"
@@ -219,7 +333,7 @@
       "id": "gw",
       "label": "API Gateway",
       "kind": "api_gateway",
-      "description": "Verifies tokens, resolves the tenant, applies per-tenant limits",
+      "description": "Verifies tokens, resolves the tenant, applies per-tenant limits, signs the tenant context (tenant, database, limits) with a key from the secrets manager",
       "cloud": {
         "aws": "API Gateway",
         "gcp": "API Gateway"
@@ -233,14 +347,26 @@
       "cloud": {
         "aws": "Cognito",
         "gcp": "Identity Platform"
+      },
+      "subnet": "none"
+    },
+    {
+      "id": "lb",
+      "label": "Internal Load Balancer",
+      "kind": "load_balancer",
+      "subnet": "app",
+      "description": "Private; reached by the gateway over a VPC Link; health-checks the App Service instances",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "Internal Application Load Balancer"
       }
     },
     {
       "id": "app",
       "label": "App Service",
       "kind": "service",
-      "replicas": 6,
-      "description": "Shared, stateless; never trusts a tenant id from the client",
+      "replicas": 24,
+      "description": "Shared, stateless, 6 to 24 instances; takes tenant and database only from the gateway's signed context, never from the client",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -261,7 +387,7 @@
       "label": "Pooled Cache",
       "kind": "cache",
       "group": "pool",
-      "description": "Keys prefixed with tenant id",
+      "description": "Keys prefixed with tenant id; ~50 GB",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -272,7 +398,7 @@
       "label": "Pooled DB",
       "kind": "sql_db",
       "group": "pool",
-      "description": "All small tenants; every table has tenant_id with row-level security",
+      "description": "All small tenants; every table has tenant_id with forced row-level security; writer plus a standby replica in another zone",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -301,13 +427,36 @@
       }
     },
     {
-      "id": "jobs_q",
-      "label": "Job Queue",
+      "id": "silo_q",
+      "label": "Acme Job Queue",
       "kind": "queue",
-      "description": "Messages carry tenant id",
+      "group": "silo",
+      "description": "Only Acme's jobs; own dead-letter queue",
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "jobs_q",
+      "label": "Pooled Job Queue",
+      "kind": "queue",
+      "group": "pool",
+      "description": "Shared by all pooled tenants; messages carry tenant id; dead-letter queue after 5 failed attempts",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      }
+    },
+    {
+      "id": "pool_worker",
+      "label": "Pooled Workers",
+      "kind": "worker",
+      "group": "pool",
+      "description": "Shared background capacity; at most 2 running jobs per tenant",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
       }
     }
   ],
@@ -334,6 +483,10 @@
     },
     {
       "from": "cdn",
+      "to": "waf"
+    },
+    {
+      "from": "cdn",
       "to": "gw"
     },
     {
@@ -346,6 +499,10 @@
     },
     {
       "from": "gw",
+      "to": "lb"
+    },
+    {
+      "from": "lb",
       "to": "app"
     },
     {
@@ -362,23 +519,36 @@
     },
     {
       "from": "app",
+      "to": "silo_q",
+      "async": true
+    },
+    {
+      "from": "app",
       "to": "jobs_q",
       "async": true
     },
     {
-      "from": "jobs_q",
+      "from": "silo_q",
       "to": "silo_worker"
     },
     {
       "from": "silo_worker",
       "to": "silo_db"
+    },
+    {
+      "from": "jobs_q",
+      "to": "pool_worker"
+    },
+    {
+      "from": "pool_worker",
+      "to": "pool_db"
     }
   ],
   "flows": [
     {
       "id": "pooled",
       "title": "Request from a pooled tenant",
-      "summary": "Tenant comes from the verified token, limits come from the catalog, and the database itself enforces isolation.",
+      "summary": "The tenant comes from the verified token, its limits and database from the catalog via a context the gateway signs, and the database itself enforces isolation.",
       "steps": [
         {
           "from": "client",
@@ -401,14 +571,31 @@
           "kind": "req",
           "phase": "Request in",
           "label": "GET /api/projects",
+          "detail": "The tenant's subdomain and token travel together; the token is what counts.",
           "payload": "GET /api/projects HTTP/2\nHost: globex.app.com\nAuthorization: Bearer eyJ…  (claims: sub=u_17, tenant_id=globex)"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect",
+          "detail": "The CDN runs the attached WAF rules before forwarding: managed rule sets (SQL injection, known bad inputs), a per-IP rate rule and bot control. A blocked request gets a 403 at the edge and never reaches the gateway."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
           "to": "gw",
           "kind": "req",
           "phase": "Request in",
-          "label": "forward"
+          "label": "forward, not cached",
+          "detail": "Caching is off for /api/* (the origin also sends Cache-Control: private, no-store) because every answer is tenant-specific, so one tenant's response can never be served to another. The CDN only terminates TLS near the user."
         },
         {
           "from": "gw",
@@ -432,7 +619,7 @@
           "kind": "req",
           "phase": "Look up tenant",
           "label": "GET tenant globex",
-          "detail": "Cached at the gateway for a minute."
+          "detail": "Cached at the gateway for 60 s. That staleness only matters while a tenant changes database, and the migration fences the old copy so a stale entry fails safely (see the catalog note)."
         },
         {
           "from": "catalog",
@@ -440,7 +627,7 @@
           "kind": "res",
           "phase": "Look up tenant",
           "label": "pooled, 100 rps",
-          "payload": "{ \"tenant\": \"globex\", \"plan\": \"team\", \"tier\": \"pool\", \"db\": \"pool-1\", \"rate_limit_rps\": 100 }"
+          "payload": "{ \"tenant\": \"globex\", \"plan\": \"team\", \"tier\": \"pool\", \"db\": \"pool-1\", \"rate_limit_rps\": 100, \"stmt_timeout_ms\": 2000, \"db_conn_cap\": 5 }"
         },
         {
           "from": "gw",
@@ -448,15 +635,32 @@
           "kind": "local",
           "phase": "Look up tenant",
           "label": "per-tenant rate limit",
-          "detail": "Noisy-neighbor protection: a tenant over its limit gets 429s; everyone else is unaffected."
+          "detail": "Protects request rate only: a tenant over its limit gets 429s. Query cost is capped further down, by the statement timeout and connection cap the gateway passes on in the context."
         },
         {
           "from": "gw",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Handle request",
+          "label": "+ signed tenant context",
+          "detail": "Sent over a VPC Link (private integration) to the internal load balancer. The gateway adds a short-lived context it signs itself, carrying the tenant, its database and its limits, so no service ever uses a client-supplied value or needs its own catalog lookup. A W3C traceparent header starts here and travels on every later hop, including job messages.",
+          "payload": "GET /api/projects\nX-Tenant-Context: tenant=globex; tier=pool; db=pool-1; stmt_timeout_ms=2000; db_conn_cap=5; exp=1731400030; sig=…\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        },
+        {
+          "from": "lb",
           "to": "app",
           "kind": "req",
           "phase": "Handle request",
-          "label": "+ tenant context",
-          "detail": "Forwarded as a signed internal header so services cannot be tricked by a client-supplied value."
+          "label": "to a healthy instance",
+          "detail": "The managed gateway scales itself, but the 6 to 24 App Service instances still need balancing and health checks: the load balancer only sends to instances passing them, across all three zones."
+        },
+        {
+          "from": "app",
+          "to": "app",
+          "kind": "local",
+          "phase": "Handle request",
+          "label": "verify context, pick pool-1",
+          "detail": "Checks the gateway's signature and expiry, then takes a connection from the pool named by db=pool-1. The routing came with the request, so the App Service never calls the catalog."
         },
         {
           "from": "app",
@@ -464,7 +668,7 @@
           "kind": "req",
           "phase": "Handle request",
           "label": "GET globex:projects",
-          "detail": "Every cache key is prefixed with the tenant id."
+          "detail": "Every cache key is prefixed with the tenant id from the signed context."
         },
         {
           "from": "pool_cache",
@@ -479,8 +683,8 @@
           "kind": "req",
           "phase": "Handle request",
           "label": "SELECT with RLS",
-          "detail": "Row-level security: even if a query forgets WHERE tenant_id = …, the database only returns this tenant's rows.",
-          "payload": "SET app.tenant_id = 'globex';\nSELECT id, name FROM projects;   -- policy: tenant_id = current_setting('app.tenant_id')"
+          "detail": "Row-level security: even if a query forgets WHERE tenant_id = …, the database only returns this tenant's rows. It holds because the app connects as a role that does not own the tables and has no BYPASSRLS, the tables use FORCE ROW LEVEL SECURITY, and the tenant is set with SET LOCAL so it ends with the transaction; with no tenant set the policy matches nothing. One tenant may use at most 5 of an instance's 20 connections to this database.",
+          "payload": "BEGIN;\nSET LOCAL app.tenant_id = 'globex';   -- ends with the transaction, never left on a pooled connection\nSET LOCAL statement_timeout = '2s';   -- from the plan: caps what one query can cost\nSELECT id, name FROM projects;        -- policy: tenant_id = current_setting('app.tenant_id', true)\nCOMMIT;"
         },
         {
           "from": "pool_db",
@@ -491,6 +695,21 @@
         },
         {
           "from": "app",
+          "to": "app",
+          "kind": "local",
+          "phase": "Handle request",
+          "label": "tenant guard",
+          "detail": "Before responding, the app checks every record's tenant_id against the signed context; a mismatch blocks the response and increments tenant_mismatch_total. Row-level security prevents leaks; this guard detects one if a bug gets past it."
+        },
+        {
+          "from": "app",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Response",
+          "label": "200 OK"
+        },
+        {
+          "from": "lb",
           "to": "gw",
           "kind": "res",
           "phase": "Response",
@@ -515,7 +734,7 @@
     {
       "id": "silo",
       "title": "Request from an enterprise tenant",
-      "summary": "Same code path; the catalog routes Acme to its dedicated database and workers.",
+      "summary": "Same code path; the catalog entry, carried in the signed context, routes Acme to its dedicated database, queue and workers.",
       "steps": [
         {
           "from": "client",
@@ -523,7 +742,23 @@
           "kind": "req",
           "phase": "Request in",
           "label": "POST /api/exports",
-          "payload": "POST /api/exports HTTP/2\nHost: acme.app.com\nAuthorization: Bearer eyJ…  (claims: tenant_id=acme)"
+          "payload": "POST /api/exports HTTP/2\nHost: acme.app.com\nAuthorization: Bearer eyJ…  (claims: tenant_id=acme)\nIdempotency-Key: 6f1c2e",
+          "detail": "The client sends an idempotency key, so a retried POST cannot start the same export twice."
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect",
+          "detail": "Same WAF rules for every tenant, before the request costs any gateway capacity."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -558,15 +793,24 @@
           "to": "gw",
           "kind": "res",
           "phase": "Look up tenant",
-          "label": "silo, db=acme",
+          "label": "silo, db=acme-db",
           "payload": "{ \"tenant\": \"acme\", \"plan\": \"enterprise\", \"tier\": \"silo\", \"db\": \"acme-db\", \"rate_limit_rps\": 2000 }"
         },
         {
           "from": "gw",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Handle request",
+          "label": "+ signed tenant context",
+          "detail": "The catalog entry travels in the signed context, so the routing decision is made once, at the gateway.",
+          "payload": "POST /api/exports\nX-Tenant-Context: tenant=acme; tier=silo; db=acme-db; exp=1731400030; sig=…\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        },
+        {
+          "from": "lb",
           "to": "app",
           "kind": "req",
           "phase": "Handle request",
-          "label": "+ tenant context"
+          "label": "to a healthy instance"
         },
         {
           "from": "app",
@@ -574,7 +818,7 @@
           "kind": "req",
           "phase": "Handle request",
           "label": "INSERT export job",
-          "detail": "Connection chosen from the catalog entry. The app code is identical for pooled and siloed tenants."
+          "detail": "Connection chosen from db=acme-db in the signed context, not from a catalog call. The app code is identical for pooled and siloed tenants. A unique (tenant_id, idempotency_key) on the jobs table turns a retry into a lookup of the existing job."
         },
         {
           "from": "silo_db",
@@ -585,13 +829,22 @@
         },
         {
           "from": "app",
-          "to": "jobs_q",
+          "to": "silo_q",
           "kind": "async",
           "phase": "Handle request",
-          "label": "enqueue (tenant=acme)"
+          "label": "enqueue (tenant=acme)",
+          "detail": "tier=silo in the context selects Acme's own queue, so its exports never wait behind pooled tenants' jobs.",
+          "payload": "{ \"job\": \"job_9\", \"tenant\": \"acme\", \"traceparent\": \"00-4bf92f…-01\" }"
         },
         {
           "from": "app",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Response",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "lb",
           "to": "gw",
           "kind": "res",
           "phase": "Response",
@@ -612,7 +865,7 @@
           "label": "export started"
         },
         {
-          "from": "jobs_q",
+          "from": "silo_q",
           "to": "silo_worker",
           "kind": "async",
           "phase": "Background job",
@@ -627,50 +880,212 @@
           "label": "read + write results"
         }
       ]
+    },
+    {
+      "id": "pooled-heavy-job",
+      "title": "A pooled tenant starts a huge bulk job",
+      "summary": "Rate limits do not help here: one request starts hours of work. Pooled workers cap each tenant at 2 running jobs, and short transactions with a statement timeout cap what each query can cost.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST bulk archive",
+          "detail": "One small request that starts work on two million rows.",
+          "payload": "POST /api/projects/bulk-archive HTTP/2\nHost: globex.app.com\nAuthorization: Bearer eyJ…  (claims: tenant_id=globex)\nIdempotency-Key: 9b77d0\n\n{ \"updated_before\": \"2024-01-01\" }"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect",
+          "detail": "Nothing to block: it is a valid request from a real user."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward"
+        },
+        {
+          "from": "gw",
+          "to": "gw",
+          "kind": "local",
+          "phase": "Gateway",
+          "label": "token, catalog, rate limit",
+          "detail": "The same checks as any request. One request is far under 100 requests/s, which is why rate limits alone cannot stop this kind of load."
+        },
+        {
+          "from": "gw",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Accept",
+          "label": "+ signed tenant context"
+        },
+        {
+          "from": "lb",
+          "to": "app",
+          "kind": "req",
+          "phase": "Accept",
+          "label": "to a healthy instance"
+        },
+        {
+          "from": "app",
+          "to": "pool_db",
+          "kind": "req",
+          "phase": "Accept",
+          "label": "INSERT job row",
+          "detail": "Recorded under row-level security like any other write, so the job belongs to globex. The unique (tenant_id, idempotency_key) makes a retried POST return the same job.",
+          "payload": "INSERT INTO jobs (tenant_id, idempotency_key, kind, status)\nVALUES ('globex', '9b77d0', 'bulk_archive', 'queued')\nON CONFLICT (tenant_id, idempotency_key) DO NOTHING RETURNING id;"
+        },
+        {
+          "from": "pool_db",
+          "to": "app",
+          "kind": "res",
+          "phase": "Accept",
+          "label": "job_77"
+        },
+        {
+          "from": "app",
+          "to": "jobs_q",
+          "kind": "async",
+          "phase": "Accept",
+          "label": "enqueue (tenant=globex)",
+          "detail": "Pooled tenants share one queue and one worker fleet; fairness comes from the per-tenant cap the workers enforce. The 202 is only sent after this enqueue, so if the app dies in between, the client retries with the same idempotency key and the app finds the queued job and enqueues it again. Delivery is at least once, so every job must be safe to run twice; this one is, since each batch only touches rows not yet archived."
+        },
+        {
+          "from": "app",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "lb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "gw",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "archive started"
+        },
+        {
+          "from": "jobs_q",
+          "to": "pool_worker",
+          "kind": "async",
+          "phase": "Claim a slot",
+          "label": "job_77 (tenant=globex)",
+          "detail": "Any pooled worker can take any tenant's job."
+        },
+        {
+          "from": "pool_worker",
+          "to": "pool_db",
+          "kind": "req",
+          "phase": "Claim a slot",
+          "label": "take 1 of globex's 2 slots",
+          "detail": "Each tenant has two slot rows with leases. Row locks with SKIP LOCKED let concurrent workers each take a different free slot, and a crashed worker's lease simply expires. If no slot is free, the worker lets the message reappear after a delay and takes another tenant's job, so globex can queue 50 jobs but only ever runs 2.",
+          "payload": "UPDATE job_slots SET job_id = 'job_77', lease_until = now() + interval '5 minutes'\nWHERE (tenant_id, slot_no) = (\n  SELECT tenant_id, slot_no FROM job_slots\n  WHERE tenant_id = 'globex' AND lease_until < now()\n  LIMIT 1 FOR UPDATE SKIP LOCKED)\nRETURNING slot_no;   -- no row back: globex is at its cap"
+        },
+        {
+          "from": "pool_db",
+          "to": "pool_worker",
+          "kind": "res",
+          "phase": "Claim a slot",
+          "label": "slot 1"
+        },
+        {
+          "from": "pool_worker",
+          "to": "pool_db",
+          "kind": "req",
+          "phase": "Work in batches",
+          "label": "archive 1,000 rows, commit, repeat",
+          "detail": "Each batch is its own short transaction with the tenant and statement timeout set, so no statement holds locks or a connection for long and other tenants' queries get connections between batches. The worker renews its lease as it goes and frees the slot at the end.",
+          "payload": "BEGIN;\nSET LOCAL app.tenant_id = 'globex';\nSET LOCAL statement_timeout = '2s';\nUPDATE projects SET archived = true\nWHERE id IN (SELECT id FROM projects\n  WHERE updated_at < '2024-01-01' AND NOT archived LIMIT 1000);\nCOMMIT;"
+        },
+        {
+          "from": "pool_db",
+          "to": "pool_worker",
+          "kind": "res",
+          "phase": "Work in batches",
+          "label": "1,000 rows"
+        }
+      ]
     }
   ],
   "notes": [
     {
       "kind": "tradeoff",
-      "text": "Pool (shared everything) is cheapest and easiest to operate. Silo (dedicated per tenant) gives the strongest isolation and per-tenant tuning at higher cost. Most products pool by default and silo enterprise customers."
+      "text": "Pool (shared everything) is cheapest and easiest to operate. Silo (dedicated per tenant) gives the strongest isolation and per-tenant tuning at higher cost, and allows customer-managed encryption keys and a dedicated network for compliance. Most products pool by default and silo enterprise customers."
     },
     {
       "target": "pool_db",
       "kind": "security",
-      "text": "Defense in depth: tenant from the signed token, tenant-scoped connections, and row-level security in the database, so one forgotten WHERE clause cannot leak data."
+      "text": "Defense in depth: tenant from the signed token, passed on in a gateway-signed context, and row-level security in the database, so one forgotten WHERE clause cannot leak data. RLS only holds if the app's role does not own the tables and lacks BYPASSRLS, the tables use FORCE ROW LEVEL SECURITY, and the tenant is set with SET LOCAL per transaction: a session-level SET would stay on the pooled connection for the next tenant's request."
     },
     {
       "target": "catalog",
       "kind": "scaling",
-      "text": "Because routing comes from the catalog, a tenant that outgrows the pool can be migrated to its own database by copying data and flipping its catalog entry."
+      "text": "Because routing comes from the catalog, a tenant that outgrows the pool can move to its own database: copy, stream changes, then cut over. Gateways cache entries for 60 s, so the cutover first fences the old copy (the tenant is marked moved in the pool and the write policy rejects its writes), then flips the entry. For up to one TTL a stale gateway still routes there and gets a retryable error rather than writing to the old copy. When one pooled database runs hot, add pool-2 for new tenants; the catalog's db field already allows it."
     },
     {
       "target": "gw",
       "kind": "failure",
-      "text": "Per-tenant limits and per-tenant queues contain incidents: one tenant's runaway script cannot exhaust shared capacity."
+      "text": "Noisy neighbours are contained at three levels: request rate per tenant at the gateway; query cost in the pooled database (a statement timeout and at most 5 of each instance's 20 connections, both from the plan in the signed context); and background work, at most 2 running jobs per tenant on the pooled workers. Silo tenants get their own queue and workers instead."
     },
     {
-      "target": "silo_db",
+      "target": "pool_db",
+      "kind": "failure",
+      "text": "Each database is a writer with a standby replica in another zone. If the writer fails or its zone is lost, the managed service promotes the replica, usually within a minute; writes fail meanwhile, and the app reconnects through the cluster endpoint and retries only idempotent requests. The App Service runs in all three zones, so losing one leaves two thirds of it while autoscaling refills the rest. At peak, 24 instances with 20 connections each is up to 480 connections to the pooled writer, which sizes the database or calls for a connection proxy in front."
+    },
+    {
+      "target": "waf",
       "kind": "security",
-      "text": "Enterprise silos often get customer-managed encryption keys and a dedicated network for compliance."
+      "text": "The WAF on the CDN drops common attacks and floods before they cost gateway capacity, using managed rule sets, per-IP rate rules and bot control. It cannot replace the per-tenant limits at the gateway, which need the verified tenant. The CDN caches only static assets; /api/* is never cached, since every response belongs to one tenant."
+    },
+    {
+      "kind": "security",
+      "text": "Data stores sit in the private data subnet, reachable only from the app subnet. The managed pieces outside the VPC (queues, catalog, key service) are reached through VPC endpoints, so tenant data never crosses the internet. Silo databases are encrypted with the customer's own key in the cloud key service (AWS KMS / Cloud KMS), used by the database service itself, so no request path calls it; the gateway's context-signing key lives in the secrets manager and is rotated with an overlap window."
     }
   ],
   "questions": [
     {
       "id": "noisy-neighbour",
       "q": "One tenant runs a huge import and slows down everyone in the pool. How do you prevent that?",
-      "a": "Apply per-tenant limits at the gateway and per-tenant quotas on expensive work, and move heavy jobs to the queue where concurrency per tenant is capped. Monitor per-tenant usage so one tenant cannot quietly consume the shared capacity. Tenants who consistently need more move to a dedicated tier.",
+      "a": "Rate limits alone do not help, since one request can start hours of work. Run the import on the pooled workers with at most 2 running jobs per tenant, in short batches, and give every pooled transaction a per-tenant statement timeout and connection cap from its plan. Watch query time per tenant, and move tenants who consistently need more to a dedicated tier.",
       "topic": "reliability",
       "targets": [
         "gw",
         "app",
+        "pool_worker",
         "pool_db"
       ]
     },
     {
       "id": "isolation",
       "q": "In the pooled database, how do you make sure a bug never shows one tenant another tenant's data?",
-      "a": "Every table carries a tenant id, and the database enforces it, for example with row-level security bound to the tenant from the verified token, rather than relying on every query remembering a filter. Add tests that try cross-tenant reads. Cache keys must include the tenant id as well.",
+      "a": "Every table carries a tenant id, and the database enforces it with row-level security bound to the tenant from the signed context: set with SET LOCAL in each transaction so a pooled connection never carries it over, under a role that does not own the tables, with RLS forced. Cache keys and job messages carry the tenant id too. Detect what slips through with the app's tenant guard (a mismatch counter that should stay at zero), cross-tenant tests and sampled audits.",
       "topic": "security",
       "targets": [
         "app",
@@ -680,7 +1095,7 @@
     {
       "id": "routing",
       "q": "How does a request find the right database for its tenant?",
-      "a": "The tenant is resolved from the hostname or token, and the tenant catalog maps it to its tier and data location: the pooled database or a dedicated one. The catalog is small and read constantly, so it is cached in each service with short expiry. Moving a tenant updates the catalog, not the code.",
+      "a": "The gateway takes the tenant from the verified token, checks it against the hostname, and looks it up in the catalog, which maps it to its tier and database. It caches entries for 60 s and puts the database id into the context it signs, so the App Service picks its connection pool without a catalog call of its own. Moving a tenant updates the catalog, not the code.",
       "topic": "data",
       "targets": [
         "gw",
@@ -691,7 +1106,7 @@
     {
       "id": "silo-migration",
       "q": "A pooled tenant upgrades to the enterprise tier. How do you move them to a dedicated database without downtime?",
-      "a": "Copy their rows to the new database, then stream ongoing changes until it catches up. Briefly pause writes for that tenant, verify, and switch the catalog entry so new requests go to the new database. Keep the old copy until you are confident, then delete it.",
+      "a": "Copy their rows to the new database, then stream ongoing changes until it catches up. Fence the old copy so it rejects that tenant's writes, let the last changes arrive, verify, and flip the catalog entry. Gateways may still route to the old copy for up to the 60 s cache TTL, where writes fail with a retryable error instead of landing in the wrong place, so the tenant sees about a minute of retries. Keep the old copy until you are confident, then delete it.",
       "topic": "operations",
       "targets": [
         "catalog",
@@ -706,6 +1121,7 @@
       "topic": "operations",
       "targets": [
         "app",
+        "pool_worker",
         "silo_worker"
       ]
     },

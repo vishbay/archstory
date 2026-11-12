@@ -99,7 +99,7 @@
         "id": "timeline-latency",
         "name": "Timeline speed",
         "kind": "latency",
-        "sli": "Timeline requests served within the threshold, divided by all timeline requests, measured at the load balancer",
+        "sli": "Timeline requests answered within the threshold, divided by all timeline requests, measured at the load balancer",
         "target": 99,
         "threshold": "< 200 ms"
       },
@@ -107,16 +107,23 @@
         "id": "timeline-availability",
         "name": "Timeline availability",
         "kind": "availability",
-        "sli": "Timeline requests that succeed, divided by all timeline requests",
+        "sli": "Timeline requests not answered with a 5xx, divided by all timeline requests, measured at the load balancer",
         "target": 99.95
       },
       {
         "id": "post-freshness",
         "name": "Post freshness",
         "kind": "freshness",
-        "sli": "Posts visible in followers' timelines within the threshold, divided by all posts",
+        "sli": "Fanned-out posts whose id reached the followers' timelines within the threshold of being stored, divided by all fanned-out posts, measured by the fan-out workers from the post id's timestamp",
         "target": 99,
         "threshold": "< 5 s"
+      },
+      {
+        "id": "post-success",
+        "name": "Posting works",
+        "kind": "availability",
+        "sli": "POST /api/posts requests not answered with a 5xx, divided by all, measured at the load balancer. Kept separate so a posting outage never hides behind healthy reads.",
+        "target": 99.9
       }
     ],
     "alerts": [
@@ -129,20 +136,51 @@
         "slo": "timeline-availability"
       },
       {
+        "id": "timeline-burn-slow",
+        "severity": "ticket",
+        "when": "Timeline errors burning the error budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "A slow leak of failed reads that would use up the month's budget before anyone is paged.",
+        "target": "lb",
+        "slo": "timeline-availability"
+      },
+      {
         "id": "timeline-slow",
         "severity": "page",
-        "when": "p99 timeline latency above 200 ms for 10 minutes",
+        "when": "Timeline requests over 200 ms burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Slow feeds drive people away even when nothing is failing.",
         "target": "timeline_svc",
         "slo": "timeline-latency"
       },
       {
+        "id": "timeline-slow-slow",
+        "severity": "ticket",
+        "when": "Timeline requests over 200 ms burning the latency budget 3 times too fast (checked over 2 hours and 1 day)",
+        "why": "Gradual slowdown, often a falling post hit ratio or more rebuilds than usual.",
+        "target": "timeline_svc",
+        "slo": "timeline-latency"
+      },
+      {
+        "id": "freshness-burn",
+        "severity": "ticket",
+        "when": "Posts reaching timelines later than 5 s burning the freshness budget 6 times too fast (checked over 30 minutes and 6 hours)",
+        "why": "Timelines are going stale. Reads still work, so it does not page.",
+        "target": "fanout_worker",
+        "slo": "post-freshness"
+      },
+      {
+        "id": "post-burn",
+        "severity": "page",
+        "when": "Post errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "why": "Nobody can post; the feed slowly empties of new content.",
+        "target": "post_svc",
+        "slo": "post-success"
+      },
+      {
         "id": "fanout-age",
         "severity": "ticket",
-        "when": "Age of the oldest fan-out message above 30 seconds for 10 minutes",
+        "when": "Age of the oldest fan-out message above 30 seconds for 10 minutes, or any message in the dead-letter queue",
         "why": "Timelines go stale long before anyone sees an error, so this is the earliest warning.",
-        "target": "fanout_q",
-        "slo": "post-freshness"
+        "target": "fanout_q"
       },
       {
         "id": "cache-memory",
@@ -152,11 +190,25 @@
         "target": "timeline_cache"
       },
       {
+        "id": "post-cache-hit",
+        "severity": "ticket",
+        "when": "Post body hit ratio in the feed cache below 95% for 15 minutes",
+        "why": "Every miss is a posts store read; at this volume a small drop multiplies load and cost on the store.",
+        "target": "timeline_cache"
+      },
+      {
         "id": "worker-errors",
         "severity": "ticket",
         "when": "Fan-out worker failure rate above 1% for 15 minutes",
         "why": "Failed deliveries leave some followers without the post until the retry succeeds.",
         "target": "fanout_worker"
+      },
+      {
+        "id": "posts-throttled",
+        "severity": "ticket",
+        "when": "Posts store throttled requests above 0.1% for 10 minutes",
+        "why": "Hot keys or exhausted capacity; reads fall back to slower retries.",
+        "target": "posts_db"
       }
     ],
     "signals": [
@@ -177,15 +229,34 @@
         "name": "Throttled requests",
         "metric": "store_throttled_total",
         "why": "A viral post creates read spikes on a few keys."
+      },
+      {
+        "target": "timeline_cache",
+        "name": "Post body hit ratio",
+        "metric": "cache_hit_ratio{keyspace=\"post\"}",
+        "why": "Decides how much of ~100M post reads/s at peak reaches the posts store."
+      },
+      {
+        "target": "timeline_svc",
+        "name": "Timeline rebuilds per second",
+        "metric": "timeline_rebuilds_total",
+        "why": "Rises after a cache node loss or a wave of returning users; each one costs ~180 store queries."
+      },
+      {
+        "target": "post_svc",
+        "name": "Posts and timeline loads per minute",
+        "metric": "posts_created_total, timeline_reads_total",
+        "why": "Business view: a drop in posts with healthy servers points at the app or upload path."
       }
     ],
     "debug": [
       {
         "symptom": "Timelines load slowly",
         "steps": [
-          "Open a slow trace: is the time in the cache read, the post lookup or the celebrity merge?",
-          "Check the timeline cache hit ratio and evictions.",
+          "Open a slow trace: is the time in the feed cache reads, the posts store or the celebrity merge?",
+          "Check the feed cache post hit ratio and timeline cache evictions.",
           "Check posts store throttling: a viral post makes hot keys.",
+          "Check timeline rebuilds per second: many rebuilds mean many misses.",
           "Count how many celebrity accounts the user follows: their posts are merged at read time."
         ]
       },
@@ -193,9 +264,17 @@
         "symptom": "New posts do not appear",
         "steps": [
           "Check the fan-out queue age first: it is the best single indicator.",
-          "Look at worker failures and retries.",
+          "Look at worker failures, retries and the dead-letter queue.",
           "Check follower graph latency: fan-out pages through followers.",
           "For celebrities, posts are not fanned out, so check the read-time merge path instead."
+        ]
+      },
+      {
+        "symptom": "A timeline cache node was lost",
+        "steps": [
+          "Confirm the shard's replica was promoted; if it was, only seconds of fan-out writes are missing.",
+          "Watch timeline rebuilds per second and posts store throttling as users on that shard come back.",
+          "If the store throttles, lower the rebuild rate limit: slower rebuilds are better than failed ones."
         ]
       }
     ]
@@ -221,10 +300,22 @@
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
-      "description": "Serves images and video; passes API calls through",
+      "description": "Serves images and video; passes API calls through uncached",
       "cloud": {
         "aws": "CloudFront",
         "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "tier": "entry",
+      "subnet": "none",
+      "description": "Rule set attached to the CDN: managed rules, per-IP rate rules, bot control",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
       }
     },
     {
@@ -234,24 +325,46 @@
       "cloud": {
         "aws": "ALB",
         "gcp": "External Application Load Balancer"
+      },
+      "description": "Public origin; accepts traffic only from the CDN"
+    },
+    {
+      "id": "fanout_q",
+      "label": "Fan-out Queue",
+      "kind": "queue",
+      "cloud": {
+        "aws": "SQS",
+        "gcp": "Pub/Sub"
+      },
+      "description": "PostCreated events; dead-letter queue after 5 failed deliveries"
+    },
+    {
+      "id": "fanout_worker",
+      "label": "Fan-out Workers",
+      "kind": "worker",
+      "description": "Push new post ids into followers' timelines",
+      "cloud": {
+        "aws": "ECS Fargate workers",
+        "gcp": "Cloud Run workers"
       }
     },
     {
       "id": "post_svc",
       "label": "Post Service",
       "kind": "service",
-      "description": "Accepts new posts",
+      "description": "Accepts new posts and media uploads (~20k posts/s at peak)",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
-      }
+      },
+      "replicas": 30
     },
     {
       "id": "timeline_svc",
       "label": "Timeline Service",
       "kind": "service",
-      "replicas": 3,
-      "description": "Builds the home timeline",
+      "replicas": 1000,
+      "description": "Builds the home timeline (~2M reads/s at peak, about 1,000 instances)",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -261,7 +374,7 @@
       "id": "graph_svc",
       "label": "Social Graph Service",
       "kind": "service",
-      "description": "Who follows whom",
+      "description": "Who follows whom; caches each user's list of followed celebrities in memory",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -269,9 +382,9 @@
     },
     {
       "id": "timeline_cache",
-      "label": "Timeline Cache",
+      "label": "Feed Cache",
       "kind": "cache",
-      "description": "Per-user list of the latest ~800 post ids",
+      "description": "Redis cluster sharded by key: per-user timelines (~800 post ids), hot post bodies, celebrities' recent post ids",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -281,7 +394,7 @@
       "id": "graph_db",
       "label": "Follow Graph DB",
       "kind": "sql_db",
-      "description": "follows(follower_id, followee_id)",
+      "description": "follows(follower_id, followee_id), indexed both ways; sharded by user id, read replicas for fan-out",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -291,7 +404,7 @@
       "id": "posts_db",
       "label": "Posts Store",
       "kind": "nosql_db",
-      "description": "Post bodies keyed by post id",
+      "description": "Post bodies keyed by post id, plus an index by author for recent posts",
       "cloud": {
         "aws": "DynamoDB",
         "gcp": "Bigtable"
@@ -306,25 +419,6 @@
         "aws": "S3",
         "gcp": "Cloud Storage"
       }
-    },
-    {
-      "id": "fanout_q",
-      "label": "Fan-out Queue",
-      "kind": "queue",
-      "cloud": {
-        "aws": "SQS",
-        "gcp": "Pub/Sub"
-      }
-    },
-    {
-      "id": "fanout_worker",
-      "label": "Fan-out Workers",
-      "kind": "worker",
-      "description": "Push new post ids into followers' timelines",
-      "cloud": {
-        "aws": "ECS Fargate workers",
-        "gcp": "Cloud Run workers"
-      }
     }
   ],
   "groups": [],
@@ -332,6 +426,10 @@
     {
       "from": "client",
       "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "waf"
     },
     {
       "from": "cdn",
@@ -393,13 +491,17 @@
     {
       "from": "client",
       "to": "dns"
+    },
+    {
+      "from": "client",
+      "to": "media"
     }
   ],
   "flows": [
     {
       "id": "post",
       "title": "Post an update",
-      "summary": "Write path with fan-out on write: store the post once, then push its id into every follower's cached timeline in the background.",
+      "summary": "Write path with fan-out on write: upload the image straight to storage, store the post once, then push its id into every active follower's cached timeline in the background.",
       "steps": [
         {
           "from": "client",
@@ -421,10 +523,108 @@
           "from": "client",
           "to": "cdn",
           "kind": "req",
+          "phase": "Upload media",
+          "label": "POST /api/media",
+          "detail": "Before posting, the app asks for an upload slot for the photo.",
+          "payload": "POST /api/media HTTP/2\nAuthorization: Bearer eyJ…\n\n{ \"type\": \"image/jpeg\", \"bytes\": 2400000 }"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Upload media",
+          "label": "inspect",
+          "detail": "The WAF attached to the CDN checks every request before it reaches the origin: managed rule sets, bot control and per-IP rate rules. Blocked requests get a 403 at the edge."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Upload media",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Upload media",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "post_svc",
+          "kind": "req",
+          "phase": "Upload media",
+          "label": "route"
+        },
+        {
+          "from": "post_svc",
+          "to": "post_svc",
+          "kind": "local",
+          "phase": "Upload media",
+          "label": "sign upload URL",
+          "detail": "Signing is local (no call to storage): the URL allows one PUT of that size and type to one key, for 15 minutes."
+        },
+        {
+          "from": "post_svc",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Upload media",
+          "label": "upload URL"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Upload media",
+          "label": "upload URL"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Upload media",
+          "label": "m_81f2 + signed URL",
+          "payload": "{ \"media_id\": \"m_81f2\", \"upload_url\": \"https://feed-media.s3.amazonaws.com/m_81f2?X-Amz-Signature=…\" }"
+        },
+        {
+          "from": "client",
+          "to": "media",
+          "kind": "req",
+          "phase": "Upload media",
+          "label": "PUT image",
+          "detail": "The bytes go straight to object storage, so the Post Service never carries large files."
+        },
+        {
+          "from": "media",
+          "to": "client",
+          "kind": "res",
+          "phase": "Upload media",
+          "label": "200 OK"
+        },
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
           "phase": "Request in",
           "label": "POST /api/posts",
-          "detail": "Images were already uploaded separately; the post references them by id.",
-          "payload": "POST /api/posts HTTP/2\nAuthorization: Bearer eyJ…\n\n{ \"text\": \"Shipping v2 today!\", \"media_ids\": [\"m_81f2\"] }"
+          "detail": "The post references the uploaded image by id. The idempotency key makes a retried POST safe.",
+          "payload": "POST /api/posts HTTP/2\nAuthorization: Bearer eyJ…\nIdempotency-Key: 3c9e71\n\n{ \"text\": \"Shipping v2 today!\", \"media_ids\": [\"m_81f2\"] }"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect",
+          "detail": "Same WAF rules; a per-account posting rate rule at the Post Service catches spam the per-IP rule misses."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -432,7 +632,7 @@
           "kind": "req",
           "phase": "Request in",
           "label": "forward to origin",
-          "detail": "Writes are never cached; the CDN forwards them to the origin."
+          "detail": "Writes are never cached; the CDN forwards them to the origin after the WAF check."
         },
         {
           "from": "lb",
@@ -440,7 +640,23 @@
           "kind": "req",
           "phase": "Request in",
           "label": "route",
-          "detail": "Stateless Post Service instances sit behind the load balancer."
+          "detail": "Stateless Post Service instances sit behind the load balancer, which starts the trace that every later hop, including the fan-out message, carries.",
+          "payload": "POST /api/posts\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        },
+        {
+          "from": "post_svc",
+          "to": "media",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "HEAD m_81f2",
+          "detail": "Checks the upload finished and belongs to this author before the post may reference it."
+        },
+        {
+          "from": "media",
+          "to": "post_svc",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "200, 2.4 MB"
         },
         {
           "from": "post_svc",
@@ -448,7 +664,7 @@
           "kind": "req",
           "phase": "Store post",
           "label": "PutItem post",
-          "detail": "The post id is a time-sortable Snowflake-style id (timestamp + machine + sequence), so ids sort by time without a global counter.",
+          "detail": "The post id is a time-sortable Snowflake-style id (timestamp + machine + sequence), so ids sort by time without a global counter. The write is conditional on the idempotency key, so a retry cannot create the post twice.",
           "payload": "{ \"post_id\": 1857261298011340800, \"author_id\": 42, \"text\": \"Shipping v2 today!\", \"media\": [\"m_81f2\"] }"
         },
         {
@@ -457,7 +673,7 @@
           "kind": "res",
           "phase": "Store post",
           "label": "OK",
-          "detail": "The post is durable. Everything after this point can be retried."
+          "detail": "The post is durable. If publishing the event below fails, the request fails and the client's retry finds the stored post and publishes again."
         },
         {
           "from": "post_svc",
@@ -466,7 +682,7 @@
           "phase": "Respond & queue fan-out",
           "label": "publish PostCreated",
           "detail": "Fan-out is slow for popular authors, so it happens off the request path.",
-          "payload": "{ \"type\": \"PostCreated\", \"post_id\": 1857261298011340800, \"author_id\": 42 }"
+          "payload": "{ \"type\": \"PostCreated\", \"post_id\": 1857261298011340800, \"author_id\": 42, \"traceparent\": \"00-4bf92f…-01\" }"
         },
         {
           "from": "post_svc",
@@ -498,7 +714,7 @@
           "kind": "async",
           "phase": "Fan out to followers",
           "label": "deliver PostCreated",
-          "detail": "Workers scale with queue depth. A celebrity post does not slow down anyone's request."
+          "detail": "Workers scale with queue depth. A celebrity post is never fanned out, so no single post creates millions of writes. Delivery is at least once, so a post id can occasionally be pushed twice."
         },
         {
           "from": "fanout_worker",
@@ -530,16 +746,16 @@
           "kind": "async",
           "phase": "Fan out to followers",
           "label": "followers page",
-          "detail": "Inactive followers (no login for 30 days) are skipped to save cache memory; their timeline is rebuilt when they return."
+          "detail": "Followers come back in pages; the worker writes one page while it fetches the next."
         },
         {
           "from": "fanout_worker",
           "to": "timeline_cache",
           "kind": "async",
           "phase": "Fan out to followers",
-          "label": "LPUSH + LTRIM ×N",
-          "detail": "Fan-out on write: one small write per follower, pipelined. Each list is trimmed to ~800 ids so memory stays bounded.",
-          "payload": "MULTI\nLPUSH timeline:1001 1857261298011340800\nLTRIM timeline:1001 0 799\n…\nEXEC"
+          "label": "LPUSHX + LTRIM ×N",
+          "detail": "Fan-out on write: one small write per follower, pipelined (not MULTI, since followers' lists sit on different shards). LPUSHX only pushes to a timeline that exists, so inactive followers, whose timelines expired after 30 days idle, cost nothing and get rebuilt when they return. Each list is trimmed to ~800 ids so memory stays bounded.",
+          "payload": "LPUSHX timeline:1001 1857261298011340800\nLTRIM  timeline:1001 0 799\nLPUSHX timeline:1002 1857261298011340800\nLTRIM  timeline:1002 0 799\n…   (pipelined, grouped by shard)"
         }
       ]
     },
@@ -555,6 +771,21 @@
           "phase": "Request in",
           "label": "GET /api/timeline",
           "payload": "GET /api/timeline?limit=50 HTTP/2\nAuthorization: Bearer eyJ…"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect",
+          "detail": "The WAF also blocks scrapers paging through timelines faster than any person reads."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -576,7 +807,8 @@
           "to": "timeline_svc",
           "kind": "req",
           "phase": "Request in",
-          "label": "route"
+          "label": "route",
+          "payload": "GET /api/timeline?limit=50\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
           "from": "timeline_svc",
@@ -584,7 +816,7 @@
           "kind": "req",
           "phase": "Read cached timeline",
           "label": "LRANGE timeline:1001 0 49",
-          "detail": "The timeline was built ahead of time by fan-out, so reading it is one memory lookup."
+          "detail": "The timeline was built ahead of time by fan-out, so reading it is one memory lookup. Each read also pushes the list's 30-day expiry forward, so only idle users' timelines expire."
         },
         {
           "from": "timeline_cache",
@@ -592,7 +824,7 @@
           "kind": "res",
           "phase": "Read cached timeline",
           "label": "50 post ids",
-          "detail": "Sub-millisecond. This is why fan-out on write pays off: reads outnumber writes ~100:1."
+          "detail": "Sub-millisecond. This is why fan-out on write pays off: reads outnumber writes ~100:1. A missing list means the user was inactive; the miss flow rebuilds it."
         },
         {
           "from": "timeline_svc",
@@ -608,15 +840,32 @@
           "kind": "res",
           "phase": "Merge celebrity posts",
           "label": "[nasa, elonmusk]",
-          "detail": "This list is small and heavily cached."
+          "detail": "This list is small and cached in the Graph Service's memory."
+        },
+        {
+          "from": "timeline_svc",
+          "to": "timeline_cache",
+          "kind": "req",
+          "phase": "Merge celebrity posts",
+          "label": "MGET posts + celeb recent ids",
+          "detail": "Hydrate the 50 ids into post bodies and read each followed celebrity's recent post ids, from the same cache cluster under different keys. At ~2M timeline reads/s, 50 posts each, hydrating from the posts store would mean ~100M item reads/s; the cache takes almost all of it. A celebrity's recent list is read by millions, so each Timeline Service instance also keeps those lists in memory for a few seconds, so one hot key cannot overload one shard.",
+          "payload": "MGET post:1857261298011340800 post:1857260911846723584 …\nLRANGE recent:nasa 0 19"
+        },
+        {
+          "from": "timeline_cache",
+          "to": "timeline_svc",
+          "kind": "res",
+          "phase": "Merge celebrity posts",
+          "label": "posts (a few misses)"
         },
         {
           "from": "timeline_svc",
           "to": "posts_db",
           "kind": "req",
           "phase": "Merge celebrity posts",
-          "label": "BatchGet + recent celeb posts",
-          "detail": "Hydrate the 50 ids into full posts and fetch the latest posts by followed celebrities."
+          "label": "BatchGet the misses",
+          "detail": "Only cache misses reach the posts store; the results are written back to the cache.",
+          "payload": "BatchGetItem posts: [ 1857259620013211648, … ]"
         },
         {
           "from": "posts_db",
@@ -631,7 +880,7 @@
           "kind": "local",
           "phase": "Merge celebrity posts",
           "label": "merge by time",
-          "detail": "Merge the two sorted lists by post id (which is time-ordered), then apply ranking if the product has one."
+          "detail": "Merge the two sorted lists by post id (which is time-ordered), dropping any id that appears twice, since fan-out is at least once and a late post can be pushed after newer ones. Then apply ranking if the product has one."
         },
         {
           "from": "timeline_svc",
@@ -665,11 +914,18 @@
         },
         {
           "from": "cdn",
-          "to": "cdn",
-          "kind": "local",
+          "to": "media",
+          "kind": "req",
           "phase": "Load media",
-          "label": "HIT",
-          "detail": "Popular media is almost always cached at the edge."
+          "label": "GET on edge miss",
+          "detail": "Popular media is almost always a HIT at the edge; only the first view in each edge location reaches storage."
+        },
+        {
+          "from": "media",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Load media",
+          "label": "image"
         },
         {
           "from": "cdn",
@@ -677,6 +933,149 @@
           "kind": "res",
           "phase": "Load media",
           "label": "image"
+        }
+      ]
+    },
+    {
+      "id": "rebuild",
+      "title": "Returning user (timeline cache miss)",
+      "summary": "Edge case: an inactive user's timeline was not kept, so it is rebuilt from the follow graph and recent posts, then cached again.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /api/timeline",
+          "detail": "A user who has not opened the app for 40 days comes back.",
+          "payload": "GET /api/timeline?limit=50 HTTP/2\nAuthorization: Bearer eyJ…"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "timeline_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "timeline_svc",
+          "to": "timeline_cache",
+          "kind": "req",
+          "phase": "Cache miss",
+          "label": "LRANGE timeline:2002 0 49",
+          "detail": "Fan-out skipped this user while inactive, so the list expired."
+        },
+        {
+          "from": "timeline_cache",
+          "to": "timeline_svc",
+          "kind": "res",
+          "phase": "Cache miss",
+          "label": "empty"
+        },
+        {
+          "from": "timeline_svc",
+          "to": "graph_svc",
+          "kind": "req",
+          "phase": "Rebuild",
+          "label": "who does 2002 follow?",
+          "detail": "The Graph Service reads the follower-keyed index, so this is one shard."
+        },
+        {
+          "from": "graph_svc",
+          "to": "graph_db",
+          "kind": "req",
+          "phase": "Rebuild",
+          "label": "SELECT followee_id",
+          "payload": "SELECT followee_id FROM follows WHERE follower_id = 2002;   -- 180 rows"
+        },
+        {
+          "from": "graph_db",
+          "to": "graph_svc",
+          "kind": "res",
+          "phase": "Rebuild",
+          "label": "180 followees"
+        },
+        {
+          "from": "graph_svc",
+          "to": "timeline_svc",
+          "kind": "res",
+          "phase": "Rebuild",
+          "label": "180 followees"
+        },
+        {
+          "from": "timeline_svc",
+          "to": "posts_db",
+          "kind": "req",
+          "phase": "Rebuild",
+          "label": "recent posts per followee",
+          "detail": "Queries the author index for each followee's latest posts, in parallel, and keeps the newest 800 overall. Slower than a cache read (tens of ms), which is why it is reserved for returning users.",
+          "payload": "Query posts_by_author: author_id = :f, post_id > :since, newest first, limit 20   (×180, parallel)"
+        },
+        {
+          "from": "posts_db",
+          "to": "timeline_svc",
+          "kind": "res",
+          "phase": "Rebuild",
+          "label": "post ids"
+        },
+        {
+          "from": "timeline_svc",
+          "to": "timeline_cache",
+          "kind": "req",
+          "phase": "Write back",
+          "label": "RPUSH + EXPIRE",
+          "detail": "Store the rebuilt list so the next read is a hit and fan-out starts reaching it again. Rebuilds are rate-limited per cache shard so a lost cache node cannot turn into a stampede on the posts store.",
+          "payload": "RPUSH timeline:2002 1857261298011340800 … (800 ids)\nEXPIRE timeline:2002 2592000"
+        },
+        {
+          "from": "timeline_cache",
+          "to": "timeline_svc",
+          "kind": "res",
+          "phase": "Write back",
+          "label": "OK"
+        },
+        {
+          "from": "timeline_svc",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 OK"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 OK"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 OK",
+          "detail": "The returning user waits a little longer once; every later read is a normal cache hit."
         }
       ]
     }
@@ -689,12 +1088,12 @@
     {
       "target": "timeline_cache",
       "kind": "scaling",
-      "text": "200M users × 800 ids × 8 bytes ≈ 1.3 TB. Use a Redis cluster sharded by user id, and only keep timelines for recently active users."
+      "text": "200M users × 800 ids × 8 bytes ≈ 1.3 TB of timeline ids, plus hot post bodies, Redis overhead and a replica per shard. Use a Redis cluster sharded by key (user id for timelines, post id for bodies); timelines expire after 30 days idle and fan-out skips missing ones (LPUSHX), so only active users cost memory. Fan-out writes are the real load: 500M posts × ~200 followers is ~100B list pushes a day, over 1M/s on average, spread across the shards. A separate post cache cluster is the usual next step when the two workloads need different sizing."
     },
     {
       "target": "fanout_worker",
       "kind": "failure",
-      "text": "If fan-out falls behind, timelines are a few seconds stale but reads keep working. The queue absorbs bursts like a celebrity post."
+      "text": "If fan-out falls behind, timelines are a few seconds stale but reads keep working. The queue absorbs bursts. Delivery is at least once, so the read path drops duplicate ids; a message that keeps failing goes to the dead-letter queue instead of blocking the rest."
     },
     {
       "target": "posts_db",
@@ -705,34 +1104,44 @@
       "target": "cdn",
       "kind": "scaling",
       "text": "Media is most of the bytes. Serving it from the CDN keeps the origin small."
+    },
+    {
+      "target": "graph_db",
+      "kind": "scaling",
+      "text": "About 40B follow edges (200M users × ~200), stored twice (by follower and by followee) and sharded by user id across several Aurora clusters, each a writer with a standby in another zone. Fan-out paging reads go to read replicas, since there is roughly one page query per post, ~20k/s at peak."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The WAF on the CDN stops bots, scrapers and floods at the edge; the load balancer only accepts traffic from the CDN, so it cannot be bypassed. Behind it, the data stores sit in the private data subnet, and the managed stores and queue (posts store, media bucket, fan-out queue) are reached through VPC endpoints rather than the internet."
     }
   ],
   "questions": [
     {
       "id": "celebrity",
       "q": "A celebrity with 50 million followers posts. Why is fan-out on write a problem, and what do you do?",
-      "a": "Writing one entry into 50 million timelines takes minutes and floods the cache and queue. Use a hybrid: fan out on write for normal accounts, but skip it for accounts above a follower threshold and merge their recent posts into the timeline at read time. Readers pay a small merge cost; the system avoids huge write storms.",
+      "a": "Writing one entry into 50 million timelines takes minutes and floods the cache and queue. Use a hybrid: fan out on write for normal accounts, but skip it for accounts above a follower threshold (~100k here) and merge their recent posts into the timeline at read time. Each celebrity's recent posts are read by millions, so they are served from the cache; readers pay a small merge cost and the system avoids huge write storms.",
       "topic": "scale",
       "targets": [
         "fanout_worker",
-        "timeline_cache",
-        "posts_db"
+        "timeline_cache"
       ]
     },
     {
       "id": "timeline-cache-lost",
       "q": "The timeline cache loses a node. What do users see and how do you recover?",
-      "a": "Users whose timelines lived on that node get a cache miss. The timeline service rebuilds those timelines on read from the follow graph and recent posts, which is slower but correct, and writes them back. Keep the cache replicated across zones so one node loss does not cause a rebuild storm.",
+      "a": "Users whose timelines lived on that node get a cache miss. The timeline service rebuilds those timelines on read from the follow graph and the posts store's author index, which is slower but correct, and writes them back. Keep each cache shard replicated across zones so one node loss promotes a replica instead, and rate-limit rebuilds so a lost shard cannot cause a rebuild storm.",
       "topic": "reliability",
       "targets": [
         "timeline_cache",
-        "timeline_svc"
+        "timeline_svc",
+        "posts_db"
       ]
     },
     {
       "id": "ordering",
       "q": "How do you keep posts in a sensible order when they arrive late or out of order?",
-      "a": "Order by a timestamp or a time-sortable id (like a Snowflake id) generated when the post is created, not by arrival time in the fan-out queue. Timelines store post ids sorted by that key, so a delayed fan-out still lands in the right place. Ranked feeds sort by score instead, but still need stable ids for paging.",
+      "a": "Order by a time-sortable id (like a Snowflake id) generated when the post is created, not by arrival time in the fan-out queue. The cached lists are appended in arrival order, so the read sorts each page by id and drops duplicates (fan-out is at least once); a very late post can still land a page off, which feeds accept. Ranked feeds sort by score instead, but still need stable ids for paging.",
       "topic": "consistency",
       "targets": [
         "timeline_svc",
@@ -752,7 +1161,7 @@
     {
       "id": "follow-graph",
       "q": "How would you store the follow graph so both \"who do I follow\" and \"who follows me\" are fast?",
-      "a": "Store each edge twice, once keyed by follower and once by followee, so both lookups are a single partition read. Partition by user id. For accounts with millions of followers, page through the follower list during fan-out rather than loading it at once.",
+      "a": "Store each edge twice, indexed once by follower and once by followee, and shard both by that user id, so either lookup reads one shard. At ~40B edges that means several database clusters, with replicas taking the fan-out reads. For accounts with millions of followers, page through the follower list during fan-out rather than loading it at once.",
       "topic": "data",
       "targets": [
         "graph_svc",
@@ -762,12 +1171,13 @@
     {
       "id": "media",
       "q": "Where do photos and videos in posts go, and why not through the post service?",
-      "a": "Clients upload media directly to object storage with a short-lived signed URL and the post only stores a reference. Viewers fetch media through the CDN. Pushing large files through the post service would tie up its workers and bandwidth for no benefit.",
+      "a": "Clients upload media directly to object storage with a short-lived signed URL from the Post Service, and the post only stores a reference after the service checks the upload exists. Viewers fetch media through the CDN. Pushing large files through the post service would tie up its workers and bandwidth for no benefit.",
       "topic": "performance",
       "targets": [
         "media",
         "cdn",
-        "post_svc"
+        "post_svc",
+        "client"
       ]
     }
   ]
