@@ -744,6 +744,11 @@
       "target": "counter",
       "kind": "tradeoff",
       "text": "Exact real-time view counts are expensive and not needed. Batch aggregation trades a minute of delay for orders of magnitude fewer writes."
+    },
+    {
+      "target": "cdn",
+      "kind": "tradeoff",
+      "text": "At list prices the estimate calculator puts this design near $1B a month, almost all of it CDN egress for about 0.9 EB a day. Nobody pays list price at this scale: large streamers sign committed CDN contracts at a small fraction of a cent per GB, peer directly with internet providers, and place their own cache servers inside ISP networks (Netflix Open Connect, Google Global Cache), so most bytes never cross a paid link. In an interview, give the list-price number, then say egress is the cost to attack and how."
     }
   ],
   "questions": [
