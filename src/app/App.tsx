@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './app.css'
 import { LIBRARY } from '../library'
 import { parseDesign, type Design } from '../model/schema'
 import type { Cloud } from '../model/kinds'
-import { COMPACT_BELOW, panelInsets, store, usePlayer, useTheme, useViewportWidth } from './hooks'
+import { COMPACT_BELOW, panelInsets, useBars, store, usePlayer, useTheme, useViewportWidth } from './hooks'
 import { BandCanvas, type ZoneState } from './BandCanvas'
 import { AvailabilityMenu, ExportImageButton, RegionsMenu, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
 import { layoutZones, resolveFlow } from '../layout/zones'
@@ -82,7 +82,8 @@ export function App() {
   useEffect(() => onOpenAiSettings(() => setAiOpen(true)), [])
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
   const viewport = useViewportWidth()
-  const insets = panelInsets(viewport, leftOpen, rightOpen)
+  const bar = useBars(viewport)
+  const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars }
   const net = network && !!design.network
   const zoneCount = design.network?.zones ?? 1
   const failedZone = net && failed !== null && failed < zoneCount ? failed : null
@@ -200,8 +201,8 @@ export function App() {
       )}
 
       <ReactFlowProvider>
-      <main className="stage">
-        <Toolbar>
+      <main className="stage" style={{ '--bars': `${bar.bars}px` } as CSSProperties}>
+        <Toolbar barRef={bar.ref}>
           <Seg label="View" value={view} onChange={setView}
             options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow }]} />
           {view === 'canvas' && <>

@@ -141,3 +141,18 @@ export function useTabStrip(active: string) {
   }, [active])
   return ref
 }
+
+const TOPBAR_H = 48
+/** On wide screens the top bar and canvas toolbar float over the canvas: how much of its top they cover, following the
+ *  toolbar as it wraps. Attach `ref` to the toolbar; 0 on the stacked small-screen layout. */
+export function useBars(width: number) {
+  const [h, setH] = useState(48)
+  const ro = useRef<ResizeObserver | null>(null)
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    ro.current?.disconnect()
+    if (!el) return
+    ro.current = new ResizeObserver(() => setH(el.offsetHeight))
+    ro.current.observe(el); setH(el.offsetHeight)
+  }, [])
+  return { ref, bars: width <= 900 ? 0 : TOPBAR_H + h }
+}

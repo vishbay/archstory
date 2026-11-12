@@ -208,8 +208,8 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
   const pad = (top: number, bottom: number, side: number) =>
     ({ top: px(top + (insets.top ?? 0)), bottom: px(bottom), left: px(insets.left + side), right: px(insets.right + side) })
   useEffect(() => { if (edit) requestAnimationFrame(() => rf.fitView({ duration: 250, padding: pad(24, 24, 24) })) },
-    // refit the editor when components are added or removed
-    [count]) // eslint-disable-line react-hooks/exhaustive-deps
+    // refit the editor when components are added or removed, or the toolbar above it wraps
+    [count, insets.top]) // eslint-disable-line react-hooks/exhaustive-deps
   const net = network && !!design.network
   const regional = zone.zl?.unit === 'region'
   const zoned = !!zone.zl && (regional || (net && zonesView))

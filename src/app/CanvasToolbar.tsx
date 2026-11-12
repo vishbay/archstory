@@ -6,8 +6,8 @@ import type { Cloud } from '../model/kinds'
 import { zoneName } from '../model/availability'
 import { exportCanvasImage } from './exportImage'
 
-export function Toolbar({ children }: { children: ReactNode }) {
-  return <div className="toolbar" role="toolbar" aria-label="Canvas">{children}</div>
+export function Toolbar({ children, barRef }: { children: ReactNode; barRef?: (el: HTMLDivElement | null) => void }) {
+  return <div ref={barRef} className="toolbar" role="toolbar" aria-label="Canvas">{children}</div>
 }
 export const ToolbarSep = () => <span className="tb-sep" aria-hidden />
 export const ToolbarLabel = ({ children }: { children: ReactNode }) => <span className="tb-group-label">{children}</span>

@@ -1,6 +1,6 @@
 // Practice mode: build your own answer to a library or imported problem on the same tier-band canvas, record request flows
 // by clicking components, then check it against the reference design.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { edgeId, TIERS, type Design } from '../model/schema'
 import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
@@ -14,7 +14,7 @@ import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { Section } from './Sidebar'
-import { panelInsets, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
+import { panelInsets, useBars, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
 import { QuickAdd, Shortcuts } from './QuickAdd'
@@ -99,7 +99,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
 
   const viewport = useViewportWidth()
   const [phoneNote, setPhoneNote] = useState(() => !store.get('archstory.phoneNote', false))
-  const insets = panelInsets(viewport, leftOpen, rightOpen)
+  const bar = useBars(viewport)
+  const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars }
   const sideFits = viewport > 900 && viewport - insets.left - insets.right >= SIDE_MIN
   if (side && !sideFits) setWhose('mine')
   const shown = showRef ? ref : attempt
@@ -297,8 +298,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
       )}
 
       <ReactFlowProvider>
-      <main className="stage">
-        <Toolbar>
+      <main className="stage" style={{ '--bars': `${bar.bars}px` } as CSSProperties}>
+        <Toolbar barRef={bar.ref}>
           <Seg label="View" value={view} onChange={setView}
             options={[{ key: 'canvas', label: 'Architecture' }, { key: 'timeline', label: 'Timeline', disabled: !flow?.steps.length }]} />
           <Seg label="Whose design" value={whose}
@@ -372,7 +373,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
                   <p className="side-legend">Outlined on the reference: kinds of component your answer does not have yet. Outlined on yours: extras the reference does without.</p>
                 </div>
               : <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={{ ...insets, top: timerTop }} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
+                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={{ ...insets, top: insets.top + (timerTop ?? 0) }} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={edit} />}
           {!showRef && !side && attempt.nodes.length === 0 && (
             <div className="empty-hint">
