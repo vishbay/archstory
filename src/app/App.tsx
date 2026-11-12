@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './app.css'
@@ -30,6 +30,7 @@ import { Tour } from './Tour'
 import { EXPLORE_TOUR, PRACTICE_TOUR } from './tourSteps'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Numbers } from './Numbers'
+import { ProfileCard } from './ProfileCard'
 
 type View = 'canvas' | 'timeline'
 const MINE_KEY = 'archstory.myDesigns'
@@ -147,6 +148,14 @@ export function App() {
     const a = Object.assign(document.createElement('a'), { href: url, download: `${d.id}.json` })
     a.click(); URL.revokeObjectURL(url)
   }
+  // Five quick clicks on the logo show the author's GitHub card.
+  const [profile, setProfile] = useState(false)
+  const clicks = useRef<number[]>([])
+  const logoClick = () => {
+    const now = Date.now(), c = clicks.current
+    clicks.current = c.length && now - c[c.length - 1] < 600 ? [...c, now] : [now]   // a slower click starts a new run
+    if (clicks.current.length >= 5) { clicks.current = []; setProfile(true) }
+  }
   const themeIcon = theme.pref === 'system' ? '◐' : theme.pref === 'light' ? '☀' : '☾'
 
   return (
@@ -156,7 +165,7 @@ export function App() {
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the requirements and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
             title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'requirements and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
         )}
-        <button className="brand" onClick={() => setMode('home')} title="Home">Arch<span>Story</span></button>
+        <button className="brand" onClick={() => { setMode('home'); logoClick() }} title="Home">Arch<span>Story</span></button>
         {mode !== 'home' && <>
           <span className="sep" />
           <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog"
@@ -256,6 +265,7 @@ export function App() {
       {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
       <ConfirmDialog />
+      {profile && <ProfileCard onClose={() => setProfile(false)} />}
       {estimating && <EstimateDialog problem={design} cloud={cloud} onClose={() => setEstimating(false)} />}
       {drill && <DrillDialog designs={[...LIBRARY, ...mine]} onlyId={drill.id} onClose={() => setDrill(null)} />}
       {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
