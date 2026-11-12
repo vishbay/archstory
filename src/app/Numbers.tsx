@@ -10,6 +10,8 @@ import { onOpenNumbers } from './numbersBus'
 import { store } from './hooks'
 
 type Tab = 'scale' | 'estimate'
+/** Room the pill takes at the top of the canvas, so fitting the view leaves it clear. */
+export const NUMBERS_H = 40
 const HEADLINES = ['write-qps', 'read-qps', 'storage-total', 'bw-out', 'cache', 'instances']
 
 export function Numbers({ design, cloud, onCalculator }: { design: Design; cloud: Cloud; onCalculator: () => void }) {

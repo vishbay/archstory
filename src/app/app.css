@@ -1046,3 +1046,6 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 .profile-card p { margin: 0 0 10px; }
 .profile-stats { display: flex; gap: 16px; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
 .profile-stats b { color: var(--text); }
+/* side by side: the pill sits after the "Your answer" label, and each pane's zoom controls stay near its own top */
+.stage-body:has(.side-by-side) .numbers { left: calc(var(--pl) + 128px); top: calc(var(--bars) + 15px); }
+.side-pane .react-flow__panel.top { margin-top: 40px; }

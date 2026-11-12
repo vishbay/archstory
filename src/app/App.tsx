@@ -29,7 +29,7 @@ import { Home } from './Home'
 import { Tour } from './Tour'
 import { EXPLORE_TOUR, PRACTICE_TOUR } from './tourSteps'
 import { ConfirmDialog } from './ConfirmDialog'
-import { Numbers } from './Numbers'
+import { Numbers, NUMBERS_H } from './Numbers'
 import { ProfileCard } from './ProfileCard'
 
 type View = 'canvas' | 'timeline'
@@ -89,7 +89,7 @@ export function App() {
   const stacked = viewport <= 900
   const leftOpen = leftPref || stacked, rightOpen = rightPref || stacked
   const bar = useBars(viewport)
-  const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars }
+  const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars + NUMBERS_H }   // the canvas fits below the Numbers pill too
   const net = network && !!design.network
   const zoneCount = design.network?.zones ?? 1
   const failedZone = net && failed !== null && failed < zoneCount ? failed : null

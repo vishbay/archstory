@@ -14,7 +14,7 @@ import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
 import { NumbersHint, Section } from './Sidebar'
-import { Numbers } from './Numbers'
+import { Numbers, NUMBERS_H } from './Numbers'
 import { panelInsets, useBars, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
@@ -102,7 +102,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const viewport = useViewportWidth()
   const [phoneNote, setPhoneNote] = useState(() => !store.get('archstory.phoneNote', false))
   const bar = useBars(viewport)
-  const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars }
+  const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars + NUMBERS_H }   // the canvas fits below the Numbers pill too
   const sideFits = viewport > 900 && viewport - insets.left - insets.right >= SIDE_MIN
   if (side && !sideFits) setWhose('mine')
   const shown = showRef ? ref : attempt
