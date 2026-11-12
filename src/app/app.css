@@ -783,3 +783,68 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 .est-cost { margin: 12px 0; }
 .est-cost summary { cursor: pointer; font-weight: 600; }
 .est-cost h4 { margin: 14px 0 4px; }
+
+/* ---------- landing: practise any question (animated walkthrough) ---------- */
+.howto-import { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 24px; align-items: center; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+.howto-import h2 { margin: 0 0 4px; }
+.howto-import > .hti-text > p { margin: 0 0 12px; }
+.hti-steps { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 4px; }
+.hti-steps button { display: flex; gap: 10px; align-items: flex-start; width: 100%; height: auto; padding: 8px 10px; text-align: left; border: 1px solid transparent; border-radius: 10px; background: none; color: var(--text); font: inherit; }
+.hti-steps button:hover { background: var(--surface-2); }
+.hti-steps button.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.hti-steps b { display: block; font-size: 14px; }
+.hti-body { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.hti-num { flex-shrink: 0; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font-size: 12px; font-weight: 700; background: var(--surface-3); color: var(--muted); }
+.hti-steps button.on .hti-num { background: var(--accent); color: var(--on-accent); }
+.hti-screen { border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; background: var(--canvas); box-shadow: 0 10px 30px #0f172a14; }
+.hti-bar { display: flex; align-items: center; gap: 5px; padding: 7px 10px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 11.5px; color: var(--muted); }
+.hti-bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.hti-bar span { margin-left: 6px; }
+.hti-body-area { height: 280px; padding: 14px; display: grid; place-items: center; }
+.hti-progress { height: 3px; background: var(--surface-3); }
+.hti-progress i { display: block; height: 100%; background: var(--accent); transform-origin: left; animation: hti-grow linear forwards; }
+.hti-progress i.still { animation: none; transform: scaleX(0); }
+@keyframes hti-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.hti-dialog { position: relative; width: min(100%, 340px); display: grid; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 12.5px; box-shadow: 0 6px 18px #0f172a12; }
+.hti-label { color: var(--muted); font-size: 11.5px; }
+.hti-input { padding: 6px 8px; border: 1px solid var(--accent); border-radius: 7px; background: var(--surface); }
+.hti-type { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: bottom; width: 0; border-right: 1.5px solid var(--accent); animation: hti-type 1.8s steps(28) .3s forwards, blink 1s step-end infinite; }
+@keyframes hti-type { to { width: 28ch; } }
+.hti-row { display: flex; gap: 6px; flex-wrap: wrap; } .hti-row.end { justify-content: flex-end; }
+.hti-btn { padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); font-size: 11.5px; }
+.hti-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.hti-press { animation: hti-press .5s ease both; }
+@keyframes hti-press { 0%, 100% { transform: none; } 40% { transform: scale(.92); box-shadow: 0 0 0 4px var(--accent-soft); } }
+.hti-toast { justify-self: start; padding: 3px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-text); font-size: 11.5px; }
+.hti-code { margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font: 11px/1.4 var(--mono); white-space: pre; overflow: hidden; }
+.hti-valid { color: var(--easy); font-weight: 600; }
+.hti-in { opacity: 0; animation: hti-in .35s ease forwards; }
+@keyframes hti-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.hti-pop { opacity: 0; transform-box: fill-box; transform-origin: center; animation: hti-pop .35s ease forwards; }
+@keyframes hti-pop { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: none; } }
+
+.hti-canvas { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.hti-canvas:has(.hti-caption) { grid-template-columns: 1fr; justify-items: center; }
+.hti-svg { width: 100%; max-width: 200px; height: auto; }
+.hti-svg line { stroke: var(--border-strong); stroke-width: 1.5; }
+.hti-svg rect { fill: var(--surface); stroke: var(--border-strong); }
+.hti-svg text { font: 600 9.5px var(--font, system-ui); fill: var(--text); text-anchor: middle; }
+.hti-packet { fill: var(--accent); }
+.hti-caption { font-size: 12px; color: var(--muted); text-align: center; } .hti-caption b { color: var(--accent-text); margin-right: 4px; }
+.hti-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12px; max-width: 170px; }
+.hti-checks .ok { color: var(--easy); font-weight: 700; } .hti-checks .warn { color: var(--medium); font-weight: 700; }
+
+@media (max-width: 760px) {
+  .howto-import { grid-template-columns: 1fr; padding: 16px; }
+  .hti-body-area { height: 300px; padding: 10px; }
+  .hti-canvas { grid-template-columns: 1fr; justify-items: center; }
+  .hti-svg { max-width: 180px; }
+  .hti-code { font-size: 10px; }
+  .hti-checks { max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hti-in, .hti-pop, .hti-type, .hti-press { animation: none; opacity: 1; width: auto; transform: none; }
+  .hti-type { border-right: 0; }
+  .hti-packet { display: none; }
+}
