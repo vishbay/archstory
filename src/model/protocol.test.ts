@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
 import { parseDesign } from './schema'
-import { fmtRtt, rttTimes, stateAt, stateChanges, stepDelay } from './protocol'
+import { fmtRtt, phaseBudget, phaseOfStep, rttTimes, stateAt, stateChanges, stepDelay } from './protocol'
 
 const base = {
   schema: 'archstory/v1', id: 'p', meta: { title: 'P', kind: 'protocol' },
@@ -79,5 +79,33 @@ describe('actor state', () => {
   })
   it('marks only real changes', () => {
     expect(stateChanges(flow)).toEqual([{ a: 'X', b: 'L' }, {}, { b: 'M' }])
+  })
+})
+
+describe('time budget', () => {
+  const steps = [
+    { from: 'a', to: 'a', phase: 'Caches' },
+    { from: 'a', to: 'b', phase: 'DNS', delay: 0.2 }, { from: 'b', to: 'a', delay: 0.2 },
+    { from: 'a', to: 'b', phase: 'TCP' }, { from: 'b', to: 'a' },
+    { from: 'a', to: 'b', phase: 'HTTP' }, { from: 'a', to: 'b', delay: 0 }, { from: 'b', to: 'a' },
+  ]
+  it('sums each phase\'s one-way delays into round trips, in order, including phases that cost nothing', () => {
+    const b = phaseBudget(steps)
+    expect(b.map(x => x.name)).toEqual(['Caches', 'DNS', 'TCP', 'HTTP'])
+    expect(b.map(x => x.rtt)).toEqual([0, 0.2, 1, 1])
+    expect(b.reduce((t, x) => t + x.rtt, 0)).toBeCloseTo(rttTimes(steps).at(-1)!)
+  })
+  it('names steps before the first phase "Start" and folds a repeated phase into its first entry', () => {
+    const b = phaseBudget([{ from: 'a', to: 'b' }, { from: 'b', to: 'a', phase: 'X' }, { from: 'a', to: 'b', phase: 'Y' }, { from: 'b', to: 'a', phase: 'X' }])
+    expect(b).toEqual([{ name: 'Start', rtt: 0.5 }, { name: 'X', rtt: 1 }, { name: 'Y', rtt: 0.5 }])
+    expect(phaseBudget([])).toEqual([])
+    expect(phaseBudget([{ from: 'a', to: 'b' }])).toEqual([{ name: 'Start', rtt: 0.5 }])
+  })
+  it('finds the phase of a step, continuing unnamed steps', () => {
+    expect(phaseOfStep(steps, -1)).toBeUndefined()
+    expect(phaseOfStep(steps, 2)).toBe('DNS')
+    expect(phaseOfStep(steps, 7)).toBe('HTTP')
+    expect(phaseOfStep(steps, 8)).toBeUndefined()
+    expect(phaseOfStep([{ phase: undefined }], 0)).toBe('Start')
   })
 })

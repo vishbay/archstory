@@ -6,12 +6,13 @@ import { isProtocol, type Design, type Flow, type StepKind } from '../model/sche
 import { colorOf, iconOf, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { cloudIconUrl } from '../model/cloudIcons'
 import { layoutBands } from '../layout/bands'
-import { fmtRtt, rttTimes, stateAt, stateChanges } from '../model/protocol'
+import { fmtRtt, phaseBudget, phaseOfStep, rttTimes, stateAt, stateChanges } from '../model/protocol'
 import { Packet } from './Packet'
 import { KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 
 const ROW = 46
+const LABEL_EM = 6.6   // rough width of one label character (.tl-label is 11px), enough to tell whether a label fits
 const fit = (s: string, n = 17) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s)
 
 export function Timeline({ design, flow, player, cloud, onSelect }: {
@@ -31,6 +32,10 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
   }, [design, flow])
   const times = useMemo(() => rttTimes(flow.steps), [flow])
   const changes = useMemo(() => stateChanges(flow), [flow])
+  const budget = useMemo(() => (proto ? phaseBudget(flow.steps) : []), [proto, flow])
+  const curPhase = phaseOfStep(flow.steps, step)
+  // The bar and its labels show the phases that cost time; the ones that cost none (local cache checks, rendering) are named in the tooltip.
+  const paid = budget.filter(b => b.rtt > 0), free = budget.filter(b => b.rtt <= 0).map(b => b.name)
   const states = proto ? stateAt(flow, step) : {}
   const cx = Object.fromEntries(parts.map((p, i) => [p.id, GUT + i * COL + COL / 2]))
   const W = GUT + parts.length * COL + 24, H = HEAD + flow.steps.length * ROW + 24
@@ -54,9 +59,30 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
   return (
     <div className={`timeline${proto ? ' proto' : ''}`} ref={scroller}>
       {proto && (
-        <div className="tl-clock" role="status" aria-live="polite" title="Elapsed time, counting every message as one one-way trip (half a round trip)">
-          <span className="muted">Time so far</span> <b>{fmtRtt(step >= 0 ? times[step] : 0)}</b>
-          <span className="muted"> of {fmtRtt(total)}</span>
+        <div className="tl-top">
+          <div className="tl-clock" role="status" aria-live="polite" title="Elapsed time, counting every message as one one-way trip (half a round trip)">
+            <span className="muted">Time so far</span> <b>{fmtRtt(step >= 0 ? times[step] : 0)}</b>
+            <span className="muted"> of {fmtRtt(total)}</span>
+          </div>
+          {budget.length >= 2 && (
+            <div className="tl-budget" aria-label="Time budget by phase, in round trips"
+              title={`Round trips spent in each phase${free.length ? `. No network time: ${free.join(', ')}` : ''}`}>
+              <span className="muted">Time budget</span>
+              <span className="tlb-bar" aria-hidden="true">
+                {paid.map(b => (
+                  <i key={b.name} className={b.name === curPhase ? 'cur' : ''} style={{ flexGrow: b.rtt }} />
+                ))}
+              </span>
+              <span className="tlb-legend">
+                {paid.map(b => (
+                  <span key={b.name} className={`tlb-chip${b.name === curPhase ? ' cur' : ''}`} data-phase={b.name} title={`${b.name}: ${fmtRtt(b.rtt)}`}>
+                    {b.name} <b>{Number(b.rtt.toFixed(2))}</b>
+                  </span>
+                ))}
+                <span className="muted">RTT</span>
+              </span>
+            </div>
+          )}
         </div>
       )}
       <svg width={W} height={H}>
@@ -98,7 +124,10 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
           const y = HEAD + i * ROW + ROW / 2
           const c = KIND_VAR[s.kind]
           const x1 = cx[s.from], x2 = cx[s.to], local = s.from === s.to
-          const path = local ? `M${x1},${y - 8} h34 v16 h-34` : `M${x1},${y} L${x2},${y}`
+          // A local step's loop and label go to the right, or to the left when the label would run past the edge (the last column).
+          const left = local && x1 + 40 + s.label.length * LABEL_EM > W - 4
+          const side = left ? -1 : 1
+          const path = local ? `M${x1},${y - 8} h${34 * side} v16 h${-34 * side}` : `M${x1},${y} L${x2},${y}`
           return (
             <g key={i} opacity={i < step ? 0.8 : i === step ? 1 : 0.22} onClick={() => jump(i)} style={{ cursor: 'pointer' }}>
               <rect x={0} y={y - ROW / 2} width={W} height={ROW} className={i === step ? 'tl-row cur' : 'tl-row'} />
@@ -106,14 +135,19 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
               {proto && <text x={10} y={y + 12} className="tl-time">{fmtRtt(times[i])}</text>}
               <path d={path} fill="none" style={{ stroke: c }} strokeWidth={i === step ? 2.5 : 1.6}
                 strokeDasharray={dash[s.kind]} markerEnd={`url(#arr-${s.kind})`} />
-              <text x={local ? x1 + 40 : (x1 + x2) / 2} y={local ? y + 4 : y - 7} textAnchor={local ? 'start' : 'middle'}
+              <text x={local ? x1 + 40 * side : (x1 + x2) / 2} y={local ? y + 4 : y - 7} textAnchor={local ? (left ? 'end' : 'start') : 'middle'}
                 className="tl-label" style={{ fill: c }}>{s.label}</text>
-              {Object.entries(changes[i]).map(([id, v]) => cx[id] !== undefined && (
-                <g key={id} className="tl-change" data-actor={id}>
-                  <circle cx={cx[id]} cy={y} r={4.5} />
-                  <text x={cx[id] + (local && id === s.from ? -8 : 8)} y={y + 16} textAnchor={local && id === s.from ? 'end' : 'start'}>{v}</text>
-                </g>
-              ))}
+              {Object.entries(changes[i]).map(([id, v]) => {
+                if (cx[id] === undefined) return null
+                // State text goes on the side away from a local step's loop.
+                const away = local && id === s.from ? -side : 1
+                return (
+                  <g key={id} className="tl-change" data-actor={id}>
+                    <circle cx={cx[id]} cy={y} r={4.5} />
+                    <text x={cx[id] + 8 * away} y={y + 16} textAnchor={away < 0 ? 'end' : 'start'}>{v}</text>
+                  </g>
+                )
+              })}
               {i === step && <Packet key={`${flow.id}-${i}-${nonce}`} path={path} ms={packetMs} color={c} />}
             </g>
           )

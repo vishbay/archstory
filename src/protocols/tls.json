@@ -1,0 +1,1653 @@
+{
+  "schema": "archstory/v1",
+  "id": "tls",
+  "meta": {
+    "title": "TLS 1.3",
+    "summary": "How a browser and a web server agree on keys, prove the server's identity and start encrypting, message by message, on top of a TCP connection that is already open (the clock starts after the TCP handshake). Labels use the RFC's brackets: {} sent with handshake keys, [] with application keys, () with early data keys.",
+    "tags": [
+      "security",
+      "encryption",
+      "handshake"
+    ],
+    "difficulty": "hard",
+    "source": "RFC 8446 (TLS 1.3, including appendix A state names), RFC 8448 (example TLS 1.3 handshake traces), RFC 7301 (ALPN), RFC 6066 (server_name and status_request), RFC 6962 (certificate transparency), RFC 9113 (HTTP/2 preface and SETTINGS)",
+    "kind": "protocol",
+    "order": 3
+  },
+  "requirements": {
+    "functional": [
+      "Agrees on fresh keys with an ephemeral Diffie-Hellman exchange (x25519 or P-256) carried in the ClientHello and ServerHello",
+      "Authenticates the server: a certificate chain that leads to a trusted root, then a signature over the whole handshake with the certificate's private key",
+      "Protects everything after the ServerHello: extensions, the certificate and both Finished messages travel under handshake keys",
+      "Hands out session tickets so the next connection can resume with a pre-shared key, optionally sending its first request in the very first flight (0-RTT)"
+    ],
+    "nonFunctional": [
+      "One round trip on top of TCP before the client can send its request (TLS 1.2 needed two)",
+      "Forward secrecy for every full handshake: stealing the server's long-term key later does not decrypt recorded traffic",
+      "0-RTT early data saves a round trip on resumption but is not forward secret and can be replayed, so only idempotent requests belong in it",
+      "A wrong key_share guess costs a whole extra round trip (HelloRetryRequest), which is why clients guess the groups servers almost always support",
+      "The name of the site (SNI) still goes in the clear unless Encrypted Client Hello is used"
+    ],
+    "scale": [
+      {
+        "label": "Full handshake",
+        "value": "1 RTT after TCP, so the request leaves at 1 RTT and the response is back at 2"
+      },
+      {
+        "label": "Resumption with 0-RTT",
+        "value": "request in the first flight, response back after 1 RTT"
+      },
+      {
+        "label": "HelloRetryRequest",
+        "value": "2 RTT before the client can send"
+      },
+      {
+        "label": "Mandatory cipher suite (RFC 8446 9.1)",
+        "value": "TLS_AES_128_GCM_SHA256 (0x1301)"
+      },
+      {
+        "label": "Mandatory key exchange (RFC 8446 9.1)",
+        "value": "secp256r1 MUST, X25519 SHOULD"
+      },
+      {
+        "label": "Ticket lifetime",
+        "value": "at most 604,800 s (7 days)"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Browser",
+      "kind": "web_client",
+      "description": "The TLS client: opens the connection, offers what it supports, checks the server's certificate"
+    },
+    {
+      "id": "server",
+      "label": "Web server",
+      "kind": "service",
+      "description": "The TLS server for www.example.com on port 443: picks the parameters and proves who it is with its certificate and private key"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "server",
+      "label": "TLS records over TCP",
+      "protocol": "TLS 1.3 over TCP 443"
+    }
+  ],
+  "flows": [
+    {
+      "id": "full",
+      "title": "Full handshake (1-RTT)",
+      "summary": "A first connection: one round trip of hellos and the server's encrypted flight, then the client's Finished leaves together with its first request. The server hands out a session ticket at the end.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Hello",
+          "label": "Make an x25519 key pair",
+          "detail": "The TCP connection to www.example.com:443 is already open (the TCP module shows that round trip), so the clock here starts at zero when TLS begins. The client makes a fresh, single-use key pair for the key exchange. It must guess which group the server will accept; x25519 is the usual first guess. Both sides are in START, the RFC 8446 appendix A name for 'nothing sent yet'.",
+          "state": {
+            "client": "START",
+            "server": "START"
+          },
+          "fields": [
+            {
+              "name": "group",
+              "value": "x25519 (0x001D)",
+              "note": "RFC 8446 9.1: implementations SHOULD support X25519 and MUST support secp256r1"
+            },
+            {
+              "name": "private key",
+              "value": "<32 bytes, never sent>",
+              "note": "Ephemeral: thrown away after the handshake, which is what makes forward secrecy possible"
+            },
+            {
+              "name": "public key",
+              "value": "<32 bytes>",
+              "note": "Goes into the key_share extension"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ClientHello",
+          "detail": "The client's whole offer in one plaintext message: the versions, cipher suites, groups and signature algorithms it supports, plus a key share for its guessed group, so the server can finish the key exchange in its first reply. The legacy fields keep old middleboxes happy; the real version negotiation happens in supported_versions. The client now waits for the ServerHello (WAIT_SH); when it arrives the server is in RECVD_CH.",
+          "state": {
+            "client": "WAIT_SH",
+            "server": "RECVD_CH"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ClientHello",
+              "note": "Handshake type client_hello (1)"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext",
+              "note": "No keys exist yet: anyone on the path can read every field"
+            },
+            {
+              "name": "legacy_version",
+              "value": "0x0303",
+              "note": "Says TLS 1.2 on purpose; TLS 1.3 is offered in supported_versions"
+            },
+            {
+              "name": "random",
+              "value": "<32 bytes>"
+            },
+            {
+              "name": "legacy_session_id",
+              "value": "<32 bytes>",
+              "note": "Non-empty only for middlebox compatibility mode (appendix D.4); the server echoes it"
+            },
+            {
+              "name": "cipher_suites",
+              "value": "TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256",
+              "note": "In 1.3 a suite names only the record cipher and the hash; key exchange and signatures are negotiated separately"
+            },
+            {
+              "name": "supported_versions",
+              "value": "0x0304 (TLS 1.3), 0x0303 (TLS 1.2)"
+            },
+            {
+              "name": "supported_groups",
+              "value": "x25519, secp256r1, secp384r1",
+              "note": "Every group the client could use, in preference order"
+            },
+            {
+              "name": "key_share",
+              "value": "x25519: <32-byte public key>",
+              "note": "A share only for the guessed group; a wrong guess costs a HelloRetryRequest"
+            },
+            {
+              "name": "signature_algorithms",
+              "value": "ecdsa_secp256r1_sha256, rsa_pss_rsae_sha256, rsa_pkcs1_sha256, ...",
+              "note": "What the client accepts in CertificateVerify and in certificates"
+            },
+            {
+              "name": "server_name (SNI)",
+              "value": "www.example.com",
+              "note": "In the clear, so the server can pick the right certificate; an observer sees it too"
+            },
+            {
+              "name": "ALPN",
+              "value": "h2, http/1.1",
+              "note": "RFC 7301: the application protocols the client can speak, in preference order"
+            },
+            {
+              "name": "psk_key_exchange_modes",
+              "value": "psk_dhe_ke (1)",
+              "note": "Tells the server which kind of session ticket the client will accept: PSK combined with a fresh (EC)DHE"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Server flight",
+          "label": "Pick parameters",
+          "detail": "The server picks from the client's lists: TLS 1.3, a cipher suite, the x25519 group (the client already sent a share for it, so no retry is needed), a certificate for www.example.com that matches the client's signature algorithms, and h2 from the ALPN list. It is now NEGOTIATED.",
+          "state": {
+            "server": "NEGOTIATED"
+          },
+          "fields": [
+            {
+              "name": "version",
+              "value": "TLS 1.3 (0x0304)"
+            },
+            {
+              "name": "cipher_suite",
+              "value": "TLS_AES_128_GCM_SHA256 (0x1301)",
+              "note": "The mandatory-to-implement suite; SHA-256 is the transcript and key schedule hash from now on"
+            },
+            {
+              "name": "group",
+              "value": "x25519"
+            },
+            {
+              "name": "certificate",
+              "value": "www.example.com, ECDSA P-256 key",
+              "note": "Chosen by SNI and signature_algorithms"
+            },
+            {
+              "name": "ALPN",
+              "value": "h2"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Derive handshake keys",
+          "detail": "The server makes its own x25519 key pair, combines its private key with the client's public share and gets the shared secret. That goes into the key schedule (HKDF) with a hash of the transcript so far, ClientHello and the ServerHello it is about to send, and out come one handshake traffic secret per direction. Everything it sends after the ServerHello is encrypted with these.",
+          "fields": [
+            {
+              "name": "(EC)DHE shared secret",
+              "value": "X25519(server private, client public)",
+              "note": "The same value the client will compute from the other two halves; never sent"
+            },
+            {
+              "name": "Handshake Secret",
+              "value": "HKDF-Extract(Derive-Secret(Early Secret, \"derived\", \"\"), shared secret)"
+            },
+            {
+              "name": "client_handshake_traffic_secret",
+              "value": "Derive-Secret(HS, \"c hs traffic\", ClientHello...ServerHello)"
+            },
+            {
+              "name": "server_handshake_traffic_secret",
+              "value": "Derive-Secret(HS, \"s hs traffic\", ClientHello...ServerHello)"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "ServerHello",
+          "detail": "The only server message in the clear. It carries the server's choices and its own key share. When it arrives (1 RTT) the client can compute the same shared secret and the same handshake keys, so it moves to WAIT_EE: everything after this is encrypted. Its random value also carries the downgrade check: if the server had negotiated TLS 1.2 or lower, the last 8 bytes would spell DOWNGRD.",
+          "state": {
+            "client": "WAIT_EE"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ServerHello",
+              "note": "Handshake type server_hello (2)"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "legacy_version",
+              "value": "0x0303"
+            },
+            {
+              "name": "random",
+              "value": "<32 bytes>",
+              "note": "For TLS 1.3 the last 8 bytes are random; 44 4F 57 4E 47 52 44 01 would mean the server was pushed down to TLS 1.2"
+            },
+            {
+              "name": "legacy_session_id_echo",
+              "value": "<the client's 32 bytes>"
+            },
+            {
+              "name": "cipher_suite",
+              "value": "TLS_AES_128_GCM_SHA256 (0x1301)"
+            },
+            {
+              "name": "supported_versions",
+              "value": "0x0304",
+              "note": "This, not legacy_version, is what says TLS 1.3"
+            },
+            {
+              "name": "key_share",
+              "value": "x25519: <32-byte public key>"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "Derive handshake keys",
+          "detail": "The client computes X25519(client private, server public), the same shared secret, and runs the same key schedule over the same transcript. Now it can decrypt the rest of the server's flight, which was sent right behind the ServerHello and arrives with it. In middlebox compatibility mode a dummy change_cipher_spec record also arrives here and is ignored.",
+          "fields": [
+            {
+              "name": "(EC)DHE shared secret",
+              "value": "X25519(client private, server public)"
+            },
+            {
+              "name": "keys",
+              "value": "client and server handshake traffic secrets",
+              "note": "Each expands into an AES-128-GCM key and IV for one direction"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{EncryptedExtensions}",
+          "detail": "The server's answers to the client's extensions that are not needed for the key exchange, now hidden from observers: the chosen application protocol and an empty server_name to say it used the SNI. In TLS 1.2 these sat in the plaintext ServerHello.",
+          "state": {
+            "client": "WAIT_CERT_CR"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "EncryptedExtensions",
+              "note": "Handshake type encrypted_extensions (8)"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys",
+              "note": "On the wire the record says application_data (23); the real type is inside the encryption"
+            },
+            {
+              "name": "ALPN",
+              "value": "h2",
+              "note": "HTTP/2 will run on this connection"
+            },
+            {
+              "name": "server_name",
+              "value": "(empty)",
+              "note": "An empty extension: 'I used your SNI'"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Certificate}",
+          "detail": "The certificate chain: the leaf for www.example.com first, then the intermediate that signed it. The root is not sent; the client must already have it. In TLS 1.3 this is encrypted, so a passive observer no longer sees which certificate the server presented.",
+          "state": {
+            "client": "WAIT_CV"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Certificate",
+              "note": "Handshake type certificate (11)"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            },
+            {
+              "name": "certificate_request_context",
+              "value": "(empty)",
+              "note": "Zero length for a server certificate; it only matters for client certificates"
+            },
+            {
+              "name": "certificate_list[0]",
+              "value": "CN=www.example.com, SAN www.example.com, example.com",
+              "note": "The leaf, DER-encoded X.509"
+            },
+            {
+              "name": "certificate_list[1]",
+              "value": "Example Intermediate CA",
+              "note": "Signed by a root in the client's trust store"
+            },
+            {
+              "name": "entry extensions",
+              "value": "status_request: <stapled OCSP response>",
+              "note": "OCSP stapling: in TLS 1.3 the response rides in the leaf's CertificateEntry, only if the client asked for it"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "Check the chain",
+          "detail": "The client builds a path from the leaf through the intermediate to a root it already trusts, checks every signature on the way, checks that today is inside each certificate's validity dates, that the leaf's subjectAltName covers www.example.com, and the revocation and certificate transparency evidence its policy requires. Shown as one step after the message for clarity; implementations do this while processing the Certificate.",
+          "fields": [
+            {
+              "name": "path",
+              "value": "leaf -> Example Intermediate CA -> trusted root",
+              "note": "Each certificate's signature checks out with the next one's public key"
+            },
+            {
+              "name": "name",
+              "value": "www.example.com in subjectAltName",
+              "note": "Modern clients match the SAN, not the CN"
+            },
+            {
+              "name": "validity",
+              "value": "notBefore <= now <= notAfter, for every certificate"
+            },
+            {
+              "name": "result",
+              "value": "trusted, but not yet proven to be this server's",
+              "note": "Anyone can replay a certificate; the next message proves possession of the private key"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{CertificateVerify}",
+          "detail": "A signature with the certificate's private key over a hash of the whole handshake so far. It proves the server holds the key for the certificate it just sent, and because the transcript includes both key shares, it also proves no one swapped them.",
+          "state": {
+            "client": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "CertificateVerify",
+              "note": "Handshake type certificate_verify (15)"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            },
+            {
+              "name": "algorithm",
+              "value": "ecdsa_secp256r1_sha256"
+            },
+            {
+              "name": "signed content",
+              "value": "64 x 0x20, \"TLS 1.3, server CertificateVerify\", 0x00, Transcript-Hash(ClientHello...Certificate)",
+              "note": "The prefix and context string stop the signature being reused anywhere else"
+            },
+            {
+              "name": "signature",
+              "value": "<DER-encoded ECDSA signature>"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "Check the signature",
+          "detail": "The client checks the signature with the public key from the leaf certificate it just validated. If it verifies, the party at the other end holds www.example.com's private key."
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Finished}",
+          "detail": "A MAC over the entire handshake with a key derived from the server's handshake secret. It confirms the server saw exactly the same messages as the client. This closes the server's first flight: ServerHello to Finished all left together. With no client certificate requested, the server goes through WAIT_FLIGHT2 to WAIT_FINISHED.",
+          "state": {
+            "server": "WAIT_FLIGHT2"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished",
+              "note": "Handshake type finished (20)"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            },
+            {
+              "name": "verify_data",
+              "value": "HMAC(finished_key, Transcript-Hash(ClientHello...CertificateVerify))",
+              "note": "32 bytes with SHA-256; finished_key = HKDF-Expand-Label(server_handshake_traffic_secret, \"finished\", \"\", 32)"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Derive app keys",
+          "detail": "The transcript through its own Finished is enough for the server to derive the application traffic secrets. It did not ask for a client certificate, so it moves on from WAIT_FLIGHT2 to WAIT_FINISHED and waits only for the client's Finished.",
+          "state": {
+            "server": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "Master Secret",
+              "value": "HKDF-Extract(Derive-Secret(HS, \"derived\", \"\"), 0)"
+            },
+            {
+              "name": "client_application_traffic_secret_0",
+              "value": "Derive-Secret(MS, \"c ap traffic\", ClientHello...server Finished)"
+            },
+            {
+              "name": "server_application_traffic_secret_0",
+              "value": "Derive-Secret(MS, \"s ap traffic\", ClientHello...server Finished)"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "[SETTINGS] 0.5-RTT data",
+          "detail": "The server may send application data right after its Finished, before it hears from the client (0.5-RTT data, RFC 8446 section 2). Here it is the HTTP/2 server preface, a SETTINGS frame. The catch: the server has not yet seen the client's Finished, so it has no proof the client is live or saw the same handshake, and if client certificates were in use it would not yet know who the client is. So this data must not depend on who the client is.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data",
+              "note": "HTTP/2 SETTINGS frame, the server's connection preface (RFC 9113 3.4)"
+            },
+            {
+              "name": "protection",
+              "value": "server application keys"
+            },
+            {
+              "name": "SETTINGS",
+              "value": "MAX_CONCURRENT_STREAMS=100, INITIAL_WINDOW_SIZE=65535",
+              "note": "Example values; each server picks its own"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Client Finished",
+          "label": "Check Finished, derive app keys",
+          "detail": "The client checks the server's Finished MAC against its own transcript, then derives the same application traffic secrets. Its next message, Finished, takes it to CONNECTED. It sends that at 1 RTT, and it does not need to wait for anything else before sending its request.",
+          "fields": [
+            {
+              "name": "server Finished",
+              "value": "matches",
+              "note": "Otherwise abort with decrypt_error"
+            },
+            {
+              "name": "keys",
+              "value": "client and server application traffic secrets"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "{Finished}",
+          "detail": "The client's own MAC over the transcript, still under the client handshake keys. It leaves at 1 RTT and arrives at 1.5. When it checks out, the server is CONNECTED too and knows the handshake was not tampered with. In compatibility mode a dummy change_cipher_spec record goes just before it.",
+          "state": {
+            "client": "CONNECTED",
+            "server": "CONNECTED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished",
+              "note": "Handshake type finished (20)"
+            },
+            {
+              "name": "protection",
+              "value": "client handshake keys"
+            },
+            {
+              "name": "verify_data",
+              "value": "HMAC(finished_key, Transcript-Hash(ClientHello...server Finished))",
+              "note": "finished_key from client_handshake_traffic_secret"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Request",
+          "label": "[GET /]",
+          "detail": "The first request goes in the same flight as the client's Finished (delay 0), so it reaches the server at 1.5 RTT: one round trip of TLS on top of TCP's one. It opens with the HTTP/2 client preface and SETTINGS, then the request on stream 1.",
+          "payload": ":method: GET\n:scheme: https\n:authority: www.example.com\n:path: /",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data",
+              "note": "HTTP/2 preface, SETTINGS, then a HEADERS frame on stream 1"
+            },
+            {
+              "name": "protection",
+              "value": "client application keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "[NewSessionTicket]",
+          "detail": "After the client's Finished, the server sends a ticket for the next connection. The PSK it stands for is derived from the resumption secret, whose transcript includes the client's Finished, which is why the RFC lets the server send it only after that (or once it can compute that transcript itself). The early_data extension says the next connection may use 0-RTT. A server may send several, for example so a browser can open parallel connections later; each should be used once.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "NewSessionTicket",
+              "note": "Handshake type new_session_ticket (4), a post-handshake message"
+            },
+            {
+              "name": "protection",
+              "value": "server application keys"
+            },
+            {
+              "name": "ticket_lifetime",
+              "value": "86400 s",
+              "note": "Example value: one day. The RFC caps it at 604,800 s (7 days)"
+            },
+            {
+              "name": "ticket_age_add",
+              "value": "<4 random bytes>",
+              "note": "Hides the ticket's age on the wire when it is used"
+            },
+            {
+              "name": "ticket_nonce",
+              "value": "<unique per ticket>",
+              "note": "PSK = HKDF-Expand-Label(resumption_master_secret, \"resumption\", ticket_nonce, 32)"
+            },
+            {
+              "name": "ticket",
+              "value": "<opaque bytes>",
+              "note": "A lookup key or the server's own encrypted state; the client cannot read it"
+            },
+            {
+              "name": "early_data",
+              "value": "max_early_data_size: 16384",
+              "note": "Example value: how many bytes of 0-RTT data the server will take"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "[200 OK]",
+          "detail": "The response, sent right behind the ticket. It reaches the client 2 RTT after TLS started, 3 RTT after the TCP SYN.",
+          "payload": ":status: 200\ncontent-type: text/html",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data",
+              "note": "HTTP/2 HEADERS and DATA on stream 1"
+            },
+            {
+              "name": "protection",
+              "value": "server application keys"
+            }
+          ],
+          "delay": 0
+        }
+      ]
+    },
+    {
+      "id": "resume",
+      "title": "Resumption with 0-RTT early data",
+      "summary": "A later connection uses the ticket from the full handshake: no certificate this time, and the request rides in the first flight, so the response is back after one round trip. The last step shows what changes if the server says no to early data.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Hello",
+          "label": "Load the ticket, derive early keys",
+          "detail": "Hours later the browser opens a new TCP connection to www.example.com (already open here). It still holds the ticket from the full handshake, inside its lifetime, so it derives the PSK and from it the early secret, a binder key and the key for early data. It also makes a fresh x25519 key pair so the new session gets forward secrecy for everything after the first flight.",
+          "state": {
+            "client": "START",
+            "server": "START"
+          },
+          "fields": [
+            {
+              "name": "PSK",
+              "value": "HKDF-Expand-Label(resumption_master_secret, \"resumption\", ticket_nonce, 32)"
+            },
+            {
+              "name": "Early Secret",
+              "value": "HKDF-Extract(0, PSK)"
+            },
+            {
+              "name": "binder_key",
+              "value": "Derive-Secret(Early Secret, \"res binder\", \"\")"
+            },
+            {
+              "name": "client_early_traffic_secret",
+              "value": "Derive-Secret(Early Secret, \"c e traffic\", ClientHello)"
+            },
+            {
+              "name": "key pair",
+              "value": "fresh x25519"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ClientHello + early_data",
+          "detail": "The same kind of ClientHello as before, plus the ticket in pre_shared_key (always the last extension) and an early_data flag that says application data follows right away. The binder is an HMAC over this ClientHello with a key from the PSK, which proves the client really holds the PSK.",
+          "state": {
+            "client": "WAIT_SH",
+            "server": "RECVD_CH"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ClientHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "key_share",
+              "value": "x25519: <32-byte public key>",
+              "note": "Lets the server mix in a fresh (EC)DHE, or fall back to a full handshake"
+            },
+            {
+              "name": "server_name, ALPN",
+              "value": "www.example.com; h2, http/1.1",
+              "note": "For 0-RTT the server must select the same ALPN as the original connection"
+            },
+            {
+              "name": "psk_key_exchange_modes",
+              "value": "psk_dhe_ke (1)"
+            },
+            {
+              "name": "early_data",
+              "value": "(empty)",
+              "note": "A flag: 0-RTT application data follows this message"
+            },
+            {
+              "name": "pre_shared_key.identity",
+              "value": "<the ticket bytes>, obfuscated_ticket_age",
+              "note": "obfuscated_ticket_age = ticket age in ms + ticket_age_add, mod 2^32"
+            },
+            {
+              "name": "pre_shared_key.binder",
+              "value": "<32-byte HMAC>",
+              "note": "Over the ClientHello up to the binders, keyed from binder_key"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "(GET /) 0-RTT data",
+          "detail": "The request leaves right behind the ClientHello (delay 0) and reaches the server at 0.5 RTT, before any key exchange has finished. It is encrypted with keys from the PSK alone, so it is not forward secret, and an attacker who recorded these packets can send them again: nothing in TLS stops the same ClientHello and early data being replayed. Browsers only put idempotent requests here, like this GET.",
+          "payload": ":method: GET\n:scheme: https\n:authority: www.example.com\n:path: /",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data",
+              "note": "HTTP/2 preface, SETTINGS and the request"
+            },
+            {
+              "name": "protection",
+              "value": "client early data keys",
+              "note": "From client_early_traffic_secret"
+            },
+            {
+              "name": "size limit",
+              "value": "<= max_early_data_size (16384)",
+              "note": "From the ticket"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Server flight",
+          "label": "Accept PSK and 0-RTT",
+          "detail": "The server decrypts the ticket, recomputes the PSK and checks the binder. To defend against replay it accepts the ticket only once (it records used tickets, or the ClientHello, in a store shared by its servers) and only if the ticket age the client claims fits the time since it was issued, within a small window. The version, cipher suite and ALPN match the original session, so it accepts early data.",
+          "state": {
+            "server": "NEGOTIATED"
+          },
+          "fields": [
+            {
+              "name": "binder",
+              "value": "valid"
+            },
+            {
+              "name": "replay check",
+              "value": "ticket not seen before; age within the window",
+              "note": "RFC 8446 section 8: single-use tickets, ClientHello recording, freshness checks"
+            },
+            {
+              "name": "same as original",
+              "value": "TLS 1.3, TLS_AES_128_GCM_SHA256, h2"
+            },
+            {
+              "name": "decision",
+              "value": "PSK with (EC)DHE, early data accepted"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "ServerHello + pre_shared_key",
+          "detail": "The server picks the first (only) PSK and adds its own key share, so the session keys come from the PSK and a fresh x25519 secret together. There is no certificate to send: holding the PSK already proves this is the server from the earlier connection.",
+          "state": {
+            "client": "WAIT_EE"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ServerHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "pre_shared_key",
+              "value": "selected_identity: 0",
+              "note": "To accept early data the server must pick the client's first PSK"
+            },
+            {
+              "name": "key_share",
+              "value": "x25519: <32-byte public key>"
+            },
+            {
+              "name": "supported_versions",
+              "value": "0x0304"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{EncryptedExtensions}",
+          "detail": "An early_data extension here means 'I accepted your early data'. With a PSK there is no Certificate or CertificateVerify, so the client goes straight from WAIT_EE to WAIT_FINISHED.",
+          "state": {
+            "client": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "EncryptedExtensions"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            },
+            {
+              "name": "early_data",
+              "value": "(empty)",
+              "note": "Present: 0-RTT accepted. Absent: rejected"
+            },
+            {
+              "name": "ALPN",
+              "value": "h2"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Finished}",
+          "detail": "The server's Finished closes its flight. Because it accepted 0-RTT, it now reads the client's early data with the early data keys and waits for EndOfEarlyData (WAIT_EOED).",
+          "state": {
+            "server": "WAIT_EOED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Run the early GET",
+          "detail": "The server decrypts the early request and serves it at once. HTTP can mark such requests (RFC 8470: an Early-Data header to the origin, and 425 Too Early to make the client retry after the handshake) so an application can refuse anything not safe to replay.",
+          "fields": [
+            {
+              "name": "request",
+              "value": "GET / (safe, idempotent)"
+            },
+            {
+              "name": "if not safe",
+              "value": "425 Too Early",
+              "note": "RFC 8470: the client then repeats it after the handshake"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "[200 OK]",
+          "detail": "The response goes right behind the server's Finished, with application keys, and reaches the client at 1 RTT. A full handshake would bring it at 2 RTT.",
+          "payload": ":status: 200\ncontent-type: text/html",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data"
+            },
+            {
+              "name": "protection",
+              "value": "server application keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Client Finished",
+          "label": "Check Finished, derive app keys",
+          "detail": "The client checks the server's Finished; with a PSK this MAC is what authenticates the server. Then it derives the application keys."
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "(EndOfEarlyData)",
+          "detail": "Sent because the server accepted early data: it marks the end of 0-RTT data and the switch from early data keys to handshake keys. It is the last thing sent with the early data keys. The server moves on through WAIT_FLIGHT2 to WAIT_FINISHED (no client certificate).",
+          "state": {
+            "server": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "EndOfEarlyData",
+              "note": "Handshake type end_of_early_data (5), an empty message"
+            },
+            {
+              "name": "protection",
+              "value": "client early data keys"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "{Finished}",
+          "detail": "The client's Finished, under handshake keys, right behind EndOfEarlyData. Both sides are CONNECTED, and later requests use the application keys, which do include the fresh x25519 secret.",
+          "state": {
+            "client": "CONNECTED",
+            "server": "CONNECTED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished"
+            },
+            {
+              "name": "protection",
+              "value": "client handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "If refused",
+          "label": "What if the server says no",
+          "detail": "Had the ticket been used before, been too old, or the server not wanted early data, its EncryptedExtensions would carry no early_data. The server then skips the early records (they fail to decrypt with handshake keys, up to max_early_data_size) and the client sends no EndOfEarlyData, sends its Finished and resends the GET with application keys. The response comes at 2 RTT, as in a full handshake, though resumption still skips the certificate. If the server rejects the PSK altogether it falls back to a full handshake using the client's key_share.",
+          "fields": [
+            {
+              "name": "EncryptedExtensions",
+              "value": "no early_data",
+              "note": "The rejection signal"
+            },
+            {
+              "name": "server",
+              "value": "skips early records that fail to decrypt"
+            },
+            {
+              "name": "client",
+              "value": "no EndOfEarlyData; resends GET after its Finished"
+            },
+            {
+              "name": "response at",
+              "value": "2 RTT instead of 1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hrr",
+      "title": "HelloRetryRequest: wrong key share guess",
+      "summary": "The client sends a key share only for x25519, but this server only allows P-256 (secp256r1). The server asks it to try again, which costs a full extra round trip.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "First try",
+          "label": "Guess x25519",
+          "detail": "The TCP connection is already open. The client lists x25519 and secp256r1 in supported_groups but, to keep the ClientHello small and save work, sends a key share only for x25519. This server is configured for P-256 only (for example a strict compliance setting).",
+          "state": {
+            "client": "START",
+            "server": "START"
+          },
+          "fields": [
+            {
+              "name": "supported_groups",
+              "value": "x25519, secp256r1"
+            },
+            {
+              "name": "key_share",
+              "value": "x25519 only"
+            },
+            {
+              "name": "server accepts",
+              "value": "secp256r1 only"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ClientHello (x25519 share)",
+          "detail": "The same ClientHello as in a full handshake.",
+          "state": {
+            "client": "WAIT_SH",
+            "server": "RECVD_CH"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ClientHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "supported_groups",
+              "value": "x25519, secp256r1"
+            },
+            {
+              "name": "key_share",
+              "value": "x25519: <32-byte public key>"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "No usable key share",
+          "detail": "The server finds a group both support, secp256r1, but has no share for it, so it cannot compute a shared secret. Instead of failing it asks for another ClientHello. It replaces the first ClientHello in its transcript by a message_hash of it, so it can stay stateless if it wants (with a cookie).",
+          "fields": [
+            {
+              "name": "common group",
+              "value": "secp256r1",
+              "note": "In the client's supported_groups, but not in its key_share"
+            },
+            {
+              "name": "transcript",
+              "value": "message_hash(Hash(ClientHello1)), HelloRetryRequest, ..."
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "HelloRetryRequest",
+          "detail": "A ServerHello with a special random value: the SHA-256 of the string \"HelloRetryRequest\". It names the group the client should use. Sending it puts the server back in START; receiving it puts the client back in START, and it arrives at 1 RTT with nothing negotiated yet.",
+          "state": {
+            "server": "START",
+            "client": "START"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "HelloRetryRequest",
+              "note": "Type server_hello (2) on the wire; recognised by its random"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "random",
+              "value": "CF 21 AD 74 E5 9A 61 11 BE 1D 8C 02 1E 65 B8 91 C2 A2 11 16 7A BB 8C 5E 07 9E 09 E2 C8 A8 33 9C",
+              "note": "SHA-256(\"HelloRetryRequest\"), fixed by RFC 8446 4.1.3"
+            },
+            {
+              "name": "cipher_suite",
+              "value": "TLS_AES_128_GCM_SHA256 (0x1301)",
+              "note": "The ServerHello must repeat this choice"
+            },
+            {
+              "name": "supported_versions",
+              "value": "0x0304"
+            },
+            {
+              "name": "key_share",
+              "value": "selected_group: secp256r1 (0x0017)",
+              "note": "Only the group, no share"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Second try",
+          "label": "Make a P-256 key pair",
+          "detail": "The client checks that secp256r1 was in its supported_groups and was not already in its key_share (otherwise it must abort with illegal_parameter), then makes a P-256 key pair.",
+          "fields": [
+            {
+              "name": "public key",
+              "value": "<65 bytes: 0x04, X, Y>",
+              "note": "Uncompressed point form, the only form TLS 1.3 uses"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ClientHello (P-256 share)",
+          "detail": "The second ClientHello is the first one with the key_share replaced (and a cookie added if the server sent one). It must not offer early_data. It leaves at 1 RTT and arrives at 1.5.",
+          "state": {
+            "client": "WAIT_SH",
+            "server": "RECVD_CH"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ClientHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "key_share",
+              "value": "secp256r1: <65-byte public key>"
+            },
+            {
+              "name": "early_data",
+              "value": "not allowed after a HelloRetryRequest"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Pick parameters, derive keys",
+          "detail": "Now the server has a share it can use. From here it is the full handshake, one round trip late.",
+          "state": {
+            "server": "NEGOTIATED"
+          }
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "ServerHello",
+          "detail": "Arrives at 2 RTT. The client checks the cipher suite is the one the HelloRetryRequest named.",
+          "state": {
+            "client": "WAIT_EE"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ServerHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "key_share",
+              "value": "secp256r1: <65-byte public key>"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{EncryptedExtensions}",
+          "detail": "As in the full handshake.",
+          "state": {
+            "client": "WAIT_CERT_CR"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "EncryptedExtensions"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Certificate}",
+          "detail": "As in the full handshake.",
+          "state": {
+            "client": "WAIT_CV"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Certificate"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{CertificateVerify}",
+          "detail": "The signed transcript now covers the message_hash of the first ClientHello, the HelloRetryRequest and everything after.",
+          "state": {
+            "client": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "CertificateVerify"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Finished}",
+          "detail": "The server's flight ends; with no client certificate it goes through WAIT_FLIGHT2 to WAIT_FINISHED.",
+          "state": {
+            "server": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Finish",
+          "label": "Check everything",
+          "detail": "Chain, name, dates, signature and Finished, as in the full handshake (condensed into one step here)."
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "{Finished}",
+          "detail": "The client is CONNECTED at 2 RTT instead of 1. On a 100 ms path that is 100 ms more, on every new connection to this server, which is why clients send shares for the groups servers almost always take (x25519, and some also send secp256r1). The RFC also lets a client use what it learned from a completed handshake to pick its key_share for the next connection.",
+          "state": {
+            "client": "CONNECTED",
+            "server": "CONNECTED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished"
+            },
+            {
+              "name": "protection",
+              "value": "client handshake keys"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "[GET /]",
+          "detail": "The request goes with the Finished and arrives at 2.5 RTT.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data"
+            },
+            {
+              "name": "protection",
+              "value": "client application keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "[200 OK]",
+          "detail": "Back at 3 RTT, one more than without the retry.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "application data"
+            },
+            {
+              "name": "protection",
+              "value": "server application keys"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bad-cert",
+      "title": "Certificate not trusted",
+      "summary": "The server presents a chain that ends at a CA the browser does not trust. The client aborts with a fatal alert, and no request is ever sent.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Handshake",
+          "label": "ClientHello",
+          "detail": "The TCP connection is already open, and the hello is the same as in a full handshake.",
+          "state": {
+            "client": "WAIT_SH",
+            "server": "RECVD_CH"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ClientHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            },
+            {
+              "name": "server_name",
+              "value": "www.example.com"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Pick parameters, derive keys",
+          "detail": "Nothing unusual on the server side. Its certificate was issued by a private, in-house CA, which is fine for its own machines but not in any browser's trust store.",
+          "state": {
+            "server": "NEGOTIATED"
+          }
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "ServerHello",
+          "detail": "Arrives at 1 RTT; the client derives handshake keys.",
+          "state": {
+            "client": "WAIT_EE"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "ServerHello"
+            },
+            {
+              "name": "protection",
+              "value": "plaintext"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{EncryptedExtensions}",
+          "detail": "As in the full handshake.",
+          "state": {
+            "client": "WAIT_CERT_CR"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "EncryptedExtensions"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Certificate}",
+          "detail": "The chain the server sends: the leaf for www.example.com and the in-house intermediate.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "Certificate"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            },
+            {
+              "name": "certificate_list[0]",
+              "value": "CN=www.example.com, issued by Example Internal CA"
+            },
+            {
+              "name": "certificate_list[1]",
+              "value": "Example Internal CA, issued by Example Internal Root"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{CertificateVerify}",
+          "detail": "Already in flight with the rest of the server's first flight. The client never reads it.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "CertificateVerify"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "{Finished}",
+          "detail": "Also in flight, also never read. The server waits for the client's Finished.",
+          "state": {
+            "server": "WAIT_FINISHED"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "Finished"
+            },
+            {
+              "name": "protection",
+              "value": "server handshake keys"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Abort",
+          "label": "No path to a trusted root",
+          "detail": "Processing the Certificate, the client tries to build a path from the leaf to a root in its trust store and cannot: Example Internal Root is not there. A name mismatch (a leaf whose subjectAltName does not cover www.example.com) or an expired certificate fails here too. The client stops processing the server's flight; it never reaches WAIT_CV.",
+          "fields": [
+            {
+              "name": "path",
+              "value": "leaf -> Example Internal CA -> Example Internal Root (not trusted)"
+            },
+            {
+              "name": "result",
+              "value": "fail: unknown issuer"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "{Alert: unknown_ca}",
+          "detail": "The client sends a fatal alert and closes the connection. Every error alert is fatal in TLS 1.3. It already has handshake keys, and the RFC says it SHOULD use them for alerts after the ServerHello, so the alert is encrypted. No request was sent: the URL path, cookies and headers never left the browser.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "alert"
+            },
+            {
+              "name": "protection",
+              "value": "client handshake keys"
+            },
+            {
+              "name": "level",
+              "value": "fatal (2)"
+            },
+            {
+              "name": "description",
+              "value": "unknown_ca (48)",
+              "note": "RFC 8446 6.2: a chain was received but could not be matched with a known trust anchor. An expired certificate would be certificate_expired (45)"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "Close and show an error",
+          "detail": "The client closes the TCP connection. The browser shows a full-page certificate error (Chrome: NET::ERR_CERT_AUTHORITY_INVALID). If the site is on the HSTS list the user cannot click through it."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "server",
+      "kind": "security",
+      "text": "Forward secrecy: every full handshake uses a fresh (EC)DHE key pair on both sides, and the private halves are thrown away. The certificate's private key only signs; it never decrypts anything. So stealing that key later does not decrypt traffic someone recorded today. TLS 1.3 removed static RSA key exchange, which had no forward secrecy."
+    },
+    {
+      "target": "client",
+      "kind": "security",
+      "text": "What an observer still sees: the server's IP address, the SNI name in the ClientHello, the ALPN list, record sizes and timing. The certificate is encrypted in TLS 1.3 (it was plaintext in 1.2). Encrypted Client Hello (ECH) hides the real SNI too: the client encrypts an inner ClientHello with a key the site publishes in DNS, and the outer ClientHello shows only a shared name of the provider."
+    },
+    {
+      "kind": "note",
+      "text": "Middlebox compatibility mode (RFC 8446 appendix D.4): many firewalls broke when they saw a handshake they did not recognise, so TLS 1.3 dresses up as TLS 1.2 resumption. The ClientHello says version 0x0303 and carries a 32-byte session ID, and each side sends a dummy change_cipher_spec record, which the peer ignores. Not drawn in the timelines."
+    },
+    {
+      "target": "client",
+      "kind": "security",
+      "text": "Downgrade protection: a TLS 1.3 server that ends up negotiating TLS 1.2 or lower puts DOWNGRD (44 4F 57 4E 47 52 44) and 01 or 00 in the last 8 bytes of its ServerHello random. A TLS 1.3 client that sees this while negotiating an older version aborts, so an attacker cannot quietly strip supported_versions to force TLS 1.2. The random is covered by the older versions' signatures, so it cannot be edited back."
+    },
+    {
+      "target": "server",
+      "kind": "note",
+      "text": "Certificate transparency and OCSP: publicly trusted certificates are logged in public CT logs (RFC 6962), and browsers like Chrome require proof of logging (signed certificate timestamps), so a CA cannot quietly issue a certificate for your name. OCSP stapling lets the server attach a fresh signed 'not revoked' answer from the CA inside the Certificate message, so the client does not have to ask the CA itself."
+    },
+    {
+      "target": "server",
+      "kind": "tradeoff",
+      "text": "0-RTT trades safety for a round trip. Early data is encrypted only with keys from the PSK, so it is not forward secret, and an attacker can replay it, even to a different server of the same site. Servers limit the damage with single-use tickets or a ClientHello record within a short freshness window, and applications only accept idempotent requests in it (HTTP marks them and can answer 425 Too Early)."
+    }
+  ],
+  "questions": [
+    {
+      "id": "one-rtt",
+      "topic": "performance",
+      "targets": [
+        "client",
+        "server"
+      ],
+      "q": "Why does a TLS 1.3 handshake take one round trip when TLS 1.2 took two?",
+      "a": "In TLS 1.2 the first round trip only agreed on the algorithms, and the key exchange happened in the second, so the client could send its request after 2 RTT. In TLS 1.3 the client guesses the group and sends its key share in the ClientHello, so the server can complete the key exchange in its first answer and send its certificate, signature and Finished already encrypted. The client can then send Finished and its request together after 1 RTT. If the guess is wrong, a HelloRetryRequest costs the extra round trip after all."
+    },
+    {
+      "id": "forward-secrecy",
+      "topic": "security",
+      "targets": [
+        "server"
+      ],
+      "q": "What does forward secrecy buy you, and how does TLS 1.3 get it?",
+      "a": "If the server's private key is stolen later, recorded past traffic stays secret. TLS 1.3 gets it because every full handshake uses ephemeral (EC)DHE: both sides make fresh key pairs, derive the session keys from the shared secret and throw the private halves away. The certificate key only signs the handshake. TLS 1.2 still allowed RSA key exchange, where the client encrypted the secret to the certificate's key, so a stolen key decrypted every recorded session. Note the exceptions: 0-RTT early data, and PSK-only resumption without (EC)DHE."
+    },
+    {
+      "id": "zero-rtt-risk",
+      "topic": "security",
+      "targets": [
+        "client",
+        "server"
+      ],
+      "q": "0-RTT saves a round trip on resumption. What does it risk, and how do you use it safely?",
+      "a": "Early data is encrypted only with keys from the resumption PSK, so it is not forward secret, and nothing in TLS stops an attacker from replaying the ClientHello and early data, possibly many times and to different servers of the same site. So only idempotent requests (a GET with no side effects) belong in it. Servers defend with single-use tickets or a record of recent ClientHellos within a short freshness window, and HTTP marks early requests so an application can answer 425 Too Early and make the client retry after the handshake."
+    },
+    {
+      "id": "sni-ech",
+      "topic": "security",
+      "targets": [
+        "client"
+      ],
+      "q": "The connection is encrypted. What can a network observer still learn, and how does Encrypted Client Hello help?",
+      "a": "The server's IP address, the SNI in the plaintext ClientHello (so the exact site name, even on a shared IP), the ALPN offer, and the size and timing of the records. In TLS 1.3 the certificate is encrypted, so it no longer gives the name away, but SNI does. ECH encrypts an inner ClientHello, with the real SNI, to a public key the site publishes in DNS; the outer ClientHello shows only a shared name of the provider. It helps most when many sites sit behind the same provider, so the IP address does not identify the site either."
+    },
+    {
+      "id": "trust",
+      "topic": "security",
+      "targets": [
+        "client"
+      ],
+      "q": "How does the browser decide to trust the certificate it receives?",
+      "a": "It builds a chain from the leaf through the intermediates the server sent to a root already in its trust store, and checks each signature with the next certificate's public key. It checks that every certificate is within its validity dates, that the leaf's subjectAltName covers the host name it asked for, that the key usages allow server authentication, and whatever revocation and certificate transparency evidence its policy requires. Then CertificateVerify proves the server holds the leaf's private key, and Finished ties it all to this handshake. Any failure ends in a fatal alert such as unknown_ca."
+    },
+    {
+      "id": "mtls",
+      "topic": "security",
+      "targets": [
+        "client",
+        "server"
+      ],
+      "q": "What does mutual TLS add to this handshake?",
+      "a": "The server adds a CertificateRequest to its encrypted flight, after EncryptedExtensions, and the client answers with its own Certificate and CertificateVerify before its Finished. So it costs no extra round trip, only more bytes and a signature on each side. The server then knows which client it is talking to from the handshake itself, which is common between services. Until it has checked the client's flight, any 0.5-RTT data the server sends goes to a peer it has not yet authenticated."
+    }
+  ]
+}

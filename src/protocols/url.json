@@ -1,0 +1,657 @@
+{
+  "schema": "archstory/v1",
+  "id": "url",
+  "meta": {
+    "title": "Type a URL",
+    "summary": "What happens between pressing Enter on https://www.example.com/ and seeing the page: caches, DNS, TCP, TLS 1.3 and HTTP/2, with the round trips each one costs. Latency model: the web server is 50 ms round trip away (1 RTT here) and the recursive resolver 10 ms (0.2 RTT); server think time, bandwidth and rendering time are left out.",
+    "tags": [
+      "networking",
+      "latency",
+      "end to end"
+    ],
+    "difficulty": "medium",
+    "source": "RFC 1034 and RFC 1035 (DNS), RFC 9293 (TCP), RFC 8446 (TLS 1.3), RFC 7301 (ALPN), RFC 9113 (HTTP/2), RFC 9110 and RFC 9111 (HTTP semantics and caching), RFC 6797 (HSTS), RFC 9114 (HTTP/3)",
+    "kind": "protocol",
+    "order": 4
+  },
+  "requirements": {
+    "functional": [
+      "Turn the typed text into a URL and decide the scheme, host and port: https, www.example.com, 443",
+      "Find the server's IP address, checking the browser's and the operating system's caches before asking the resolver",
+      "Open a TCP connection and a TLS 1.3 session on it, agreeing on HTTP/2 inside the TLS handshake (ALPN)",
+      "Fetch the HTML, then the files it references over the same connection, and render the page"
+    ],
+    "nonFunctional": [
+      "On a first visit the network costs about 4 round trips to the server before the page can render: TCP 1, TLS 1, the HTML 1, its subresources 1",
+      "DNS is the cheapest leg when the resolver is close and has the answer cached",
+      "A repeat visit can skip DNS, TCP and TLS entirely by reusing the open connection, and the HTTP cache can skip most requests too",
+      "Round trips, not bandwidth, dominate small pages, which is why CDNs move the server closer and why protocols keep removing round trips"
+    ],
+    "scale": [
+      {
+        "label": "Server round trip (this model)",
+        "value": "50 ms = 1 RTT"
+      },
+      {
+        "label": "Resolver round trip (this model)",
+        "value": "10 ms = 0.2 RTT"
+      },
+      {
+        "label": "First visit",
+        "value": "4.2 RTT = 210 ms of network time"
+      },
+      {
+        "label": "Repeat visit on the open connection",
+        "value": "1 RTT = 50 ms"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Browser",
+      "kind": "web_client",
+      "description": "The browser with its caches (DNS, HTTP, HSTS, open connections) and the operating system's stub resolver underneath"
+    },
+    {
+      "id": "resolver",
+      "label": "Recursive resolver",
+      "kind": "dns",
+      "tier": "edge",
+      "description": "The ISP's or a public resolver, 10 ms away; the DNS module shows its full walk from the root"
+    },
+    {
+      "id": "server",
+      "label": "Web server (CDN edge)",
+      "kind": "cdn",
+      "description": "The machine that answers for www.example.com at 203.0.113.10: here a CDN edge 50 ms away, which terminates TCP and TLS and serves cached content"
+    }
+  ],
+  "edges": [
+    {
+      "from": "browser",
+      "to": "resolver",
+      "label": "DNS query",
+      "protocol": "DNS over UDP 53"
+    },
+    {
+      "from": "browser",
+      "to": "server",
+      "label": "HTTPS",
+      "protocol": "HTTP/2 over TLS 1.3 over TCP 443"
+    }
+  ],
+  "flows": [
+    {
+      "id": "first",
+      "title": "First visit to https://www.example.com/",
+      "summary": "Nothing is cached in the browser: one DNS lookup the resolver answers from its cache, the TCP and TLS handshakes, the HTML, then its subresources on the same connection, then render.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Look in caches",
+          "label": "Parse URL, check HSTS",
+          "detail": "The user types https://www.example.com/ and presses Enter. The browser splits it into scheme https, host www.example.com, port 443 and path /. It checks its HSTS list, which would turn an http:// URL into https:// without a network trip; the scheme is already https, so nothing changes. Latency model for the whole scenario: the server is 50 ms round trip away (1 RTT, a message takes 0.5 RTT one way) and the resolver 10 ms (0.2 RTT, so 0.1 each way); time spent computing is left out.",
+          "state": {
+            "browser": "looking up"
+          },
+          "fields": [
+            {
+              "name": "scheme",
+              "value": "https",
+              "note": "Port 443 by default"
+            },
+            {
+              "name": "host",
+              "value": "www.example.com"
+            },
+            {
+              "name": "path",
+              "value": "/"
+            },
+            {
+              "name": "HSTS",
+              "value": "no change",
+              "note": "Already https; HSTS matters for http:// links and typed http URLs"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "Open connection? DNS cache? No",
+          "detail": "An open HTTP/2 connection to www.example.com would let the browser skip straight to the request. There is none. Next the browser's own DNS cache, then the operating system's: both miss on a first visit.",
+          "fields": [
+            {
+              "name": "connection pool",
+              "value": "none for www.example.com:443"
+            },
+            {
+              "name": "browser DNS cache",
+              "value": "miss"
+            },
+            {
+              "name": "OS DNS cache",
+              "value": "miss"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "resolver",
+          "kind": "req",
+          "phase": "DNS",
+          "label": "A? www.example.com",
+          "detail": "The stub resolver sends one UDP query to the recursive resolver, with recursion desired: 'find the whole answer for me'. Browsers ask for AAAA (IPv6) at the same time; only A is drawn. The resolver is 10 ms away, so the query takes 0.1 RTT.",
+          "state": {
+            "browser": "resolving"
+          },
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x4f21",
+              "note": "Random; the answer must carry the same ID"
+            },
+            {
+              "name": "RD",
+              "value": "1",
+              "note": "Recursion desired"
+            },
+            {
+              "name": "question",
+              "value": "www.example.com IN A"
+            }
+          ],
+          "delay": 0.2
+        },
+        {
+          "from": "resolver",
+          "to": "resolver",
+          "kind": "local",
+          "label": "Cache hit",
+          "detail": "Someone else using this resolver looked up www.example.com recently, so the record is cached. We assume so here; the DNS module shows the cold walk from the root, which would add several round trips to the root, .com and example.com servers.",
+          "fields": [
+            {
+              "name": "cached",
+              "value": "www.example.com A 203.0.113.10",
+              "note": "203.0.113.0/24 is a documentation range; think of it as the CDN edge"
+            },
+            {
+              "name": "TTL left",
+              "value": "240 s"
+            }
+          ]
+        },
+        {
+          "from": "resolver",
+          "to": "browser",
+          "kind": "res",
+          "label": "A 203.0.113.10, TTL 240",
+          "detail": "The answer is back after 0.2 RTT (10 ms). The browser and OS cache it for the remaining TTL. DNS is the cheapest leg: a nearby resolver, one UDP round trip, no handshake, and usually cached.",
+          "fields": [
+            {
+              "name": "ID",
+              "value": "0x4f21"
+            },
+            {
+              "name": "RD / RA",
+              "value": "1 / 1"
+            },
+            {
+              "name": "answer",
+              "value": "www.example.com 240 IN A 203.0.113.10"
+            }
+          ],
+          "delay": 0.2
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "TCP",
+          "label": "SYN",
+          "detail": "Now the long trips begin: each message to the server takes 0.5 RTT (25 ms). The browser opens a TCP connection to 203.0.113.10:443 (the TCP module has the numbers).",
+          "state": {
+            "browser": "connecting",
+            "server": "half-open"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "seq",
+              "value": "1000"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.10:443"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "SYN, ACK",
+          "detail": "One round trip after the SYN the browser's TCP connection is open. It does not wait for anything else: its next segment carries both the final ACK and the TLS ClientHello.",
+          "state": {
+            "browser": "TLS handshake"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "seq / ack",
+              "value": "5000 / 1001"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "TLS",
+          "label": "ACK + ClientHello",
+          "detail": "The ClientHello travels in a TCP segment whose ACK flag completes the handshake, so the server's TCP becomes established and its TLS layer reads the hello in the same moment. The hello offers TLS 1.3, an x25519 key share, the name www.example.com (SNI, in the clear) and ALPN h2 and http/1.1. The TLS module shows every field.",
+          "state": {
+            "server": "TLS handshake"
+          },
+          "fields": [
+            {
+              "name": "TCP",
+              "value": "ACK seq=1001 ack=5001",
+              "note": "Some stacks send a bare ACK first; it changes nothing in the timing"
+            },
+            {
+              "name": "TLS",
+              "value": "ClientHello: TLS 1.3, x25519 key share, SNI www.example.com, ALPN h2, http/1.1",
+              "note": "Plaintext"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "ServerHello + {EE ... Finished}",
+          "detail": "The server's whole first flight in one go: the plaintext ServerHello with its key share, then, under handshake keys, EncryptedExtensions (ALPN chose h2), the certificate chain, the CertificateVerify signature and Finished. It may add its HTTP/2 SETTINGS right behind, with application keys.",
+          "fields": [
+            {
+              "name": "ServerHello",
+              "value": "TLS 1.3, TLS_AES_128_GCM_SHA256, x25519 key share",
+              "note": "Plaintext"
+            },
+            {
+              "name": "{EncryptedExtensions}",
+              "value": "ALPN: h2"
+            },
+            {
+              "name": "{Certificate}",
+              "value": "www.example.com, then the intermediate"
+            },
+            {
+              "name": "{CertificateVerify}, {Finished}",
+              "value": "signature and MAC over the handshake"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "Verify certificate, derive keys",
+          "detail": "The browser checks the chain up to a trusted root, the name and the dates, the signature and the Finished MAC, and derives the application keys. TLS is done for the browser: one round trip after TCP. Its Finished leaves together with the first request.",
+          "state": {
+            "browser": "connected"
+          }
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "HTTP",
+          "label": "{Finished} + GET / (stream 1)",
+          "detail": "The client's TLS Finished and the HTTP/2 request travel in one flight, so the request costs no extra wait. Because ALPN chose h2, the request is not text: it is a HEADERS frame on stream 1 with pseudo-headers (:authority replaces Host) compressed with HPACK, after the HTTP/2 connection preface and SETTINGS. With http/1.1 it would be the text lines 'GET / HTTP/1.1' and 'Host: www.example.com'.",
+          "payload": ":method: GET\n:scheme: https\n:authority: www.example.com\n:path: /\naccept-encoding: gzip, deflate, br\nuser-agent: Mozilla/5.0 (...)",
+          "state": {
+            "browser": "waiting",
+            "server": "connected"
+          },
+          "fields": [
+            {
+              "name": "TLS",
+              "value": "{Finished}",
+              "note": "Client handshake keys"
+            },
+            {
+              "name": "HTTP/2 frame",
+              "value": "HEADERS, stream 1, END_STREAM",
+              "note": "Client streams use odd numbers"
+            },
+            {
+              "name": ":authority",
+              "value": "www.example.com",
+              "note": "HTTP/2's stand-in for the Host header"
+            },
+            {
+              "name": "accept-encoding",
+              "value": "gzip, deflate, br"
+            },
+            {
+              "name": "user-agent",
+              "value": "Mozilla/5.0 (...)"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "200 OK + HTML",
+          "detail": "The first bytes of HTML arrive 1 RTT after the request left. The CDN edge served it from its cache; on a miss it would fetch from the origin first and add that round trip. The headers ask the browser to revalidate the page each time but let it keep the versioned assets for a year, which the repeat visit uses.",
+          "payload": ":status: 200\ncontent-type: text/html; charset=utf-8\ncontent-encoding: br\ncache-control: no-cache\netag: \"v1\"\n\n<!doctype html><html><head><link rel=stylesheet href=/style.css>...",
+          "state": {
+            "browser": "parsing"
+          },
+          "fields": [
+            {
+              "name": "HTTP/2 frames",
+              "value": "HEADERS, then DATA, stream 1"
+            },
+            {
+              "name": ":status",
+              "value": "200"
+            },
+            {
+              "name": "content-encoding",
+              "value": "br",
+              "note": "Picked from the client's accept-encoding"
+            },
+            {
+              "name": "cache-control",
+              "value": "no-cache",
+              "note": "Store it, but check with the server before reusing it"
+            },
+            {
+              "name": "etag",
+              "value": "\"v1\"",
+              "note": "The version tag a later request can quote"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "Subresources",
+          "label": "GET /style.css, /app.js",
+          "detail": "The HTML parser finds a stylesheet and a script (the preload scanner looks ahead for them while the HTML is still arriving). Both requests go on the same connection as two streams, 3 and 5, at the same time: HTTP/2 multiplexes them, so there is no new handshake and no waiting for one response before asking for the next. HTTP/1.1 would need a second connection to fetch them in parallel, with its own TCP and TLS handshakes.",
+          "state": {
+            "browser": "waiting"
+          },
+          "fields": [
+            {
+              "name": "streams",
+              "value": "3: GET /style.css, 5: GET /app.js"
+            },
+            {
+              "name": "connection",
+              "value": "the same one, already warm"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "200 style.css, 200 app.js",
+          "detail": "Both responses come back interleaved on the one connection, one round trip later. Their file names change with every release, so the server lets the browser cache them for a year.",
+          "fields": [
+            {
+              "name": "streams",
+              "value": "3 and 5, DATA frames interleaved"
+            },
+            {
+              "name": "cache-control",
+              "value": "max-age=31536000, immutable",
+              "note": "One year; fine because a new release uses new file names"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Render",
+          "label": "Style, layout, paint",
+          "detail": "With the HTML, CSS and script in hand the browser builds the DOM and CSSOM, runs the script, lays out and paints. Network time so far: 0.2 + 1 + 1 + 1 + 1 = 4.2 RTT, 210 ms at 50 ms per round trip, before any server or rendering time.",
+          "state": {
+            "browser": "rendering"
+          },
+          "fields": [
+            {
+              "name": "network time",
+              "value": "4.2 RTT = 210 ms"
+            },
+            {
+              "name": "of which handshakes",
+              "value": "TCP 1 + TLS 1 = 2 RTT"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repeat",
+      "title": "Repeat visit a minute later",
+      "summary": "The HTTP/2 connection from the first visit is still open, so there is no DNS, TCP or TLS at all: one conditional request for the HTML, and the assets come from the HTTP cache.",
+      "steps": [
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Look in caches",
+          "label": "HTTP cache: HTML needs a check",
+          "detail": "A minute later the user opens https://www.example.com/ again. The HTTP cache has the page, but it was sent with no-cache, so the browser must ask the server whether it changed. The stylesheet and script are fresh for a year and need no request at all. Same latency model as the first visit: the server is 1 RTT (50 ms) away.",
+          "state": {
+            "browser": "looking up",
+            "server": "connected"
+          },
+          "fields": [
+            {
+              "name": "/",
+              "value": "cached, etag \"v1\", must revalidate"
+            },
+            {
+              "name": "/style.css, /app.js",
+              "value": "cached, fresh"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "label": "Connection pool: h2 open",
+          "detail": "The HTTP/2 connection to www.example.com from the first visit is still open (we assume the server's idle timeout has not closed it), so the browser needs neither DNS nor any handshake. If it had been closed: DNS from the browser cache (TTL 240 s has not run out, so 0 RTT), TCP 1 RTT, then TLS 1.3 resumption with the session ticket, which still costs 1 RTT, or with 0-RTT early data the GET rides in the first TLS flight and the HTML is back at 2 RTT instead of 1.",
+          "state": {
+            "browser": "connected"
+          },
+          "fields": [
+            {
+              "name": "connection",
+              "value": "reused: same TCP connection, same TLS keys"
+            },
+            {
+              "name": "DNS",
+              "value": "not needed"
+            },
+            {
+              "name": "if it had closed",
+              "value": "TCP 1 RTT + TLS 1 RTT (or 0-RTT early data)"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "server",
+          "kind": "req",
+          "phase": "HTTP",
+          "label": "GET / if-none-match \"v1\"",
+          "detail": "A conditional request on a new stream of the open connection: 'send the page only if it is no longer version v1'. The connection's congestion window is already warm from the first visit (unless it was idle long enough for the server to shrink it), so even a large answer would ramp up faster.",
+          "payload": ":method: GET\n:scheme: https\n:authority: www.example.com\n:path: /\nif-none-match: \"v1\"",
+          "state": {
+            "browser": "waiting"
+          },
+          "fields": [
+            {
+              "name": "stream",
+              "value": "7",
+              "note": "Stream numbers only go up; 1, 3 and 5 were used"
+            },
+            {
+              "name": "if-none-match",
+              "value": "\"v1\""
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "browser",
+          "kind": "res",
+          "label": "304 Not Modified",
+          "detail": "The page has not changed, so the answer is just headers, no body. The browser uses its cached copy.",
+          "payload": ":status: 304\netag: \"v1\"",
+          "fields": [
+            {
+              "name": ":status",
+              "value": "304",
+              "note": "Not Modified: use your copy"
+            },
+            {
+              "name": "body",
+              "value": "none"
+            }
+          ]
+        },
+        {
+          "from": "browser",
+          "to": "browser",
+          "kind": "local",
+          "phase": "Render",
+          "label": "Render from cache",
+          "detail": "HTML from the cache (just confirmed), CSS and script straight from the cache. Network time: 1 RTT, 50 ms, against 4.2 RTT on the first visit. The saving: DNS 0.2, TCP 1, TLS 1 and the subresource round trip 1, 3.2 RTT in all.",
+          "state": {
+            "browser": "rendering"
+          },
+          "fields": [
+            {
+              "name": "network time",
+              "value": "1 RTT = 50 ms"
+            },
+            {
+              "name": "saved",
+              "value": "3.2 RTT = 160 ms"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "resolver",
+      "kind": "scaling",
+      "text": "DNS is usually the cheapest leg: the resolver is close (often inside the ISP or an anycast public service), a lookup is one UDP round trip with no handshake, and popular names are almost always in its cache. A cold lookup that walks from the root can still cost more than all the handshakes together; the DNS module shows it."
+    },
+    {
+      "target": "browser",
+      "kind": "security",
+      "text": "HSTS (RFC 6797): once a site has sent Strict-Transport-Security, the browser rewrites every http:// URL for it to https:// before sending anything, and refuses to let the user click through certificate errors. The very first visit is still exposed unless the domain is on the preload list built into browsers, which is why sensitive sites ask to be preloaded."
+    },
+    {
+      "target": "server",
+      "kind": "note",
+      "text": "The web server here is a CDN edge: it holds the IP address the DNS answer points at, terminates TCP and TLS and serves cached responses. Being close cuts the round trip every handshake pays for: at 10 ms instead of 50, the first visit's 4.2 RTT would be about 50 ms of network time instead of 210. On a cache miss the edge fetches from the origin over a connection it keeps open."
+    },
+    {
+      "target": "browser",
+      "kind": "scaling",
+      "text": "Connection coalescing: HTTP/2 lets a browser reuse one connection for another host name (say static.example.com) if that name resolves to the same address and the server's certificate covers it, saving another TCP and TLS handshake."
+    },
+    {
+      "kind": "note",
+      "text": "HTTP/3 runs over QUIC on UDP, and QUIC does its transport and TLS 1.3 handshakes together, so a new connection costs 1 RTT before the request instead of TCP's 1 plus TLS's 1, and resumption can send the request at 0 RTT. Browsers usually learn a site supports it from an Alt-Svc header or a DNS HTTPS record, so a first visit often still uses TCP."
+    },
+    {
+      "kind": "tradeoff",
+      "text": "TLS 1.2 needed 2 RTT before the request; TLS False Start (RFC 7918) let the client send its request with its Finished, cutting that to 1, as TLS 1.3 does by design. TLS 1.3 also adds 0-RTT for resumption, at the cost of replay risk, so it is only for idempotent requests."
+    }
+  ],
+  "questions": [
+    {
+      "id": "where-time-goes",
+      "topic": "performance",
+      "targets": [
+        "browser",
+        "server"
+      ],
+      "q": "On a first visit to an HTTPS site 50 ms away, roughly how long does the network take before the page can render, and where does the time go?",
+      "a": "About 4 round trips plus DNS: TCP handshake 1 RTT, TLS 1.3 1 RTT, the HTML 1 RTT, then the CSS and scripts it references 1 more, all on the same HTTP/2 connection. With a cached DNS answer from a resolver 10 ms away that is about 4.2 RTT, around 210 ms, before server think time, bandwidth and rendering. Half of it is handshakes, which is why connection reuse, CDNs and HTTP/3 matter."
+    },
+    {
+      "id": "dns-cheap",
+      "topic": "performance",
+      "targets": [
+        "resolver"
+      ],
+      "q": "Why is DNS usually the cheapest step, and when is it not?",
+      "a": "The recursive resolver is close, a query is a single UDP round trip with no handshake, and popular names are cached at the resolver, the operating system and the browser. It is expensive when nothing is cached: the resolver walks from the root to the TLD to the authoritative servers, and those can be far away. A short TTL makes that happen more often, and a slow or overloaded resolver adds its own delay."
+    },
+    {
+      "id": "repeat-saves",
+      "topic": "performance",
+      "targets": [
+        "browser"
+      ],
+      "q": "The user loads the same page again a minute later. What can the browser skip, and what does it still have to do?",
+      "a": "If the HTTP/2 connection is still open it skips DNS, TCP and TLS entirely. Versioned assets with a long max-age come straight from the HTTP cache with no request. The HTML, served with no-cache and an ETag, needs one conditional request: 304 Not Modified comes back after 1 RTT. If the connection had closed it would pay TCP 1 RTT and TLS 1 RTT again; a resumed TLS session skips the certificate, and 0-RTT early data can put the GET in the first TLS flight."
+    },
+    {
+      "id": "cdn",
+      "topic": "scale",
+      "targets": [
+        "server"
+      ],
+      "q": "Why does serving from a CDN edge make a first visit faster even if the edge has to ask the origin?",
+      "a": "The handshakes cost round trips to whatever terminates TCP and TLS. If that is an edge 10 ms away instead of an origin 50 ms away, TCP and TLS together cost 20 ms instead of 100. When the edge has the content cached, the request is answered there too. On a miss, the edge forwards it over a connection to the origin that is already open and warm, so the user pays one long round trip instead of three."
+    },
+    {
+      "id": "h2-change",
+      "topic": "tradeoffs",
+      "targets": [
+        "browser",
+        "server"
+      ],
+      "q": "ALPN picked h2 in the TLS handshake. What changes for the requests compared with HTTP/1.1?",
+      "a": "The choice costs nothing extra because it rides in the ClientHello and EncryptedExtensions. Requests become binary HEADERS frames with HPACK-compressed headers and pseudo-headers (:authority instead of Host), each on its own stream. Many requests share one connection at the same time, so the CSS and script go out together without opening more connections. HTTP/1.1 would allow one request at a time per connection, so browsers opened several connections, each with its own TCP and TLS handshakes."
+    },
+    {
+      "id": "http3",
+      "topic": "tradeoffs",
+      "targets": [
+        "browser",
+        "server"
+      ],
+      "q": "What would HTTP/3 change in this timeline?",
+      "a": "QUIC replaces TCP and carries the TLS 1.3 handshake inside its own, so the TCP and TLS phases merge into one round trip: the request could leave after 1 RTT instead of 2, and with resumption at 0 RTT. Streams are independent, so a lost packet only stalls its own stream instead of every stream on the TCP connection. But the browser must first learn the site supports HTTP/3 (an Alt-Svc header or a DNS HTTPS record), so a first visit often still goes over TCP."
+    }
+  ]
+}

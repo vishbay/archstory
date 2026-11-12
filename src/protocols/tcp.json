@@ -581,7 +581,7 @@
           "from": "server",
           "to": "server",
           "kind": "local",
-          "label": "cwnd 40 -> 80 segments: until ssthresh or a loss",
+          "label": "cwnd 40 -> 80, until a loss",
           "detail": "Doubling goes on until cwnd reaches ssthresh or a segment is lost. On loss, ssthresh drops to about half the data in flight and growth turns linear (congestion avoidance: about one segment per round trip). This growth curve is why reusing a warm connection beats opening a new one.",
           "fields": [
             {

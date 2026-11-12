@@ -1067,8 +1067,20 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 .lab-row .sw i { position: absolute; top: 1px; left: 1px; width: 13px; height: 13px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
 .lab-row.on .sw { background: var(--accent); border-color: var(--accent); }
 .lab-row.on .sw i { transform: translateX(13px); background: #fff; }
-.tl-clock { position: sticky; top: calc(var(--bars, 0px) + 6px); left: 0; z-index: 2; width: fit-content; margin: 0 auto 10px; padding: 4px 14px; border: 1px solid var(--border); border-radius: 999px;
+.tl-top { position: sticky; top: calc(var(--bars, 0px) + 6px); left: 0; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+  gap: 6px 8px; width: fit-content; max-width: 100%; margin: 0 auto 10px; }
+.tl-clock, .tl-budget { padding: 4px 14px; border: 1px solid var(--border); border-radius: 999px;
   background: var(--surface); box-shadow: var(--shadow); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.tl-budget { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; min-width: 0; max-width: 100%; }
+.tl-budget > .muted { font-size: 12px; margin-right: 4px; }
+.tlb-bar { display: flex; gap: 2px; width: 120px; height: 8px; margin-right: 6px; }
+.tlb-bar i { flex: 0 0 0; min-width: 4px; border-radius: 999px; background: var(--border-strong); transition: background .15s; }
+.tlb-bar i.cur { background: var(--accent); }
+.tlb-legend { display: contents; font-size: 11.5px; }
+.tlb-legend > * { font-size: 11.5px; }
+.tlb-chip { padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; transition: background .15s, border-color .15s; }
+.tlb-chip b { font-weight: 600; }
+.tlb-chip.cur { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
 .tl-time { font-size: 9.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
 .tl-state rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
 .tl-state text { font: 600 10.5px var(--mono); fill: var(--accent-text); }
