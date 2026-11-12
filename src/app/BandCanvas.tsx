@@ -367,7 +367,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
       onNodeClick={(_, n) => onSelect(n.type === 'component' && !(n.data as NodeData).telemetry ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
       fitView fitViewOptions={{ padding: pad(24, 24, 24) }}
       minZoom={0.2} maxZoom={1.3} proOptions={{ hideAttribution: true }}>
-      <Background variant={BackgroundVariant.Lines} gap={40} color="var(--grid-line)" />
+      <Background variant={BackgroundVariant.Dots} gap={24} size={2.4} color="var(--grid-dot)" />
       <Controls showInteractive={false} position="top-right">
         <ControlButton onClick={toggleFollow} title={follow ? 'Camera follows the request (on)' : 'Camera follows the request (off)'}
           className={follow ? 'follow-on' : ''} aria-pressed={follow}>◎</ControlButton>

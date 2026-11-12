@@ -7,7 +7,7 @@
   --border: #e1e6ee; --border-strong: #cbd3df;
   --text: #0f172a; --muted: #5b6577; --faint: #667085;
   --accent: #4f46e5; --accent-soft: #eef0ff; --on-accent: #ffffff; --accent-text: #4338ca;
-  --canvas: #f8fafc; --grid: #e3e8f0; --grid-line: color-mix(in srgb, var(--border-strong) 38%, transparent); --band: #0f172a05; --band-border: #e3e8f0;
+  --canvas: #f8fafc; --grid: #e3e8f0; --grid-dot: color-mix(in srgb, var(--border-strong) 75%, transparent); --band: #0f172a05; --band-border: #e3e8f0;
   --node-bg: #ffffff; --shadow: 0 1px 2px #0f172a14, 0 4px 14px #0f172a0d;
   --edge-visited: #64748b; --edge-flow: #b8c2d2; --edge-off: #e2e8f0;
   --k-req: #0284c7; --k-res: #16a34a; --k-async: #9333ea; --k-local: #d97706;
@@ -23,7 +23,7 @@
   --border: #2c2c2e; --border-strong: #3d3d40;
   --text: #ececee; --muted: #a1a1a6; --faint: #8e8e94;
   --accent: #6366f1; --accent-soft: #6366f126; --on-accent: #ffffff; --accent-text: #a5a8fb;
-  --canvas: #121212; --grid: #1f1f21; --grid-line: color-mix(in srgb, var(--border-strong) 38%, transparent); --band: #ffffff06; --band-border: #2a2a2d;
+  --canvas: #121212; --grid: #1f1f21; --grid-dot: color-mix(in srgb, var(--border-strong) 75%, transparent); --band: #ffffff06; --band-border: #2a2a2d;
   --node-bg: #1c1c1e; --shadow: 0 1px 2px #0008, 0 6px 20px #0006;
   --edge-visited: #8e8e93; --edge-flow: #48484c; --edge-off: #28282a;
   --k-req: #38bdf8; --k-res: #4ade80; --k-async: #c084fc; --k-local: #fbbf24;
@@ -38,7 +38,7 @@
     --border: #2c2c2e; --border-strong: #3d3d40;
     --text: #ececee; --muted: #a1a1a6; --faint: #8e8e94;
     --accent: #6366f1; --accent-soft: #6366f126; --on-accent: #ffffff; --accent-text: #a5a8fb;
-    --canvas: #121212; --grid: #1f1f21; --grid-line: color-mix(in srgb, var(--border-strong) 38%, transparent); --band: #ffffff06; --band-border: #2a2a2d;
+    --canvas: #121212; --grid: #1f1f21; --grid-dot: color-mix(in srgb, var(--border-strong) 75%, transparent); --band: #ffffff06; --band-border: #2a2a2d;
     --node-bg: #1c1c1e; --shadow: 0 1px 2px #0008, 0 6px 20px #0006;
     --edge-visited: #8e8e93; --edge-flow: #48484c; --edge-off: #28282a;
     --k-req: #38bdf8; --k-res: #4ade80; --k-async: #c084fc; --k-local: #fbbf24;
@@ -181,8 +181,8 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .edge-label { position: absolute; pointer-events: none; font: 11.5px var(--mono); background: var(--surface); border: 1px solid; border-radius: 6px; padding: 2px 7px; white-space: nowrap; z-index: 1000; box-shadow: var(--shadow); }
 
 /* ---------- timeline ---------- */
-.timeline { position: absolute; inset: 0; overflow: auto; background-attachment: local; background-size: 40px 40px;
-  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px); padding: calc(var(--bars) + 20px) var(--pr) 24px var(--pl); }
+.timeline { position: absolute; inset: 0; overflow: auto; background-attachment: local; background-size: 24px 24px;
+  background-image: radial-gradient(circle, var(--grid-dot) 1.2px, transparent 1.6px); padding: calc(var(--bars) + 20px) var(--pr) 24px var(--pl); }
 .timeline svg { display: block; margin: 0 auto; }
 .tl-band { fill: var(--surface-3); }
 .tl-band-text { font-size: 10.5px; fill: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
@@ -387,8 +387,8 @@ button.danger { color: var(--hard); border-color: color-mix(in srgb, var(--hard)
 button.brand { gap: 0; border: 0; background: none; padding: 4px 6px; font-size: 15px; font-weight: 700; color: var(--text); }
 button.brand:hover { background: var(--surface-2); }
 .home-main { background-color: var(--bg); background-attachment: local;
-  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-  background-size: 40px 40px; background-position: center -1px; }
+  background-image: radial-gradient(circle, var(--grid-dot) 1.2px, transparent 1.6px);
+  background-size: 24px 24px; background-position: center 0; }
 .hero-band { position: relative; isolation: isolate; padding: 48px max(24px, calc(50% - 660px)) 24px; }
 .hero-band::before { content: ""; position: absolute; z-index: -1; inset: 0; pointer-events: none;
   background: radial-gradient(640px 320px at 22% 35%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
