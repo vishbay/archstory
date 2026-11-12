@@ -12,7 +12,8 @@
     "difficulty": "medium",
     "source": "RFC 3022 (traditional NAT and NAPT), RFC 4787 (NAT behavior for UDP: mapping and filtering), RFC 5382 (NAT behavior for TCP: timeouts, unsolicited SYN), RFC 6146 (NAT64), RFC 6298 (retransmission timer), AWS VPC documentation for NAT gateways (55,000 connections per destination, 350 s idle timeout, ports 1024 to 65535, pricing)",
     "kind": "protocol",
-    "order": 8
+    "order": 8,
+    "section": "Network"
   },
   "requirements": {
     "functional": [

@@ -10,6 +10,7 @@ import { openAiSettings } from './useAiConfig'
 import { deckStats } from '../practice/cards'
 import { HeroPreview, HowToImport, HowToInterview } from './HowTo'
 import { openDrill, today, useDeck } from './useDeck'
+import { groupBySection } from '../protocols/sections'
 
 /** A miniature of the tier-band canvas: bands, connections and coloured component blocks. */
 function MiniMap({ design }: { design: Design }) {
@@ -214,9 +215,14 @@ export function Home({ library, mine, protocols = [], onWatch, onExplore, onPrac
             <p className="eyebrow">Labs preview</p>
             <div className="lib-head"><h2>Under the hood</h2></div>
             <p className="lib-note muted">How the network protocols behind every design work, message by message: who sends what, the header fields on the wire, each side's state and how many round trips it costs.</p>
-            <div className="card-grid">
-              {protocols.map(d => <ProtocolCard key={d.id} d={d} onWatch={() => onWatch?.(d.id)} />)}
-            </div>
+            {groupBySection(protocols).map(g => (
+              <div key={g.section} className="hood-group" data-section={g.section}>
+                <h3 className="hood-heading">{g.section}</h3>
+                <div className="card-grid">
+                  {g.designs.map(d => <ProtocolCard key={d.id} d={d} onWatch={() => onWatch?.(d.id)} />)}
+                </div>
+              </div>
+            ))}
           </section>
         )}
 

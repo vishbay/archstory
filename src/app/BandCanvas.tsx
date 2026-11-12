@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ReactFlow, Background, BackgroundVariant, Controls, BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, getBezierPath, ConnectionMode, ControlButton, useReactFlow,
+  ReactFlow, Background, BackgroundVariant, Controls, BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, getBezierPath, getStraightPath, ConnectionMode, ControlButton, useReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps,
 } from '@xyflow/react'
 import { edgeId, findEdge, type Design, type DNode, type Flow, type StepKind, type Tier } from '../model/schema'
@@ -9,12 +9,13 @@ import { subnetLabel, vpcLabel } from '../model/network'
 import { impactOf, zoneBadge, zoneName, type Level } from '../model/availability'
 import { regionImpactOf } from '../model/regions'
 import { layoutBands, NODE_H, NODE_W, OBS_NODE_W, ON_PREM_GROUP, type Layout, type Side } from '../layout/bands'
+import { isFreeLayout, layoutFree } from '../layout/free'
 import { midpoint, roundedPolyline, routeEdges, type Pt, type Rect } from '../layout/route'
 import { ZNODE_W, type Hop, type ZoneLayout } from '../layout/zones'
 import { emits, signalsFor, stackName, TELEMETRY, telemetryNodes, TELEMETRY_EDGES, traceId } from '../model/observability'
 import { NodeIcon } from './NodeIcon'
 import { Packet } from './Packet'
-import { KIND_GLYPH, KIND_VAR } from './stepKinds'
+import { KIND_GLYPH, KIND_INK, KIND_VAR } from './stepKinds'
 import { reducedMotion, store, type Player } from './hooks'
 import { KIND_TEXT } from './stepKinds'
 
@@ -111,6 +112,10 @@ type EdgeData = {
   /** Right-angled path between the two handles, for edges that have no precomputed route (the monitoring lane). */
   elbow?: boolean
   packet?: { key: string; ms: number; reverse: boolean }
+  /** Free layout (protocol rings and topologies): a straight line between the two nodes instead of the tier-band curve. */
+  direct?: boolean
+  /** The current step's message never arrives: its packet stops part of the way, fades and leaves an X. */
+  lost?: boolean
 }
 const edgeColor = (d: EdgeData) =>
   d.state === 'active' ? KIND_VAR[d.kind!] : d.state === 'visited' ? 'var(--edge-visited)' : d.state === 'flow' ? 'var(--edge-flow)' : 'var(--edge-off)'
@@ -123,7 +128,7 @@ function FlowEdge(p: EdgeProps) {
   const straight = (): Pt[] => (sideways ? (Math.abs(p.sourceY - p.targetY) < 1 ? [] : [[mx, p.sourceY], [mx, p.targetY]]) : (Math.abs(p.sourceX - p.targetX) < 1 ? [] : [[p.sourceX, my], [p.targetX, my]]))
   const via = d.via ? (d.via.length ? d.via : straight()) : d.elbow ? straight() : undefined
   const routed: Pt[] | undefined = via && [[p.sourceX, p.sourceY], ...via, [p.targetX, p.targetY]]
-  const [bezier, bx, by] = getBezierPath(p)
+  const [bezier, bx, by] = d.direct ? getStraightPath(p) : getBezierPath(p)
   const path = routed ? roundedPolyline(routed) : bezier
   const [lx, ly] = routed ? midpoint(routed) : [bx, by]
   const color = d.picked ? 'var(--accent)' : edgeColor(d)
@@ -134,12 +139,12 @@ function FlowEdge(p: EdgeProps) {
       <BaseEdge id={p.id} path={path} markerEnd={p.markerEnd}
         interactionWidth={18}
         style={{ stroke: color, strokeWidth: d.state === 'active' || d.picked ? 3 : d.state === 'off' ? 1 : 1.6, strokeDasharray: dashed ? '6 5' : undefined, opacity: d.state === 'off' ? 0.55 : 1 }} />
-      {d.packet && <Packet key={d.packet.key} path={path} ms={d.packet.ms} reverse={d.packet.reverse} color={color} />}
+      {d.packet && <Packet key={d.packet.key} path={path} ms={d.packet.ms} reverse={d.packet.reverse} color={d.lost ? 'var(--hard)' : color} lost={d.lost ? 'x' : undefined} />}
       {d.packet && d.label && (
         <EdgeLabelRenderer>
-          <div key={d.packet.key} className="packet-tag" title={d.label}
-            style={{ offsetPath: `path("${path}")`, offsetAnchor: sideways ? '-12px 64px' : undefined, animationDuration: `${d.packet.ms}ms`, animationDirection: d.packet.reverse ? 'reverse' : 'normal', borderColor: color, color }}>
-            {KIND_GLYPH[d.kind!]} {d.label}
+          <div key={d.packet.key} className={`packet-tag${d.lost ? ' lost' : ''}`} title={d.label}
+            style={{ offsetPath: `path("${path}")`, offsetAnchor: sideways ? '-12px 64px' : undefined, animationDuration: `${d.packet.ms}ms`, animationDirection: d.packet.reverse ? 'reverse' : 'normal', borderColor: d.lost ? 'var(--hard)' : color, color: d.lost ? 'var(--hard-t)' : d.kind ? KIND_INK[d.kind] : color }}>
+            {KIND_GLYPH[d.kind!]} {d.label}{d.lost ? ' (lost)' : ''}
           </div>
         </EdgeLabelRenderer>
       )}
@@ -216,12 +221,14 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
   const unit = regional ? 'region' : 'zone'
   const mon = monitoring && !!design.observability && !zoned   // the zones view has no telemetry band
   const [obsOpen, setObsOpen] = useState(false)               // the monitoring lane starts as a one-line strip
-  const L = useMemo(() => layoutBands(design, { network: net, observability: mon, obsOpen }), [design, net, mon, obsOpen])
+  const free = isFreeLayout(design)   // a protocol ring or topology: the nodes' own positions, straight edges, no bands
+  const L = useMemo(() => (free ? layoutFree(design) : layoutBands(design, { network: net, observability: mon, obsOpen })), [design, free, net, mon, obsOpen])
   // Route edges around components: clear edges keep the default curve, the rest follow the gaps between nodes.
   const tierRoutes = useMemo(() => {
+    if (free) return {}
     const rects: Record<string, Rect> = Object.fromEntries(design.nodes.map(n => [n.id, { ...L.pos[n.id], w: NODE_W, h: NODE_H }]))
     return routeEdges(rects, design.edges.map(e => ({ key: edgeId(e), from: e.from, to: e.to })))
-  }, [design, L])
+  }, [design, L, free])
   const zoneRoutes = useMemo(() => {
     if (!zoned || !zone.zl) return {}
     const zl = zone.zl
@@ -289,6 +296,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
           label: cur && `${cur.label}${hop?.cross ? ` · cross-${unit}` : ''}`,
           note: e.replication ? e.note ?? (e.async ? 'async replica' : 'sync standby') : undefined,
           packet: active ? { key: packetKey, ms: packetMs, reverse: hop!.reverse } : undefined,
+          lost: active && !!cur?.lost,
         }
         const rt = zoneRoutes[e.id]
         const [sh, th] = rt ? [rt.from, rt.to] : zl.handles(e.from, e.to)
@@ -342,7 +350,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
         state: !flow ? 'visited' : active ? 'active' : seenEdges.has(i) ? 'visited' : flowEdges.has(i) ? 'flow' : 'off',
         async: e.async, kind: cur?.kind, label: cur?.label, picked: edit?.pickedEdge === edgeId(e),
         packet: active ? { key: packetKey, ms: packetMs, reverse: hop!.reverse } : undefined,
-        via: rt?.via,
+        via: rt?.via, direct: free, lost: active && !!cur?.lost,
       }
       return { id: edgeId(e), source: e.from, target: e.to, sourceHandle: `s-${sh}`, targetHandle: `t-${th}`, type: 'flow', data, markerEnd: marker(data) }
     })
@@ -351,7 +359,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
       edges.push({ id: `${a}->${b}`, source: a, target: b, sourceHandle: 's-right', targetHandle: 't-left', type: 'flow', data, markerEnd: marker(data) })
     }
     return { nodes, edges }
-  }, [L, tierRoutes, zoneRoutes, zoned, unit, zone, regionFailed, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit, gaps])
+  }, [L, free, tierRoutes, zoneRoutes, zoned, unit, zone, regionFailed, design, flow, step, nonce, packetMs, cloud, selected, net, mon, failed, edit, gaps])
 
   return (
     <ReactFlow id={id} key={`${design.id}:${net}:${zoned && unit}:${mon}:${obsOpen}`} className={edit?.mode === 'connect' ? 'connect-mode' : undefined} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
@@ -389,10 +397,10 @@ function Caption({ design, step, index, total, cloud, cross, monitoring, flowId,
   return (
     <div className="caption" role="status" aria-live="polite">
       <div className="caption-head">
-        <span className="pill" style={{ color: KIND_VAR[step.kind], borderColor: KIND_VAR[step.kind] }}>{KIND_TEXT[step.kind]}</span>
+        <span className="pill" style={{ color: KIND_INK[step.kind], borderColor: KIND_VAR[step.kind] }}>{KIND_TEXT[step.kind]}</span>
         <span className="muted">{index + 1}/{total}</span>
         <b>{name(step.from)}{step.from !== step.to && <> → {name(step.to)}</>}</b>
-        <span className="mono" style={{ color: KIND_VAR[step.kind] }}>{step.label}</span>
+        <span className="mono" style={{ color: KIND_INK[step.kind] }}>{step.label}</span>
         {cross && <span className="muted">· cross-{cross}</span>}
       </div>
       {detail && step.detail && <p>{step.detail}</p>}

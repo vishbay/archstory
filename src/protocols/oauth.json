@@ -12,7 +12,8 @@
     "difficulty": "hard",
     "source": "RFC 6749 (OAuth 2.0), RFC 6750 (bearer tokens), RFC 7636 (PKCE), RFC 7519 (JWT), RFC 7515 (JWS), RFC 7517 (JWK), RFC 8725 (JWT best current practices), RFC 9068 (JWT access tokens), RFC 8252 (native apps), RFC 9700 (OAuth 2.0 security best current practice), OpenID Connect Core 1.0",
     "kind": "protocol",
-    "order": 9
+    "order": 9,
+    "section": "Security"
   },
   "requirements": {
     "functional": [

@@ -12,7 +12,8 @@
     "difficulty": "medium",
     "source": "RFC 6455 (WebSocket), RFC 7692 (permessage-deflate), RFC 9110 (HTTP semantics, Upgrade and Connection), RFC 9112 (HTTP/1.1), RFC 8441 (WebSocket over HTTP/2)",
     "kind": "protocol",
-    "order": 6
+    "order": 6,
+    "section": "Network"
   },
   "requirements": {
     "functional": [

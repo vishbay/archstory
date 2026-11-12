@@ -1,5 +1,6 @@
 import { isOnPrem, isProtocol, type Design, type Flow, type WireField } from '../model/schema'
-import { fmtRtt, rttTimes } from '../model/protocol'
+import { fmtMs, fmtRtt, rttTimes, rttToMs, type DataView } from '../model/protocol'
+import { useRtt } from './useRtt'
 import { ScenarioPicker } from './ScenarioPicker'
 import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
@@ -69,6 +70,32 @@ export function WireTable({ fields }: { fields: WireField[] }) {
   )
 }
 
+/** What an actor's data structure holds after the current step, in the same compact table style (marked items are bold with a dot). */
+export function DataTable({ data, name }: { data: Record<string, DataView>; name: (id: string) => string }) {
+  return (
+    <>
+      <h5 className="wire-title">Data after this step</h5>
+      <table className="wire data-table">
+        <thead><tr><th>Actor</th><th>Contents</th></tr></thead>
+        <tbody>
+          {Object.entries(data).map(([id, v]) => (
+            <tr key={id}>
+              <td className="wire-name">{name(id)}<div className="data-title">{v.title ?? 'data'}</div></td>
+              <td className="wire-value">
+                {v.items.length === 0 ? <span className="muted">empty</span> : (
+                  <ul className="data-items">
+                    {v.items.map((it, i) => <li key={i} className={v.mark?.includes(i) ? 'mk' : undefined}>{v.mark?.includes(i) && <span aria-hidden="true">{'\u25CF '}</span>}{it}</li>)}
+                  </ul>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
 const NOTE_ICON = { tradeoff: '⚖️', scaling: '📈', failure: '💥', security: '🔐', note: '📝' } as const
 
 export function Inspector({ design, flow, player, cloud, network, monitoring = false, zone, regionFailed = null, selected, tab, onTab, onFlow, onSelect }: {
@@ -99,6 +126,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
     ? [cur.from, cur.to].map(id => byId[id]).find(n => regionImpactOf(design, n, regionFailed)?.level === 'down') : undefined
   const res = zones ? resilience(design, zoneFailed ?? 0, cloud) : null
   const proto = isProtocol(design)
+  const rtt = useRtt(design)
   const at = proto && flow && cur ? rttTimes(flow.steps)[step] : null
   const drill = regions ? regionDrill(design, regionFailed ?? homeRegion(design)) : null
 
@@ -122,7 +150,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             {cur ? (
               <div className="card current-card">
                 <div className="card-meta">
-                  <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}{at !== null ? ` · at ${fmtRtt(at)}` : ''}</span>
+                  <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}{at !== null ? (cur.lost ? ' · lost in the network' : ` · at ${fmtRtt(at)}, ${fmtMs(rttToMs(at, rtt.ms))}`) : ''}{at !== null && rtt.custom ? ` (at ${Number(rtt.ms.toFixed(1))} ms round trip)` : ''}</span>
                   <span className="pill" style={{ color: KIND_INK[cur.kind], borderColor: KIND_VAR[cur.kind] }}>{KIND_TEXT[cur.kind]}</span>
                 </div>
                 <div className="card-hop">
@@ -144,6 +172,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
                     {Object.entries(cur.state).map(([id, v]) => <span key={id} className="pill">{byId[id] ? name(id) : id} {v}</span>)}</div>
                 )}
                 {cur.fields && cur.fields.length > 0 && <WireTable fields={cur.fields} />}
+                {cur.data && Object.keys(cur.data).length > 0 && <DataTable data={cur.data} name={id => (byId[id] ? name(id) : id)} />}
               </div>
             ) : (
               <div className="card muted">{proto ? 'Press ▶ or space to play the messages on the wire. ← → step through them.' : 'Press ▶ or space to send a request through the system. ← → step through it.'}</div>

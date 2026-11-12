@@ -1,6 +1,7 @@
 // A searchable design picker (opened from the top bar or with ⌘K / Ctrl+K), replacing the long library list.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
+import { groupBySection } from '../protocols/sections'
 
 export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClose, kind = 'system' }: {
   library: Design[]; mine: Design[]; currentId: string
@@ -18,7 +19,10 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
     const s = q.trim().toLowerCase()
     const ofKind = (d: Design) => (d.meta.kind ?? 'system') === kind
     const hit = (d: Design) => !s || d.meta.title.toLowerCase().includes(s) || d.meta.tags.some(t => t.includes(s)) || (d.meta.summary ?? '').toLowerCase().includes(s)
-    return [...library.filter(ofKind).filter(hit).map(d => ({ d, mine: false })), ...mine.filter(ofKind).filter(hit).map(d => ({ d, mine: true }))]
+    const found = [...library.filter(ofKind).filter(hit).map(d => ({ d, mine: false })), ...mine.filter(ofKind).filter(hit).map(d => ({ d, mine: true }))]
+    // Protocols are listed under their section headings, in the same order as on Home; the keyboard moves through them in that order.
+    if (kind !== 'protocol') return found.map(x => ({ ...x, head: undefined as string | undefined }))
+    return groupBySection(found.map(x => x.d)).flatMap(g => g.designs.map((d, i) => ({ d, mine: found.find(x => x.d === d)!.mine, head: i === 0 ? g.section : undefined })))
   }, [library, mine, q, kind])
   const noun = kind === 'protocol' ? 'protocols' : 'designs'
   const at = Math.min(idx, Math.max(0, items.length - 1))
@@ -36,8 +40,10 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
       <input className="picker-input" autoFocus placeholder={`Search ${noun} or tags…`} value={q} aria-label={`Search ${noun}`}
         onChange={e => { setQ(e.target.value); setIdx(0) }} onKeyDown={onKey} role="combobox" aria-expanded aria-controls="picker-list" />
       <ul id="picker-list" ref={list} className="picker-list" role="listbox">
-        {items.map(({ d, mine: m }, i) => (
-          <li key={d.id} role="option" aria-selected={i === at} className={`${i === at ? 'sel' : ''}${d.id === currentId ? ' current' : ''}`}
+        {items.map(({ d, mine: m, head }, i) => (
+          <Fragment key={d.id}>
+          {head && <li role="presentation" className="pick-head" data-section={head}>{head}</li>}
+          <li role="option" aria-selected={i === at} className={`${i === at ? 'sel' : ''}${d.id === currentId ? ' current' : ''}`}
             onMouseMove={() => setIdx(i)} onClick={() => choose(d.id)}>
             <div className="pick-main">
               <b>{d.meta.title}</b>
@@ -51,6 +57,7 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
             {m && <button className="icon ghost pick-del" title="Remove from my designs" aria-label={`Remove ${d.meta.title}`}
               onClick={e => { e.stopPropagation(); onDelete(d.id) }}>×</button>}
           </li>
+          </Fragment>
         ))}
         {!items.length && <li className="pick-empty muted">No {noun} match “{q}”.</li>}
       </ul>

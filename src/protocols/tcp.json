@@ -3,16 +3,18 @@
   "id": "tcp",
   "meta": {
     "title": "TCP",
-    "summary": "How two machines open a reliable connection, send a request and a response, ramp up speed and close it again, segment by segment.",
+    "summary": "How two machines open a reliable connection, send a request and a response, ramp up speed, recover from lost packets and close it again, segment by segment.",
     "tags": [
       "transport",
       "handshake",
-      "congestion control"
+      "congestion control",
+      "loss recovery"
     ],
     "difficulty": "medium",
-    "source": "RFC 9293 (TCP), RFC 6928 (initial window of 10 segments), RFC 5681 (congestion control), RFC 6298 (retransmission timer), RFC 6528 (initial sequence numbers)",
+    "source": "RFC 9293 (TCP), RFC 6928 (initial window of 10 segments), RFC 5681 (congestion control and fast retransmit), RFC 6298 (retransmission timer), RFC 2018 (selective acknowledgments, mentioned only), RFC 6528 (initial sequence numbers)",
     "kind": "protocol",
-    "order": 2
+    "order": 2,
+    "section": "Network"
   },
   "requirements": {
     "functional": [
@@ -669,6 +671,717 @@
           "kind": "local",
           "label": "connect() fails: ECONNREFUSED",
           "detail": "The application gets 'connection refused' after one round trip. Compare a firewall that silently drops the SYN: then nothing comes back, the client retransmits the SYN after the initial retransmission timeout of 1 second (RFC 6298), doubling the wait each time, and the application waits a long time before it hears of a timeout."
+        }
+      ]
+    },
+    {
+      "id": "loss",
+      "title": "Packet loss: fast retransmit and timeout",
+      "summary": "Two ways TCP notices a lost segment. In the middle of a flight, three duplicate ACKs trigger a fast retransmit about one round trip later and the sending rate is cut to half the data in flight. At the end of a flight nothing follows to trigger them, so the sender waits for the retransmission timeout, doubled each time, and the window collapses to one segment.",
+      "steps": [
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Send 9 segments",
+          "label": "cwnd = 10 MSS, 9 segments to send",
+          "detail": "The connection is open and the client's 100-byte request (seq 1001 to 1100) has arrived, as in the first scenario. The response is 13,140 bytes: 9 full segments of 1,460 bytes, numbered from the server's ISN 5000, so the first byte is 5001. A fresh connection starts with a congestion window of 10 segments (RFC 6928), enough to send all nine at once. The clock starts here.",
+          "state": {
+            "client": "ESTABLISHED",
+            "server": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "10 x MSS = 14,600 bytes",
+              "note": "RFC 6928 initial window"
+            },
+            {
+              "name": "ssthresh",
+              "value": "arbitrarily high",
+              "note": "RFC 5681: slow start runs until the first loss"
+            },
+            {
+              "name": "response",
+              "value": "13,140 bytes = 9 x 1,460",
+              "note": "sequence numbers 5001 to 18140; the next byte after the response is 18141"
+            },
+            {
+              "name": "MSS",
+              "value": "1,460 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segment 1 seq=5001",
+          "detail": "The first segment goes out and arrives. The client acknowledges data it receives in order.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK",
+              "note": "Every segment after the handshake carries the ACK bit"
+            },
+            {
+              "name": "seq",
+              "value": "5001",
+              "note": "ISN 5000 + 1"
+            },
+            {
+              "name": "ack",
+              "value": "1101",
+              "note": "The client's 100-byte request used 1001 to 1100, so the next byte the server expects is 1101"
+            },
+            {
+              "name": "data",
+              "value": "1460 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segment 2 seq=6461",
+          "detail": "The second segment is sent right behind the first, but the network drops it: a congested router queue overflowed. It never arrives, so the clock does not move for it. The sender cannot know this yet; all it can do is keep sending.",
+          "lost": true,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "6461",
+              "note": "5001 + 1460"
+            },
+            {
+              "name": "ack",
+              "value": "1101"
+            },
+            {
+              "name": "data",
+              "value": "1460 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segments 3 to 9 seq=7921",
+          "detail": "The other seven segments are sent behind it and all arrive. They are out of order: the receiver is still waiting for byte 6461, so it cannot deliver them to the application, but it keeps them. RFC 5681 says a receiver SHOULD send an immediate duplicate ACK for every out-of-order segment, so each of these seven triggers one.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "7921",
+              "note": "The first of seven segments, each 1460 bytes after the one before: 7921, 9381, ... 16681"
+            },
+            {
+              "name": "ack",
+              "value": "1101"
+            },
+            {
+              "name": "segments",
+              "value": "7"
+            },
+            {
+              "name": "bytes",
+              "value": "10,220 = 7 x 1,460",
+              "note": "sequence numbers 7921 to 18140"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Duplicate ACKs",
+          "label": "ACK ack=6461",
+          "detail": "The receiver acknowledged segment 1 as soon as it arrived. This ACK is new: it moves the cumulative acknowledgment forward from 5001 to 6461. It is not a duplicate.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1101",
+              "note": "The client has sent nothing since its request, so its sequence number stays at 1101"
+            },
+            {
+              "name": "ack",
+              "value": "6461",
+              "note": "Next byte expected: 5001 + 1460"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "Dup ACK #1 ack=6461",
+          "detail": "Segment 3 arrives out of order, so the receiver repeats ack=6461: it still wants byte 6461. A duplicate ACK is an ACK that repeats the last one while data is outstanding. One alone means little, because the network can also reorder segments.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1101"
+            },
+            {
+              "name": "ack",
+              "value": "6461",
+              "note": "The same number as the ACK before it"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            },
+            {
+              "name": "duplicate",
+              "value": "#1 of 3 needed",
+              "note": "RFC 5681: fast retransmit starts at the third duplicate ACK"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "Dup ACK #2 ack=6461",
+          "detail": "Segment 4 arrives out of order and the receiver repeats ack=6461 again. Two duplicates can still be mere reordering.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1101"
+            },
+            {
+              "name": "ack",
+              "value": "6461",
+              "note": "The same number as the ACK before it"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            },
+            {
+              "name": "duplicate",
+              "value": "#2 of 3 needed",
+              "note": "RFC 5681: fast retransmit starts at the third duplicate ACK"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "Dup ACK #3 ack=6461",
+          "detail": "Segment 5 arrives out of order and the receiver repeats ack=6461 a third time. Three duplicate ACKs in a row are strong evidence that segment 2 was lost, not just delayed. Four more duplicate ACKs follow, one for each of segments 6 to 9, but the sender has what it needs. With SACK (RFC 2018), which both sides offered in the handshake, each duplicate would also name the ranges that did arrive; we show plain duplicate ACKs.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1101"
+            },
+            {
+              "name": "ack",
+              "value": "6461",
+              "note": "The same number as the ACK before it"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            },
+            {
+              "name": "duplicate",
+              "value": "#3 of 3 needed",
+              "note": "RFC 5681: fast retransmit starts at the third duplicate ACK"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Fast retransmit",
+          "label": "3rd dup ACK: fast retransmit",
+          "detail": "On the third duplicate ACK the sender does not wait for its retransmission timer. It halves its sending rate: ssthresh becomes half of FlightSize, the data sent but not yet acknowledged (segments 2 to 9, which is 8 segments, not the whole window of 10), and the missing segment is sent again at once. cwnd is set to ssthresh plus 3 segments, one for each duplicate ACK, because each of those segments has left the network.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "duplicate ACKs",
+              "value": "3",
+              "note": "The threshold of RFC 5681"
+            },
+            {
+              "name": "FlightSize",
+              "value": "11,680 bytes = 18141 - 6461",
+              "note": "SND.NXT minus SND.UNA: 8 segments sent and not yet acknowledged"
+            },
+            {
+              "name": "ssthresh",
+              "value": "max(11,680 / 2, 2 x 1,460) = 5,840",
+              "note": "RFC 5681 equation 4: 4 x MSS"
+            },
+            {
+              "name": "cwnd",
+              "value": "5,840 + 3 x 1,460 = 10,220",
+              "note": "RFC 5681 step 3: ssthresh plus 3 x MSS"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segment 2 again seq=6461",
+          "detail": "The retransmission carries the same sequence number and the same 1,460 bytes. It takes the usual half round trip to arrive, and nothing else is lost this time. The four later duplicate ACKs each add one segment to cwnd (RFC 5681 step 4) while the sender waits; there is no new data to send, so it does not matter here.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "6461",
+              "note": "Same as the lost original"
+            },
+            {
+              "name": "ack",
+              "value": "1101"
+            },
+            {
+              "name": "data",
+              "value": "1460 bytes"
+            },
+            {
+              "name": "retransmission",
+              "value": "1",
+              "note": "sent after 3 duplicate ACKs, about 1 RTT after the loss, not after a timeout"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACK ack=18141",
+          "detail": "The hole is filled: the receiver already holds bytes 7921 to 18140, so one cumulative ACK jumps from 6461 to 18141. The whole response has now been delivered, one round trip after the loss was noticed.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1101"
+            },
+            {
+              "name": "ack",
+              "value": "18141",
+              "note": "Next byte expected: 5001 + 9 x 1460"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Recovery over: cwnd = 4 MSS",
+          "detail": "This ACK acknowledges new data, so fast recovery ends and cwnd drops back from the inflated 10,220 to ssthresh (RFC 5681 step 6). The sender now grows by about one segment per round trip (congestion avoidance). Compared with its 10-segment start the window is more than halved, and the loss cost about one round trip of waiting. Everything that follows assumes this smaller window.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "4 x MSS = 5,840 bytes",
+              "note": "RFC 5681 step 6: cwnd = ssthresh"
+            },
+            {
+              "name": "ssthresh",
+              "value": "5,840 bytes"
+            },
+            {
+              "name": "growth",
+              "value": "about +1 MSS per RTT",
+              "note": "congestion avoidance, since cwnd is not below ssthresh"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "phase": "Next response",
+          "label": "PSH, ACK seq=1101 ack=18141, 100 bytes",
+          "detail": "Later on the same connection the client sends a second request of 100 bytes. It reuses the connection, so there is no handshake. Its ACK field carries the same acknowledgment as the segment before.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "PSH, ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1101",
+              "note": "The client's first byte of this request"
+            },
+            {
+              "name": "ack",
+              "value": "18141"
+            },
+            {
+              "name": "data",
+              "value": "100 bytes",
+              "note": "sequence numbers 1101 to 1200; the next byte is 1201"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "cwnd = 4 MSS: send 4 segments",
+          "detail": "The answer is 5,840 bytes, exactly 4 segments, which is all the smaller window allows in one flight. It starts where the first response ended, at 18141.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "4 x MSS = 5,840 bytes"
+            },
+            {
+              "name": "response",
+              "value": "5,840 bytes = 4 x 1,460",
+              "note": "sequence numbers 18141 to 23980; the next byte after it is 23981"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segments 10 to 12 seq=18141",
+          "detail": "The first three segments of the flight arrive in order.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "18141",
+              "note": "The first of three segments: 18141, 19601, 21061"
+            },
+            {
+              "name": "ack",
+              "value": "1201",
+              "note": "The request used 1101 to 1200"
+            },
+            {
+              "name": "segments",
+              "value": "3"
+            },
+            {
+              "name": "bytes",
+              "value": "4,380 = 3 x 1,460",
+              "note": "sequence numbers 18141 to 22520"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segment 13 seq=22521",
+          "detail": "The fourth and last segment is dropped. Nothing is sent after it, so the receiver never sees an out-of-order segment and has nothing to complain about. No duplicate ACKs will ever come, and fast retransmit cannot help.",
+          "lost": true,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "PSH, ACK"
+            },
+            {
+              "name": "seq",
+              "value": "22521",
+              "note": "18141 + 3 x 1460"
+            },
+            {
+              "name": "ack",
+              "value": "1201"
+            },
+            {
+              "name": "data",
+              "value": "1460 bytes"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACK ack=22521",
+          "detail": "The receiver acknowledges the three segments it got (one cumulative ACK; real receivers often delay and combine ACKs, which we do not model). The ACK covers new data but not segment 13, so the sender restarts its retransmission timer (RFC 6298 rule 5.3).",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1201",
+              "note": "After the second request, the client's next byte is 1201"
+            },
+            {
+              "name": "ack",
+              "value": "22521",
+              "note": "Next byte expected: 18141 + 3 x 1460"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Timeout wait",
+          "label": "Silence: waiting 1 s for the RTO",
+          "detail": "With no duplicate ACKs, the only signal left is silence. The retransmission timer (RTO) started when the last ACK arrived and runs for 1 second. RFC 6298 rounds the RTO up to at least 1 second whatever the measured round trip, so on this 50 ms path the sender waits 20 round trips (many systems use a smaller minimum; Linux uses 200 ms). The readout counts this wait in round trips, so it scales with the Distance setting even though a real timeout does not.",
+          "delay": 40,
+          "fields": [
+            {
+              "name": "RTO",
+              "value": "1 s",
+              "note": "RFC 6298: the initial RTO is 1 second and later values are never below 1 second"
+            },
+            {
+              "name": "duplicate ACKs",
+              "value": "0",
+              "note": "No segment was sent after the lost one"
+            },
+            {
+              "name": "wait",
+              "value": "1 s = 20 RTT at 50 ms",
+              "note": "The numbers on this page assume a 50 ms round trip"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Timeout: cwnd collapses to 1 MSS",
+          "detail": "The timer expires. The sender treats a timeout as a sign of heavy congestion: much worse than three duplicate ACKs, which prove that later segments still got through. It sets ssthresh from FlightSize (only segment 13 is outstanding), drops cwnd to the loss window of one segment, doubles the RTO and retransmits the earliest unacknowledged segment.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "FlightSize",
+              "value": "1,460 bytes",
+              "note": "only segment 13 is unacknowledged"
+            },
+            {
+              "name": "ssthresh",
+              "value": "max(1,460 / 2, 2 x 1,460) = 2,920",
+              "note": "RFC 5681 equation 4: 2 x MSS, the minimum"
+            },
+            {
+              "name": "cwnd",
+              "value": "1 x MSS = 1,460 bytes",
+              "note": "RFC 5681: the loss window after a timeout is 1 segment"
+            },
+            {
+              "name": "RTO",
+              "value": "1 s -> 2 s",
+              "note": "RFC 6298 rule 5.5: back off the timer by doubling it"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "label": "Segment 13 again seq=22521",
+          "detail": "The retransmission is lost too, an unlucky but realistic case on a congested path. The timer restarts, now with the doubled RTO.",
+          "lost": true,
+          "fields": [
+            {
+              "name": "flags",
+              "value": "PSH, ACK"
+            },
+            {
+              "name": "seq",
+              "value": "22521",
+              "note": "Same as the original"
+            },
+            {
+              "name": "ack",
+              "value": "1201"
+            },
+            {
+              "name": "data",
+              "value": "1460 bytes"
+            },
+            {
+              "name": "retransmission",
+              "value": "1",
+              "note": "sent after the first timeout"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "phase": "Second timeout",
+          "label": "Silence again: waiting 2 s",
+          "detail": "Each timeout doubles the wait: 1 s, then 2 s, then 4 s, and so on (RFC 6298 allows an upper bound of at least 60 seconds). Backing off keeps a sender from hammering a network that is already dropping its packets.",
+          "delay": 80,
+          "fields": [
+            {
+              "name": "RTO",
+              "value": "2 s",
+              "note": "doubled"
+            },
+            {
+              "name": "wait",
+              "value": "2 s = 40 RTT at 50 ms"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "Second timeout: RTO 4 s",
+          "detail": "The second timeout changes less than the first. The window is already 1 segment. ssthresh is not touched again: RFC 5681 applies equation 4 only when the segment has not yet been resent by the timer, so repeated timeouts do not keep shrinking it. The RTO doubles again and the segment is sent again.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "1 x MSS = 1,460 bytes",
+              "note": "already at the loss window"
+            },
+            {
+              "name": "ssthresh",
+              "value": "2,920",
+              "note": "unchanged: the segment was already retransmitted by the timer"
+            },
+            {
+              "name": "RTO",
+              "value": "2 s -> 4 s",
+              "note": "doubled again"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "client",
+          "kind": "res",
+          "phase": "Recovery",
+          "label": "Segment 13 again seq=22521",
+          "detail": "This copy arrives. Total delay for the last 1,460 bytes: 1 s + 2 s of timeouts, compared with about one round trip for the lost segment in the middle of the first flight.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "PSH, ACK"
+            },
+            {
+              "name": "seq",
+              "value": "22521"
+            },
+            {
+              "name": "ack",
+              "value": "1201"
+            },
+            {
+              "name": "data",
+              "value": "1460 bytes"
+            },
+            {
+              "name": "retransmission",
+              "value": "2",
+              "note": "sent after the second timeout"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "server",
+          "kind": "req",
+          "label": "ACK ack=23981",
+          "detail": "The ACK covers the last byte of the response. The sender takes no round-trip sample from a retransmitted segment, because it cannot tell which copy the ACK answers (Karn's algorithm, RFC 6298 section 3).",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "seq",
+              "value": "1201"
+            },
+            {
+              "name": "ack",
+              "value": "23981",
+              "note": "Next byte expected: 22521 + 1460"
+            },
+            {
+              "name": "data",
+              "value": "0 bytes"
+            }
+          ]
+        },
+        {
+          "from": "server",
+          "to": "server",
+          "kind": "local",
+          "label": "cwnd 1 -> 2 MSS, then linear",
+          "detail": "A new ACK in slow start grows cwnd by up to one segment, so cwnd goes from 1 to 2 segments, which equals ssthresh. From here growth is linear. The connection that had a 10-segment window is now at 2: a timeout costs far more than a fast retransmit, which is why recovery from three duplicate ACKs matters.",
+          "delay": 0,
+          "fields": [
+            {
+              "name": "cwnd",
+              "value": "2 x MSS = 2,920 bytes",
+              "note": "RFC 5681: slow start while cwnd is below ssthresh"
+            },
+            {
+              "name": "ssthresh",
+              "value": "2,920 bytes"
+            },
+            {
+              "name": "next",
+              "value": "about +1 MSS per RTT",
+              "note": "congestion avoidance"
+            }
+          ]
         }
       ]
     }

@@ -10,8 +10,8 @@ const flowOf = (d: string, f: string): Flow => { const x = byId(d).flows.find(y 
 
 describe('protocol designs', () => {
   it('loads the protocol modules in order, all marked as protocols and kept out of the library', () => {
-    expect(PROTOCOLS.map(p => p.id)).toEqual(['dns', 'tcp', 'tls', 'url', 'http', 'websocket', 'loadbalancing', 'nat', 'oauth'])
-    expect(PROTOCOLS.map(p => p.meta.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(PROTOCOLS.map(p => p.id)).toEqual(['dns', 'tcp', 'tls', 'url', 'http', 'websocket', 'loadbalancing', 'nat', 'oauth', 'hashring'])
+    expect(PROTOCOLS.map(p => p.meta.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     for (const p of PROTOCOLS) expect(isProtocol(p)).toBe(true)
     expect(LIBRARY.some(isProtocol)).toBe(false)
     const lib = new Set(LIBRARY.map(d => d.id))
@@ -30,7 +30,7 @@ describe('protocol designs', () => {
       })
       expect(d.questions.length).toBeGreaterThanOrEqual(5)
       expect(d.questions.length).toBeLessThanOrEqual(6)
-      expect(d.meta.source).toMatch(/RFC/)
+      expect(d.meta.source).toMatch(d.id === 'hashring' ? /Karger/ : /RFC/)   // the hash ring has no RFC: it cites the papers
     }
   })
 
@@ -66,8 +66,9 @@ describe('TCP', () => {
 
   it('only uses RFC 9293 state names and moves along legal transitions', () => {
     for (const f of tcp.flows) {
-      // A scenario that starts mid-connection (slow start) declares where it starts; the others start with no connection.
-      const now: Record<string, string> = f.id === 'slow-start' ? { ...f.steps[0].state } : { client: 'CLOSED', server: 'CLOSED' }
+      // A scenario that starts mid-connection (slow start, packet loss) declares where it starts; the others start with no connection.
+      const midConnection = f.id === 'slow-start' || f.id === 'loss'
+      const now: Record<string, string> = midConnection ? { ...f.steps[0].state } : { client: 'CLOSED', server: 'CLOSED' }
       f.steps.forEach((s, i) => {
         for (const [actor, next] of Object.entries(s.state ?? {})) {
           expect(TCP_STATES, `${f.id} step ${i + 1}`).toContain(next)
@@ -75,7 +76,7 @@ describe('TCP', () => {
           now[actor] = next
         }
       })
-      if (f.id !== 'slow-start') expect(now, `${f.id} ends with both sides closed`).toEqual({ client: 'CLOSED', server: 'CLOSED' })
+      if (!midConnection) expect(now, `${f.id} ends with both sides closed`).toEqual({ client: 'CLOSED', server: 'CLOSED' })
     }
   })
 

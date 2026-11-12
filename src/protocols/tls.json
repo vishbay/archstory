@@ -12,7 +12,8 @@
     "difficulty": "hard",
     "source": "RFC 8446 (TLS 1.3, including appendix A state names), RFC 8448 (example TLS 1.3 handshake traces), RFC 7301 (ALPN), RFC 6066 (server_name and status_request), RFC 6962 (certificate transparency), RFC 9113 (HTTP/2 preface and SETTINGS)",
     "kind": "protocol",
-    "order": 3
+    "order": 3,
+    "section": "Security"
   },
   "requirements": {
     "functional": [

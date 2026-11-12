@@ -12,7 +12,8 @@
     "difficulty": "easy",
     "source": "RFC 1034 and RFC 1035 (DNS), RFC 2308 (negative caching), RFC 6891 (EDNS0), RFC 7766 (DNS over TCP), RFC 9156 (QNAME minimisation)",
     "kind": "protocol",
-    "order": 1
+    "order": 1,
+    "section": "Network"
   },
   "requirements": {
     "functional": [

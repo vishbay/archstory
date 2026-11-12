@@ -12,7 +12,9 @@
     "difficulty": "medium",
     "source": "RFC 1034 and RFC 1035 (DNS), RFC 9293 (TCP), RFC 8446 (TLS 1.3), RFC 7301 (ALPN), RFC 9113 (HTTP/2), RFC 9110 and RFC 9111 (HTTP semantics and caching), RFC 6797 (HSTS), RFC 9114 (HTTP/3)",
     "kind": "protocol",
-    "order": 4
+    "order": 4,
+    "section": "Network",
+    "rtt": 50
   },
   "requirements": {
     "functional": [

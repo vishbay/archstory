@@ -1,0 +1,1170 @@
+{
+  "schema": "archstory/v1",
+  "id": "hashring",
+  "meta": {
+    "title": "Consistent hashing",
+    "summary": "How a hash ring decides which machine owns a key, why adding a machine moves only a few keys, and how virtual nodes even out the load. Positions are small made-up numbers so the arithmetic can be followed.",
+    "tags": [
+      "partitioning",
+      "hash ring",
+      "virtual nodes"
+    ],
+    "difficulty": "medium",
+    "source": "Karger et al., Consistent Hashing and Random Trees (STOC 1997); DeCandia et al., Dynamo: Amazon's Highly Available Key-value Store (SOSP 2007)",
+    "kind": "protocol",
+    "order": 10,
+    "section": "Distributed systems",
+    "layout": "free"
+  },
+  "requirements": {
+    "functional": [
+      "Maps every key to one machine with a rule every client and machine can compute on its own, with no central lookup table",
+      "Puts machines and keys on the same circle: a key belongs to the first machine token at or after its position, going clockwise",
+      "Lets machines join and leave while moving only the keys in the arcs next to the change",
+      "Gives each machine several tokens (virtual nodes) so its share of the ring is many small arcs"
+    ],
+    "nonFunctional": [
+      "With hash mod N almost every key moves when N changes; with a ring about K/N of K keys move when one machine is added",
+      "With one token per machine the arcs can be very uneven, and a failed machine's whole arc lands on one neighbour",
+      "Many tokens per machine even out the load on average and spread a failure over many machines, at the cost of a larger ring to store and gossip",
+      "The ring balances where keys land, not how popular they are: one hot key still sits on one machine"
+    ],
+    "scale": [
+      {
+        "label": "Ring in this example",
+        "value": "positions 0 to 99 (illustrative; real rings use 2^64 to 2^160 positions)"
+      },
+      {
+        "label": "Keys moved when a machine joins",
+        "value": "about K / N, here 8 / 5 = 1.6 (1 moved)"
+      },
+      {
+        "label": "Keys moved with hash mod N",
+        "value": "7 of 8 going from 4 to 5 machines"
+      },
+      {
+        "label": "Tokens per machine in the last scenario",
+        "value": "3 (real systems use tens to hundreds)"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "Looks keys up. It hashes each key onto the ring and needs the machine that owns that position",
+      "at": {
+        "x": 50,
+        "y": 50
+      }
+    },
+    {
+      "id": "a",
+      "label": "Node A",
+      "kind": "nosql_db",
+      "description": "A storage machine with a token on the ring; it owns the keys between the previous token and its own",
+      "at": {
+        "x": 69.3,
+        "y": 14.9
+      }
+    },
+    {
+      "id": "b",
+      "label": "Node B",
+      "kind": "nosql_db",
+      "description": "A storage machine with a token on the ring",
+      "at": {
+        "x": 85.1,
+        "y": 69.3
+      }
+    },
+    {
+      "id": "c",
+      "label": "Node C",
+      "kind": "nosql_db",
+      "description": "A storage machine with a token on the ring",
+      "at": {
+        "x": 26.5,
+        "y": 82.4
+      }
+    },
+    {
+      "id": "d",
+      "label": "Node D",
+      "kind": "nosql_db",
+      "description": "A storage machine with a token on the ring",
+      "at": {
+        "x": 17.6,
+        "y": 26.5
+      }
+    },
+    {
+      "id": "e",
+      "label": "Node E",
+      "kind": "nosql_db",
+      "description": "A fifth machine that joins the ring in the second scenario",
+      "at": {
+        "x": 62.4,
+        "y": 88.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "a",
+      "label": "lookup",
+      "protocol": "TCP"
+    },
+    {
+      "from": "client",
+      "to": "b",
+      "label": "lookup",
+      "protocol": "TCP"
+    },
+    {
+      "from": "client",
+      "to": "c",
+      "label": "lookup",
+      "protocol": "TCP"
+    },
+    {
+      "from": "client",
+      "to": "d",
+      "label": "lookup",
+      "protocol": "TCP"
+    },
+    {
+      "from": "a",
+      "to": "b",
+      "label": "successor"
+    },
+    {
+      "from": "b",
+      "to": "c",
+      "label": "successor"
+    },
+    {
+      "from": "c",
+      "to": "d",
+      "label": "successor"
+    },
+    {
+      "from": "d",
+      "to": "a",
+      "label": "successor"
+    },
+    {
+      "from": "e",
+      "to": "c",
+      "label": "successor of E"
+    },
+    {
+      "from": "e",
+      "to": "b",
+      "label": "predecessor of E"
+    }
+  ],
+  "flows": [
+    {
+      "id": "lookup",
+      "title": "Look up a key",
+      "summary": "Hash the key to a position, then walk clockwise to the first machine token at or after it.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "The ring",
+          "label": "8 keys on 4 machines, ring 0 to 99",
+          "detail": "The hash ring is a circle of positions 0 to 99 (a real ring is huge, such as 2^128; 100 positions keep the arithmetic readable). Each machine hashes its name to one position, its token, and owns the keys that hash into the arc ending at its token: from the previous token, not included, up to its own, included. The eight keys sit at the positions listed; every number here is illustrative.",
+          "fields": [
+            {
+              "name": "ring",
+              "value": "positions 0 to 99, clockwise",
+              "note": "illustrative: made-up positions, not real hashes"
+            },
+            {
+              "name": "tokens",
+              "value": "A 8, B 33, C 60, D 85"
+            },
+            {
+              "name": "rule",
+              "value": "key is owned by the first token at or after its position, going clockwise",
+              "note": "past the last token it wraps around to the first"
+            }
+          ],
+          "data": {
+            "client": {
+              "title": "keys",
+              "items": [
+                "k1 5",
+                "k2 18",
+                "k3 29",
+                "k4 41",
+                "k5 53",
+                "k6 66",
+                "k7 78",
+                "k8 92"
+              ]
+            },
+            "a": {
+              "title": "ring",
+              "items": [
+                "token 8",
+                "owns (85,8]",
+                "keys: k1 k8"
+              ]
+            },
+            "b": {
+              "title": "ring",
+              "items": [
+                "token 33",
+                "owns (8,33]",
+                "keys: k2 k3"
+              ]
+            },
+            "c": {
+              "title": "ring",
+              "items": [
+                "token 60",
+                "owns (33,60]",
+                "keys: k4 k5"
+              ]
+            },
+            "d": {
+              "title": "ring",
+              "items": [
+                "token 85",
+                "owns (60,85]",
+                "keys: k6 k7"
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Hash the key",
+          "label": "hash(k5) = 53",
+          "detail": "To look up k5 the client hashes the key with the same function the machines used for their names. That gives position 53 on the ring. Which machine owns it is not yet known: it is the first token at or after 53 going clockwise.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k5"
+            },
+            {
+              "name": "hash",
+              "value": "53",
+              "note": "illustrative"
+            }
+          ],
+          "data": {
+            "client": {
+              "title": "lookup",
+              "items": [
+                "k5 hashes to 53"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "a",
+          "kind": "req",
+          "phase": "Walk clockwise",
+          "label": "lookup position 53",
+          "detail": "The client sends the lookup to machine A, whichever machine it happens to reach. Some rings (Chord) find the owner by passing the request from successor to successor, as drawn here. Dynamo and Cassandra keep the whole ring on every machine and jump to the owner in one hop. The ownership rule is the same.",
+          "fields": [
+            {
+              "name": "position",
+              "value": "53"
+            },
+            {
+              "name": "entry node",
+              "value": "A",
+              "note": "any node will do"
+            }
+          ]
+        },
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "token 8 is before 53: not mine",
+          "detail": "A owns the arc (85, 8], which wraps around the end of the ring, and 53 is not in it. A is therefore not the first token at or after 53, so it passes the lookup to its successor.",
+          "fields": [
+            {
+              "name": "my token",
+              "value": "8"
+            },
+            {
+              "name": "53 in (85, 8]?",
+              "value": "no",
+              "note": "that is the arc A owns"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "ring",
+              "items": [
+                "token 8",
+                "owns (85,8]",
+                "keys: k1 k8"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "b",
+          "kind": "req",
+          "label": "forward 53 to B, the successor",
+          "detail": "A forwards the lookup to the next token clockwise, machine B.",
+          "fields": [
+            {
+              "name": "position",
+              "value": "53"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "ring",
+              "items": [
+                "token 8",
+                "owns (85,8]",
+                "keys: k1 k8"
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "b",
+          "kind": "local",
+          "label": "token 33 is before 53: not mine",
+          "detail": "B owns the arc (8, 33]. 53 is not in it, so B forwards the lookup on.",
+          "fields": [
+            {
+              "name": "my token",
+              "value": "33"
+            },
+            {
+              "name": "53 in (8, 33]?",
+              "value": "no"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "ring",
+              "items": [
+                "token 33",
+                "owns (8,33]",
+                "keys: k2 k3"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "c",
+          "kind": "req",
+          "label": "forward 53 to C, the successor",
+          "detail": "B forwards the lookup to the next token clockwise, machine C.",
+          "fields": [
+            {
+              "name": "position",
+              "value": "53"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "ring",
+              "items": [
+                "token 33",
+                "owns (8,33]",
+                "keys: k2 k3"
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "c",
+          "kind": "local",
+          "label": "token 60 is at or after 53: C owns k5",
+          "detail": "C owns the arc (33, 60]. 53 is inside it, so C is the first token at or after 53, and k5 lives on C. C also holds k4 at 41. The walk stopped at the first token it met.",
+          "fields": [
+            {
+              "name": "my token",
+              "value": "60"
+            },
+            {
+              "name": "53 in (33, 60]?",
+              "value": "yes",
+              "note": "33 < 53 <= 60"
+            },
+            {
+              "name": "owner",
+              "value": "C"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "ring",
+              "items": [
+                "token 60",
+                "owns (33,60]",
+                "keys: k4 k5"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "client",
+          "kind": "res",
+          "label": "k5 found on C",
+          "detail": "C answers the client directly with the value for k5. Had the position been 92, the walk would have passed D (85) and wrapped around to A at 8.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k5"
+            },
+            {
+              "name": "owner",
+              "value": "C"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "ring",
+              "items": [
+                "token 60",
+                "owns (33,60]",
+                "keys: k4 k5"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "join",
+      "title": "A node joins",
+      "summary": "A fifth machine takes a token between B and C: only the keys in the arc between its predecessor and itself move, and only from one neighbour.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "phase": "Before",
+          "label": "4 machines, 8 keys: 2 each",
+          "detail": "The ring from before: four machines holding two keys each. A fifth machine, E, is about to join.",
+          "fields": [
+            {
+              "name": "machines",
+              "value": "4"
+            },
+            {
+              "name": "keys",
+              "value": "8"
+            },
+            {
+              "name": "per machine",
+              "value": "2"
+            }
+          ],
+          "data": {
+            "client": {
+              "title": "keys",
+              "items": [
+                "k1 5",
+                "k2 18",
+                "k3 29",
+                "k4 41",
+                "k5 53",
+                "k6 66",
+                "k7 78",
+                "k8 92"
+              ]
+            },
+            "a": {
+              "title": "ring",
+              "items": [
+                "token 8",
+                "owns (85,8]",
+                "keys: k1 k8"
+              ]
+            },
+            "b": {
+              "title": "ring",
+              "items": [
+                "token 33",
+                "owns (8,33]",
+                "keys: k2 k3"
+              ]
+            },
+            "c": {
+              "title": "ring",
+              "items": [
+                "token 60",
+                "owns (33,60]",
+                "keys: k4 k5"
+              ]
+            },
+            "d": {
+              "title": "ring",
+              "items": [
+                "token 85",
+                "owns (60,85]",
+                "keys: k6 k7"
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "e",
+          "kind": "local",
+          "phase": "E takes a token",
+          "label": "E hashes its name: token 45",
+          "detail": "E joins by hashing its own name to a position on the ring (illustrative: 45). That lands between B at 33 and C at 60. E will own the arc from its predecessor, B, up to itself: (33, 45]. Everything in that arc is now closer, going clockwise, to E than to C.",
+          "fields": [
+            {
+              "name": "token",
+              "value": "45",
+              "note": "illustrative"
+            },
+            {
+              "name": "predecessor",
+              "value": "B at 33"
+            },
+            {
+              "name": "successor",
+              "value": "C at 60"
+            },
+            {
+              "name": "new arc",
+              "value": "(33, 45]"
+            }
+          ],
+          "data": {
+            "e": {
+              "title": "ring",
+              "items": [
+                "token 45",
+                "owns (33,45]",
+                "keys: none yet"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "c",
+          "kind": "req",
+          "phase": "Move the keys",
+          "label": "join: send me the keys in (33, 45]",
+          "detail": "E asks its successor, C, for the keys that now belong to E. C is the only machine that holds any of them, because the arc (33, 45] used to be the front part of C's arc (33, 60].",
+          "fields": [
+            {
+              "name": "range",
+              "value": "(33, 45]"
+            },
+            {
+              "name": "from",
+              "value": "C, the successor"
+            }
+          ]
+        },
+        {
+          "from": "c",
+          "to": "c",
+          "kind": "local",
+          "label": "keys in (33, 45]: k4 at 41",
+          "detail": "C checks its keys against the range. k4 at 41 is inside it, so it moves to E. k5 at 53 is above 45 and stays with C.",
+          "fields": [
+            {
+              "name": "k4",
+              "value": "41 in (33, 45]: moves to E"
+            },
+            {
+              "name": "k5",
+              "value": "53 not in (33, 45]: stays with C"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "ring",
+              "items": [
+                "token 60",
+                "owns (33,60]",
+                "keys: k4 k5"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "e",
+          "kind": "res",
+          "label": "transfer k4",
+          "detail": "C hands over k4. Afterwards E owns (33, 45] with one key, and C owns the smaller arc (45, 60] with one key.",
+          "fields": [
+            {
+              "name": "moved",
+              "value": "k4 at 41"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "ring",
+              "items": [
+                "token 60",
+                "owns (45,60]",
+                "keys: k5"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            },
+            "e": {
+              "title": "ring",
+              "items": [
+                "token 45",
+                "owns (33,45]",
+                "keys: k4"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "b",
+          "kind": "async",
+          "phase": "Tell the others",
+          "label": "announce: E has token 45",
+          "detail": "E tells the cluster it has joined. Real systems spread this by gossip (Dynamo, Cassandra): each machine tells a few others, and within a few rounds every machine knows the new ring. Until a machine hears, it may still send lookups for (33, 45] to C, which is why systems forward or redirect them.",
+          "fields": [
+            {
+              "name": "token",
+              "value": "45"
+            },
+            {
+              "name": "how",
+              "value": "gossip",
+              "note": "each node tells a few others"
+            }
+          ]
+        },
+        {
+          "from": "b",
+          "to": "a",
+          "kind": "async",
+          "label": "gossip: E has token 45",
+          "detail": "The news spreads. A, B and D need no data: their arcs are unchanged, so none of their keys move.",
+          "fields": [
+            {
+              "name": "keys moved on A, B, D",
+              "value": "0"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "ring",
+              "items": [
+                "token 8",
+                "owns (85,8]",
+                "keys: k1 k8"
+              ]
+            },
+            "b": {
+              "title": "ring",
+              "items": [
+                "token 33",
+                "owns (8,33]",
+                "keys: k2 k3"
+              ]
+            },
+            "d": {
+              "title": "ring",
+              "items": [
+                "token 85",
+                "owns (60,85]",
+                "keys: k6 k7"
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "e",
+          "kind": "local",
+          "phase": "The cost",
+          "label": "1 of 8 keys moved",
+          "detail": "Only one key moved, and only between neighbours. A rough rule: when the number of machines goes from N-1 to N, about K/N of the K keys move, because the new machine takes about a 1/N share of the ring. Here K/N = 8 / 5 = 1.6 keys, and 1 moved (with only 8 keys the real count wobbles around that). If the keys had been placed by hash mod N, going from 4 to 5 machines would have moved 7 of the 8 keys.",
+          "fields": [
+            {
+              "name": "keys moved",
+              "value": "1 of 8 (k4)"
+            },
+            {
+              "name": "expected",
+              "value": "K / N = 8 / 5 = 1.6"
+            },
+            {
+              "name": "hash mod N instead",
+              "value": "7 of 8 move",
+              "note": "hash mod 4 against hash mod 5, same key positions"
+            },
+            {
+              "name": "machines touched",
+              "value": "2 (E and C)"
+            }
+          ],
+          "data": {
+            "e": {
+              "title": "ring",
+              "items": [
+                "token 45",
+                "owns (33,45]",
+                "keys: k4"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "vnodes",
+      "title": "Virtual nodes",
+      "summary": "Each machine owns three tokens, so load evens out, and when D fails its keys spread over two survivors instead of one.",
+      "steps": [
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "phase": "Many tokens each",
+          "label": "each machine takes 3 tokens",
+          "detail": "Instead of one token, every machine hashes its name three times (A#1, A#2, A#3) and takes three scattered positions on the ring. The canvas shows each machine once; the tokens are in the cards. The tokens here are picked to make the numbers readable, not random.",
+          "state": {
+            "a": "UP",
+            "b": "UP",
+            "c": "UP",
+            "d": "UP"
+          },
+          "fields": [
+            {
+              "name": "tokens per machine",
+              "value": "3"
+            },
+            {
+              "name": "A",
+              "value": "4, 47, 68"
+            },
+            {
+              "name": "B",
+              "value": "41, 62, 83"
+            },
+            {
+              "name": "C",
+              "value": "10, 35, 72"
+            },
+            {
+              "name": "D",
+              "value": "22, 58, 90"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "ring",
+              "items": [
+                "tokens 4, 47, 68",
+                "keys: k6 k8"
+              ]
+            },
+            "b": {
+              "title": "ring",
+              "items": [
+                "tokens 41, 62, 83",
+                "keys: k4 k7"
+              ]
+            },
+            "c": {
+              "title": "ring",
+              "items": [
+                "tokens 10, 35, 72",
+                "keys: k1 k3"
+              ]
+            },
+            "d": {
+              "title": "ring",
+              "items": [
+                "tokens 22, 58, 90",
+                "keys: k2 k5"
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "hash(k2) = 18: next token is 22, D",
+          "detail": "The lookup rule is unchanged: the first token at or after 18, going clockwise, is 22, and it belongs to D. Every machine now has several arcs, so the load of the eight keys is spread two per machine.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k2"
+            },
+            {
+              "name": "hash",
+              "value": "18",
+              "note": "illustrative"
+            },
+            {
+              "name": "first token at or after 18",
+              "value": "22 (D)"
+            }
+          ],
+          "data": {
+            "client": {
+              "title": "lookup",
+              "items": [
+                "k2 hashes to 18",
+                "token 22 is D"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "d",
+          "kind": "req",
+          "label": "get k2",
+          "detail": "This client knows the ring (a token-aware client, as in Cassandra) and goes straight to the owner.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k2"
+            },
+            {
+              "name": "token",
+              "value": "22"
+            }
+          ]
+        },
+        {
+          "from": "d",
+          "to": "client",
+          "kind": "res",
+          "label": "k2 value",
+          "detail": "D answers. All is well so far.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k2"
+            }
+          ]
+        },
+        {
+          "from": "d",
+          "to": "d",
+          "kind": "local",
+          "phase": "A machine fails",
+          "label": "D crashes",
+          "detail": "D goes down. Its three tokens (22, 58, 90) now point at a machine that does not answer, until the rest of the cluster notices (usually through gossip and failure detection).",
+          "state": {
+            "d": "DOWN"
+          },
+          "fields": [
+            {
+              "name": "lost tokens",
+              "value": "22, 58, 90"
+            }
+          ],
+          "data": {
+            "d": {
+              "title": "ring",
+              "items": [
+                "tokens 22, 58, 90",
+                "down"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "d",
+          "kind": "req",
+          "label": "get k2 again",
+          "detail": "The client still believes D owns position 18 and asks it again. The request goes into the void: nothing answers.",
+          "lost": true,
+          "fields": [
+            {
+              "name": "key",
+              "value": "k2"
+            },
+            {
+              "name": "result",
+              "value": "no answer",
+              "note": "the message never arrives"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "kind": "local",
+          "label": "timeout: skip D's tokens, next is 35 (C)",
+          "detail": "The client gives up after its timeout (100 ms here, two round trips at 50 ms) and marks D down. It skips every token D owns and goes on clockwise from 18: 22 is D, so the next token is 35, which belongs to C.",
+          "delay": 4,
+          "fields": [
+            {
+              "name": "timeout",
+              "value": "100 ms = 2 RTT at 50 ms",
+              "note": "illustrative"
+            },
+            {
+              "name": "skipped",
+              "value": "22 (D)"
+            },
+            {
+              "name": "next token",
+              "value": "35 (C)"
+            }
+          ],
+          "data": {
+            "client": {
+              "title": "lookup",
+              "items": [
+                "k2 hashes to 18",
+                "token 22 is D: down",
+                "next token 35 is C"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "c",
+          "kind": "req",
+          "label": "get k2 from C",
+          "detail": "C can answer because the data was replicated: Dynamo stores each key on the next several distinct machines clockwise from its token (the preference list), so after D the next distinct machines are C and B.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k2"
+            },
+            {
+              "name": "replica on",
+              "value": "C and B",
+              "note": "next distinct machines after D"
+            }
+          ]
+        },
+        {
+          "from": "c",
+          "to": "client",
+          "kind": "res",
+          "label": "k2 value from C",
+          "detail": "The lookup succeeds through a replica. With the ring updated, C is now the owner of k2.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "k2"
+            },
+            {
+              "name": "owner now",
+              "value": "C"
+            }
+          ]
+        },
+        {
+          "from": "c",
+          "to": "c",
+          "kind": "local",
+          "phase": "The cost",
+          "label": "D's 2 keys went to C and B, not to one machine",
+          "detail": "D owned k2 and k5. With its tokens gone, k2 passes to the next token clockwise, 35 (C), and k5 to the next after 58, which is 62 (B). So the load of one failed machine went to two different survivors. On the single-token ring it would all have gone to one: D's keys k6 and k7 would both pass to A, taking it from 2 keys to 4.",
+          "fields": [
+            {
+              "name": "with 3 tokens each",
+              "value": "k2 to C, k5 to B",
+              "note": "loads become A 2, B 3, C 3"
+            },
+            {
+              "name": "with 1 token each",
+              "value": "k6 and k7 both to A",
+              "note": "A goes from 2 keys to 4"
+            },
+            {
+              "name": "largest load after",
+              "value": "3 keys against 4"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "ring",
+              "items": [
+                "tokens 10, 35, 72",
+                "keys: k1 k2 k3"
+              ],
+              "mark": [
+                1
+              ]
+            },
+            "b": {
+              "title": "ring",
+              "items": [
+                "tokens 41, 62, 83",
+                "keys: k4 k5 k7"
+              ],
+              "mark": [
+                1
+              ]
+            },
+            "a": {
+              "title": "ring",
+              "items": [
+                "tokens 4, 47, 68",
+                "keys: k6 k8"
+              ]
+            },
+            "d": {
+              "title": "ring",
+              "items": [
+                "tokens 22, 58, 90",
+                "down"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "client",
+      "kind": "tradeoff",
+      "text": "hash(key) mod N is simple but reshuffles almost everything when N changes: in this example 7 of 8 keys move going from 4 to 5 machines. A ring moves about K/N, which is what keeps caches warm and rebalancing cheap as the cluster grows."
+    },
+    {
+      "target": "a",
+      "kind": "scaling",
+      "text": "With one token per machine the arc lengths are random, so one machine may own twice what another does, and the first machine clockwise of a failure inherits all of its keys. Virtual nodes cut both problems at the cost of storing and gossiping a longer token list."
+    },
+    {
+      "target": "d",
+      "kind": "failure",
+      "text": "A failed machine's keys pass to the next machines clockwise. Data does not move by itself, so stores such as Dynamo and Cassandra replicate each key to the next several distinct machines (the preference list), and the successors already hold copies when they take over."
+    },
+    {
+      "target": "join",
+      "kind": "scaling",
+      "text": "A joining machine takes keys only from its successor with one token, which can be a burst of traffic on one machine. With many virtual nodes it takes a small slice from many machines at once, so the transfer load is shared."
+    },
+    {
+      "kind": "note",
+      "text": "Every position and key in these scenarios is made up so the arithmetic fits on a page. Real rings hash names and keys with a function such as MD5 into a huge space, and the evenness of the load is a statistical property that needs many keys and tokens to show."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-not-mod",
+      "topic": "tradeoffs",
+      "targets": [
+        "client"
+      ],
+      "q": "Why not just pick the machine with hash(key) mod N?",
+      "a": "When N changes, almost every key maps to a different machine, so adding one machine to a cache of four invalidates most of it (here 7 of 8 keys move). Consistent hashing puts machines and keys on one ring, so a change only moves the keys in the arc next to it, about K/N of them. That keeps hit rates and data movement under control as the cluster resizes."
+    },
+    {
+      "id": "who-owns",
+      "topic": "data",
+      "targets": [
+        "a",
+        "c"
+      ],
+      "q": "A ring has tokens at 8, 33, 60 and 85. Who owns a key at position 53, and who owns one at 92?",
+      "a": "Position 53 belongs to the node with token 60, the first token at or after 53 going clockwise. Position 92 is past the last token, 85, so it wraps around to the first token, 8. A key exactly on a token belongs to that token."
+    },
+    {
+      "id": "join-cost",
+      "topic": "scale",
+      "targets": [
+        "e",
+        "c"
+      ],
+      "q": "A fifth machine joins a ring of four. Which keys move, and how many?",
+      "a": "Only the keys in the arc between the new machine's predecessor and itself move, and they all come from its successor. Here E at 45 takes (33, 45] from C, which is 1 of the 8 keys, close to the K/N = 1.6 you would expect on average. A, B and D are not involved."
+    },
+    {
+      "id": "why-vnodes",
+      "topic": "performance",
+      "targets": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "q": "Why give every machine many virtual nodes instead of one token?",
+      "a": "With one random token each, arcs differ a lot in length, so some machines carry far more keys, and a failed machine's whole arc lands on a single neighbour. With many tokens each machine owns many small arcs spread around the ring, so load averages out and a failure is shared among many survivors. A bigger machine can simply take more tokens."
+    },
+    {
+      "id": "failure-spread",
+      "topic": "reliability",
+      "targets": [
+        "d",
+        "a"
+      ],
+      "q": "A machine fails. Who takes over its keys with one token each, and with three?",
+      "a": "With one token each, all of its keys go to its clockwise successor, which doubles that machine's load in the example (2 keys to 4). With three tokens each, D's two keys went to two different machines (C and B), and no machine ended up with more than 3. The data must already be there, which is why Dynamo replicates each key to the next distinct machines clockwise."
+    },
+    {
+      "id": "not-magic",
+      "topic": "tradeoffs",
+      "targets": [
+        "client"
+      ],
+      "q": "Does consistent hashing balance load perfectly, or fix hot keys?",
+      "a": "No. It spreads keys evenly only on average, and with a few keys per machine the counts wobble. One very popular key still lives on one machine, so hot keys need replication, caching or key splitting on top. Variants such as consistent hashing with bounded loads cap how full a machine may get."
+    }
+  ]
+}

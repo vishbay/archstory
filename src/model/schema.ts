@@ -15,6 +15,7 @@ export const FOOTPRINTS = ['all', 'primary', 'global'] as const
 export const REPLICATION_MODES = ['sync', 'async', 'backup', 'none'] as const
 export const SITES = ['cloud', 'onprem'] as const
 export const DESIGN_KINDS = ['system', 'protocol'] as const
+export const LAYOUTS = ['lifelines', 'free'] as const
 
 const Id = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'ids are lowercase letters, digits, "-" or "_"')
 
@@ -37,6 +38,8 @@ export const NodeSchema = z.object({
   replication: z.enum(REPLICATION_MODES).optional()
     .describe('Data stores only: how its data reaches other regions. "sync" (a write commits in two regions: nothing lost, every write pays a cross-region round trip), "async" (replicated after commit: a region loss loses the replication lag), "backup" (snapshots copied across: loses everything since the last one), "none". Defaults to "backup" for the backup-restore strategy, "none" for caches, otherwise "async"'),
   icon: z.string().optional().describe('Emoji override'),
+  at: z.object({ x: z.number().min(0).max(100), y: z.number().min(0).max(100) }).optional()
+    .describe('Protocol designs with meta.layout "free": the position of the node centre in percent (0 to 100) of the free canvas, x from the left and y from the top'),
   cloud: z.object({ aws: z.string().optional(), gcp: z.string().optional(), azure: z.string().optional() }).optional()
     .describe('Provider-specific product names, e.g. { "aws": "ALB", "gcp": "Cloud Load Balancing" }'),
 })
@@ -93,7 +96,15 @@ export const StepSchema = z.object({
     note: z.string().optional().describe('Why it has this value'),
   })).optional().describe('Protocol designs: the anatomy of the message on the wire (flags, sequence numbers, header bits, sections)'),
   delay: z.number().nonnegative().optional()
-    .describe('One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes and 0 for a local step; use 0 for a message sent right behind the previous one'),
+    .describe('One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes, 0 for a local step and 0 for a lost step; use 0 for a message sent right behind the previous one. A local step with a delay is a wait, such as a retransmission timeout'),
+  lost: z.boolean().optional()
+    .describe('Protocol designs: the message is sent but never arrives (req, res and async steps only). It takes no network time unless it has a delay of its own; show the wait before the retransmission as a following local step with a delay'),
+  data: z.record(Id, z.object({
+    title: z.string().min(1).optional().describe('Name of the data structure, e.g. "log" or "tokens". Defaults to "data"'),
+    items: z.array(z.string()).describe('Its contents after this step, one short line each, e.g. ["1: x=1 (term 1)", "2: y=2 (term 1)"]. The UI shows at most 6 lines and "+N more"'),
+    mark: z.array(z.number().int().nonnegative()).optional().describe('Indexes in items that just changed or are special'),
+  })).optional()
+    .describe('Protocol designs: the contents of a data structure that belongs to each listed actor (node id) AFTER this step. Actors not listed keep what they had'),
 })
 
 export const FlowSchema = z.object({
@@ -157,6 +168,11 @@ export const DesignSchema = z.object({
     kind: z.enum(DESIGN_KINDS).optional()
       .describe('"system" (default): a system design. "protocol": a step-by-step network protocol timeline, where nodes are the actors and flows are scenarios'),
     order: z.number().optional().describe('Sort position among designs of the same kind (lower first); designs without one sort by title after those with one'),
+    section: z.string().min(1).optional().describe('Protocol designs: the group the module is listed under on Home and in the picker, e.g. "Network", "Security" or "Distributed systems". Free text; known sections come first in that order'),
+    layout: z.enum(LAYOUTS).optional()
+      .describe('Protocol designs: how the Architecture view places the actors. "lifelines" (default) uses the tier bands; "free" places every node at its own `at` position (a ring, a topology) with straight edges and no bands'),
+    nodeSize: z.enum(['compact']).optional().describe('Protocol designs with a free layout: draw the nodes small, for rings with many actors'),
+    rtt: z.number().positive().optional().describe('Protocol designs: the round trip time in milliseconds the module is drawn for, the default of the Distance control. Omit for 50 ms'),
   }),
   requirements: z.object({
     functional: z.array(z.string()).default([]),
@@ -228,6 +244,7 @@ export function parseDesign(input: unknown): ParseResult {
     if (nodeIds.has(n.id)) errors.push(`nodes: duplicate id "${n.id}"`)
     nodeIds.add(n.id)
   }
+  if (d.meta.layout === 'free') for (const n of d.nodes) if (!n.at) errors.push(`node "${n.id}": a free layout needs "at" on every node`)
   const groupIds = new Set(d.groups.map(g => g.id))
   for (const n of d.nodes) if (n.group && !groupIds.has(n.group)) errors.push(`node "${n.id}": unknown group "${n.group}"`)
   d.edges.forEach((e, i) => {
@@ -243,6 +260,11 @@ export function parseDesign(input: unknown): ParseResult {
       if (s.kind === 'local' && s.from !== s.to) errors.push(`${at}: a "local" step must have from === to`)
       if (s.kind !== 'local' && s.from === s.to) errors.push(`${at}: from === to needs kind "local"`)
       for (const k of Object.keys(s.state ?? {})) if (!nodeIds.has(k)) errors.push(`${at}: state for unknown node "${k}"`)
+      if (s.lost && s.kind === 'local') errors.push(`${at}: a "local" step cannot be lost (only req, res and async steps travel the network)`)
+      for (const [k, v] of Object.entries(s.data ?? {})) {
+        if (!nodeIds.has(k)) errors.push(`${at}: data for unknown node "${k}"`)
+        for (const m of v.mark ?? []) if (m >= v.items.length) errors.push(`${at}: data for "${k}" marks item ${m} but has only ${v.items.length} items`)
+      }
       if (s.kind !== 'local' && s.from !== s.to && nodeIds.has(s.from) && nodeIds.has(s.to) && !findEdge(d, s.from, s.to))
         errors.push(`${at}: no edge between "${s.from}" and "${s.to}" (a step must follow a connection, and a response retraces the request path one connection at a time)`)
     })

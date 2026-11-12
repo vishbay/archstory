@@ -29,11 +29,12 @@ export function StepList({ flow, step, jump, name }: { flow: Flow; step: number;
   const row = (s: Step, i: number) => (
     <li key={i} className={i === step ? 'cur' : i < step ? 'done' : ''} onClick={() => jump(i)}
       role="button" tabIndex={0} aria-current={i === step ? 'step' : undefined}
-      aria-label={`Step ${i + 1}, ${KIND_TEXT[s.kind]}: ${name(s.from)}${s.from !== s.to ? ` to ${name(s.to)}` : ''}, ${s.label}`}
+      aria-label={`Step ${i + 1}, ${KIND_TEXT[s.kind]}: ${name(s.from)}${s.from !== s.to ? ` to ${name(s.to)}` : ''}, ${s.label}${s.lost ? ', lost in the network' : ''}`}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(i) } }}>
       <span className="step-glyph" style={{ color: KIND_INK[s.kind] }} title={KIND_TEXT[s.kind]} aria-hidden>{KIND_GLYPH[s.kind]}</span>
       <span className="step-hop"><span className="step-no">{i + 1}</span>{name(s.from)}{s.from !== s.to && ` → ${name(s.to)}`}</span>
       <span className="mono muted step-label">{s.label}</span>
+      {s.lost && <span className="step-lost" title="Sent, but never arrives">lost</span>}
     </li>
   )
 

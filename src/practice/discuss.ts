@@ -5,7 +5,7 @@
 // each actor's state after it and the time elapsed in round trips.
 import { isOnPrem, isProtocol, type Design, type DNode, type Step } from '../model/schema'
 import { KINDS } from '../model/kinds'
-import { fmtRtt, rttTimes } from '../model/protocol'
+import { fmtMs, fmtRtt, moduleRtt, rttTimes, rttToMs } from '../model/protocol'
 
 export interface DiscussOptions {
   /** The scenario being watched, flagged so "this step" questions make sense. */
@@ -31,6 +31,7 @@ export function discussPrompt(d: Design, o: DiscussOptions = {}): string {
   const stepExtras = (s: Step, name: (id: string) => string) => [
     ...(s.fields?.length ? [`     On the wire: ${s.fields.map(f => `${f.name} = ${f.value}${f.note ? ` (${f.note})` : ''}`).join('; ')}`] : []),
     ...(s.state && Object.keys(s.state).length ? [`     State after this step: ${Object.entries(s.state).map(([id, v]) => `${name(id)} ${v}`).join(', ')}`] : []),
+    ...(s.data && Object.keys(s.data).length ? [`     Data after this step: ${Object.entries(s.data).map(([id, v]) => `${name(id)}${v.title ? ` (${v.title})` : ''}: ${v.items.length ? v.items.map((it, i) => (v.mark?.includes(i) ? `${it} [changed]` : it)).join(', ') : 'empty'}`).join('; ')}`] : []),
   ]
 
   if (proto) {
@@ -42,11 +43,12 @@ How to answer:
 - Be exact about the protocol: flags, field values, state names and timing. Name the RFC or standard when it matters, and where real implementations differ from the RFC (operating system defaults, newer extensions), say so.
 - If the walkthrough simplifies something or gets it wrong, say so plainly and explain what really happens.
 - Keep what is in the walkthrough apart from what you are adding: label general knowledge as "in general" or "an alternative would be".
-- Times are counted in round trips (RTT), with every message one one-way trip unless the walkthrough says otherwise.
+- Times are counted in round trips (RTT), with every message one one-way trip unless the walkthrough says otherwise. Milliseconds are for the reference round trip time given below.
+- A step marked "lost" is sent but never arrives: it takes no network time, and what happens next (a timeout, duplicate acknowledgments) is what the protocol does about it.
 - Ask me a short clarifying question if mine is ambiguous.
 - This applies to the whole conversation: keep answering about this protocol in my follow-up questions too.`)
     const scen = d.flows.length ? `${d.flows.length} scenario${d.flows.length === 1 ? '' : 's'} (${d.flows.map(f => f.title).join('; ')})` : 'no scenarios'
-    section(`Protocol: ${d.meta.title}`, [d.meta.summary, d.meta.source && `Sources: ${d.meta.source}.`, `It has ${d.nodes.length} actors and ${scen}.`].filter(Boolean).join(' '))
+    section(`Protocol: ${d.meta.title}`, [d.meta.summary, d.meta.source && `Sources: ${d.meta.source}.`, `It has ${d.nodes.length} actors and ${scen}.`, `Times below assume a reference round trip time of ${moduleRtt(d)} ms.`].filter(Boolean).join(' '))
     const r = d.requirements
     section('Key ideas', [
       r.functional.length ? `What it does:\n${list(r.functional)}` : '',
@@ -58,16 +60,17 @@ How to answer:
     for (const f of d.flows) {
       const here = f.id === o.flowId ? '  <- the scenario I am watching right now' : ''
       const times = rttTimes(f.steps)
+      const when = (i: number) => (f.steps[i].lost ? 'lost: never arrives' : `at ${fmtRtt(times[i])}, ${fmtMs(rttToMs(times[i], moduleRtt(d)))}`)
       const steps: string[] = []
       let phase = ''
       f.steps.forEach((s, i) => {
         if (s.phase && s.phase !== phase) { phase = s.phase; steps.push(`${phase}:`) }
         const route = s.kind === 'local' ? name(s.from) : `${name(s.from)} -> ${name(s.to)}`
-        steps.push(`${i + 1}. [${s.kind}] ${route}: ${s.label} (at ${fmtRtt(times[i])})${s.detail ? `. ${s.detail}` : ''}`)
+        steps.push(`${i + 1}. [${s.kind}] ${route}: ${s.label} (${when(i)})${s.detail ? `. ${s.detail}` : ''}`)
         if (s.payload) steps.push(`     Example message:\n${s.payload.trim().split('\n').map(l => `     ${l}`).join('\n')}`)
         steps.push(...stepExtras(s, name))
       })
-      section(`Scenario: ${f.title}${here}`, [f.summary ?? '', ...steps, times.length ? `Total: ${fmtRtt(times.at(-1)!)}.` : ''].filter(Boolean))
+      section(`Scenario: ${f.title}${here}`, [f.summary ?? '', ...steps, times.length ? `Total: ${fmtRtt(times.at(-1)!)}, ${fmtMs(rttToMs(times.at(-1)!, moduleRtt(d)))}.` : ''].filter(Boolean))
     }
     if (d.notes.length) section('Notes on trade-offs, failure and security', list(d.notes.map(n => `[${n.kind}] ${n.target ? `${name(n.target)}: ` : ''}${n.text}`)))
     if (d.questions.length) {

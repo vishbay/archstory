@@ -12,7 +12,9 @@
     "difficulty": "medium",
     "source": "RFC 9110 (HTTP semantics), RFC 9112 (HTTP/1.1), RFC 9113 (HTTP/2), RFC 7541 (HPACK), RFC 9114 (HTTP/3), RFC 9204 (QPACK), RFC 9000 (QUIC), RFC 9001 (TLS in QUIC), RFC 7301 (ALPN), RFC 7838 (Alt-Svc), RFC 9460 (HTTPS DNS record), RFC 9218 (priorities)",
     "kind": "protocol",
-    "order": 5
+    "order": 5,
+    "section": "Network",
+    "rtt": 50
   },
   "requirements": {
     "functional": [

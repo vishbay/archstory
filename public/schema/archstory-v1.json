@@ -52,6 +52,31 @@
         "order": {
           "description": "Sort position among designs of the same kind (lower first); designs without one sort by title after those with one",
           "type": "number"
+        },
+        "section": {
+          "description": "Protocol designs: the group the module is listed under on Home and in the picker, e.g. \"Network\", \"Security\" or \"Distributed systems\". Free text; known sections come first in that order",
+          "type": "string",
+          "minLength": 1
+        },
+        "layout": {
+          "description": "Protocol designs: how the Architecture view places the actors. \"lifelines\" (default) uses the tier bands; \"free\" places every node at its own `at` position (a ring, a topology) with straight edges and no bands",
+          "type": "string",
+          "enum": [
+            "lifelines",
+            "free"
+          ]
+        },
+        "nodeSize": {
+          "description": "Protocol designs with a free layout: draw the nodes small, for rings with many actors",
+          "type": "string",
+          "enum": [
+            "compact"
+          ]
+        },
+        "rtt": {
+          "description": "Protocol designs: the round trip time in milliseconds the module is drawn for, the default of the Distance control. Omit for 50 ms",
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       },
       "required": [
@@ -293,6 +318,26 @@
             "description": "Emoji override",
             "type": "string"
           },
+          "at": {
+            "description": "Protocol designs with meta.layout \"free\": the position of the node centre in percent (0 to 100) of the free canvas, x from the left and y from the top",
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ]
+          },
           "cloud": {
             "description": "Provider-specific product names, e.g. { \"aws\": \"ALB\", \"gcp\": \"Cloud Load Balancing\" }",
             "type": "object",
@@ -474,9 +519,50 @@
                   }
                 },
                 "delay": {
-                  "description": "One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes and 0 for a local step; use 0 for a message sent right behind the previous one",
+                  "description": "One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes, 0 for a local step and 0 for a lost step; use 0 for a message sent right behind the previous one. A local step with a delay is a wait, such as a retransmission timeout",
                   "type": "number",
                   "minimum": 0
+                },
+                "lost": {
+                  "description": "Protocol designs: the message is sent but never arrives (req, res and async steps only). It takes no network time unless it has a delay of its own; show the wait before the retransmission as a following local step with a delay",
+                  "type": "boolean"
+                },
+                "data": {
+                  "description": "Protocol designs: the contents of a data structure that belongs to each listed actor (node id) AFTER this step. Actors not listed keep what they had",
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "description": "Name of the data structure, e.g. \"log\" or \"tokens\". Defaults to \"data\"",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Its contents after this step, one short line each, e.g. [\"1: x=1 (term 1)\", \"2: y=2 (term 1)\"]. The UI shows at most 6 lines and \"+N more\""
+                      },
+                      "mark": {
+                        "description": "Indexes in items that just changed or are special",
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ]
+                  }
                 }
               },
               "required": [

@@ -105,12 +105,12 @@ describe('discussPrompt for a protocol (Under the hood)', () => {
   it('walks every message with its time, fields on the wire and the state after it', () => {
     const p = discussPrompt(tcp)
     for (const f of tcp.flows) expect(p).toContain(`## Scenario: ${f.title}`)
-    expect(p).toContain('2. [req] Client -> Server: SYN seq=1000 (at 0.5 RTT)')
-    expect(p).toContain('3. [res] Server -> Client: SYN, ACK seq=5000 ack=1001 (at 1 RTT)')
+    expect(p).toContain('2. [req] Client -> Server: SYN seq=1000 (at 0.5 RTT, 25 ms)')
+    expect(p).toContain('3. [res] Server -> Client: SYN, ACK seq=5000 ack=1001 (at 1 RTT, 50 ms)')
     expect(p).toContain('On the wire: flags = SYN, ACK (Two jobs in one segment')
     expect(p).toContain('ack = 1001 (1000 + 1')
     expect(p).toContain('State after this step: Client SYN_SENT, Server SYN_RCVD')
-    expect(p).toContain('Total: 3.5 RTT.')
+    expect(p).toContain('Total: 3.5 RTT, 175 ms.')
     for (const q of tcp.questions) expect(p).toContain(q.q)
     expect(p).not.toContain(tcp.questions[0].a)
     expect(discussPrompt(tcp, { answers: true })).toContain(tcp.questions[0].a)
@@ -128,5 +128,54 @@ describe('discussPrompt for a protocol (Under the hood)', () => {
     const f = saas.flows[0]
     const withWire = { ...saas, flows: [{ ...f, steps: [{ ...f.steps[0], fields: [{ name: 'method', value: 'GET' }] }, ...f.steps.slice(1)] }] }
     expect(discussPrompt(withWire)).toContain('On the wire: method = GET')
+  })
+})
+
+describe('discussPrompt: lost messages, data views and milliseconds (Under the hood)', () => {
+  const tcp = PROTOCOLS.find(d => d.id === 'tcp')!
+  const ring = PROTOCOLS.find(d => d.id === 'hashring')!
+
+  it('lists each step\'s data views as "Data after this step: node (title): item, item"', () => {
+    const p = discussPrompt(ring)
+    expect(p).toContain('Data after this step: Node A (ring): token 8, owns (85,8], keys: k1 k8')
+    // marked items say they changed
+    expect(p).toMatch(/Data after this step: Node C \(ring\): token 60, owns \(33,60\], keys: k4 k5 \[changed\]/)
+    expect(p).toContain('Data after this step: Client (lookup): k5 hashes to 53 [changed]')
+    // several actors on one line, separated by semicolons
+    expect(p).toMatch(/Data after this step: Client \(keys\): k1 5, k2 18, k3 29, k4 41, k5 53, k6 66, k7 78, k8 92; Node A \(ring\)/)
+    // every step that has data gets exactly one such line
+    const steps = ring.flows.flatMap(f => f.steps).filter(s => s.data && Object.keys(s.data).length)
+    expect(p.match(/Data after this step:/g)).toHaveLength(steps.length)
+  })
+
+  it('says "empty" for a data view with no items, and leaves steps without data alone', () => {
+    const d = structuredClone(ring)
+    d.flows[0].steps[0].data = { a: { items: [] } }
+    expect(discussPrompt(d)).toContain('Data after this step: Node A: empty')
+    expect(discussPrompt(tcp)).not.toContain('Data after this step')
+    expect(discussPrompt(PROTOCOLS.find(x => x.id === 'dns')!)).not.toContain('Data after this step')
+  })
+
+  it('marks a lost message instead of giving it a time, and explains what "lost" means', () => {
+    const p = discussPrompt(tcp)
+    expect(p).toMatch(/\[res\] Server -> Client: Segment 2 seq=6461 \(lost: never arrives\)/)
+    expect(p).toContain('A step marked "lost" is sent but never arrives')
+    expect(p).toContain('Silence: waiting 1 s for the RTO (at 23 RTT, 1.15 s)')
+    expect(p).toContain('Total: 64 RTT, 3.2 s.')
+  })
+
+  it('gives milliseconds for the module\'s reference round trip, and says what it is', () => {
+    expect(discussPrompt(tcp)).toContain('Times below assume a reference round trip time of 50 ms.')
+    expect(discussPrompt(tcp)).toContain('Milliseconds are for the reference round trip time given below.')
+    const d = structuredClone(tcp)
+    d.meta.rtt = 80
+    expect(discussPrompt(d)).toContain('reference round trip time of 80 ms')
+    expect(discussPrompt(d)).toContain('(at 0.5 RTT, 40 ms)')
+  })
+
+  it('does not change a system design prompt', () => {
+    const p = discussPrompt(saas)
+    expect(p).not.toContain('Data after this step')
+    expect(p).not.toContain('reference round trip')
   })
 })

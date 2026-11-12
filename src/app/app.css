@@ -1134,3 +1134,43 @@ button.listening { border-color: var(--hard); color: var(--hard-t); }
 .step-state { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; margin: 6px 0; font-size: 12px; }
 .step-state .pill { font-family: var(--mono); }
 .hood-card .card-body { gap: 8px; }
+
+/* ---------- under the hood engine ---------- */
+/* Distance control and milliseconds next to the clock */
+.tl-clock .tl-ms { font-weight: 600; color: var(--text); }
+.tl-clock .tl-ms::before { content: '('; font-weight: 400; } .tl-clock .tl-ms::after { content: ')'; font-weight: 400; }
+.tl-clock .tl-at { margin-left: 6px; padding: 0 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.tl-dist { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 8px; padding: 3px 4px 3px 14px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); box-shadow: var(--shadow); font-size: 12px; max-width: 100%; }
+.tl-dist .seg > button { padding: 2px 10px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.tl-dist .seg > .on { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.tl-ms-col { fill: var(--muted); }
+/* Lost messages: the X, the tag and the "lost" in the gutter, all in the red ink */
+.tl-time.tl-lost { fill: var(--hard-t); font-weight: 700; font-size: 10px; }
+.tl-lost-tag { fill: var(--hard-t); font-weight: 700; font-size: 10px; letter-spacing: .02em; }
+.tl-x { fill: none; }
+.step-lost { margin-left: auto; padding: 0 7px; border: 1px solid var(--hard); border-radius: 999px; font-size: 10.5px; font-weight: 700; color: var(--hard-t); }
+.packet-tag.lost { animation-name: packet-lost; animation-timing-function: linear; border-color: var(--hard); color: var(--hard-t); }
+@keyframes packet-lost { 0% { offset-distance: 0%; opacity: 1; } 60% { offset-distance: 60%; opacity: 1; } 100% { offset-distance: 60%; opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .packet-tag.lost { animation: none; offset-distance: 60%; opacity: 1; } }
+/* Per-actor data cards under the actor headers */
+.tl-data-card { fill: var(--node-bg); stroke: var(--border-strong); stroke-width: 1; }
+.tl-data.changed .tl-data-card { stroke: var(--accent); stroke-width: 2; }
+.tl-data-title { font: 600 9.5px var(--mono); fill: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.tl-data-item { font: 10.5px var(--mono); fill: var(--text); }
+.tl-data-mark .tl-data-item { font-weight: 700; }
+.tl-data-hi { fill: var(--accent-soft); }
+.tl-data-dot { fill: var(--accent); }
+.tl-data-empty { font: italic 10.5px var(--mono); fill: var(--muted); }
+.tl-dchange { fill: var(--accent); stroke: var(--surface); stroke-width: 1; }
+/* The inspector's table of data after a step */
+.data-table .data-title { font-weight: 400; font-size: 11px; color: var(--muted); }
+.data-items { list-style: none; margin: 0; padding: 0; }
+.data-items li { padding: 0 4px; border-radius: 4px; }
+.data-items li.mk { font-weight: 700; background: var(--accent-soft); }
+/* Sections of Under the hood on Home and in the picker */
+.hood-group { margin: 0 0 22px; }
+.hood-heading { margin: 4px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.picker-list li.pick-head { padding: 10px 12px 4px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: default; }
+@media (max-width: 700px) { .tl-dist { padding-left: 10px; } }
+.picker-list .pick-counts { color: var(--muted); }   /* 4.5:1 on the selected row too */
