@@ -50,8 +50,8 @@ export function PlayerBar({ flows, flow, onFlow, player, picker = false }: {
       </div>
       <span className="count">{step + 1} / {length}</span>
       {finished && next && (
-        <button className="next-scenario primary" onClick={() => { onFlow(next.flow.id) }} title={next.wrapped ? 'Back to the first scenario' : 'Play the next scenario'}>
-          {next.wrapped ? 'Start over' : 'Next'}: {next.flow.title} →
+        <button className="next-scenario primary" onClick={() => { onFlow(next.flow.id) }} title={`${next.wrapped ? 'Back to the first scenario' : 'Play the next scenario'}: ${next.flow.title}`}>
+          <span className="next-label">{next.wrapped ? 'Start over' : 'Next'}<span className="next-title">: {next.flow.title}</span> →</span>
         </button>
       )}
       <select value={speed} onChange={e => setSpeed(Number(e.target.value))} aria-label="Speed">

@@ -632,9 +632,13 @@ dialog.picker::backdrop { background: #0006; }
 .scn-text span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scn-check { color: var(--accent); font-weight: 700; }
 .kbd-hints { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
-.next-scenario { height: 30px; padding: 0 12px; font-size: 12.5px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; animation: nudge .5s ease-out; }
+.next-scenario { height: 30px; padding: 0 12px; font-size: 12.5px; max-width: 260px; min-width: 0; animation: nudge .5s ease-out; }
+.next-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* long titles end in an ellipsis instead of being cut mid-word */
 @keyframes nudge { from { transform: translateX(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .next-scenario { animation: none; } }
+.player:has(.next-scenario) .kbd-hints { display: none; }   /* make room for the Next button */
+@media (min-width: 901px) and (max-width: 1180px) { .next-title { display: none; } }
+@media (min-width: 901px) and (max-width: 1100px) { .player .count { display: none; } .scrub-wrap { min-width: 40px; } }   /* beside two panels the player needs every pixel */   /* the player is cramped beside the panels: just Next, the title is in the tooltip */
 .caption-head + .caption-obs { margin-top: 4px; }
 .caption:not(:has(p)) { padding-bottom: 8px; }
 
