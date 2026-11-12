@@ -789,7 +789,9 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 .howto-import h2 { margin: 0 0 4px; }
 .howto-import > .hti-text > p { margin: 0 0 12px; }
 .hti-steps { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 4px; }
-.hti-steps button { display: flex; gap: 10px; align-items: flex-start; width: 100%; height: auto; padding: 8px 10px; text-align: left; border: 1px solid transparent; border-radius: 10px; background: none; color: var(--text); font: inherit; }
+.hti-steps button > span:last-child { min-width: 0; }
+.hti-text { min-width: 0; }
+.hti-steps button { display: flex; gap: 10px; align-items: flex-start; justify-content: flex-start; width: 100%; min-width: 0; height: auto; padding: 8px 10px; text-align: left; white-space: normal; border: 1px solid transparent; border-radius: 10px; background: none; color: var(--text); font: inherit; }
 .hti-steps button:hover { background: var(--surface-2); }
 .hti-steps button.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .hti-steps b { display: block; font-size: 14px; }
