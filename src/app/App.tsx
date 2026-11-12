@@ -157,6 +157,8 @@ export function App() {
     if (clicks.current.length >= 5) { clicks.current = []; setProfile(true) }
   }
   const themeIcon = theme.pref === 'system' ? '◐' : theme.pref === 'light' ? '☀' : '☾'
+  const themeNext = theme.resolved === 'dark' ? 'light' : 'dark'
+  const themeNow = theme.pref === 'system' ? `following your system (${theme.resolved})` : theme.pref
 
   return (
     <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
@@ -189,7 +191,7 @@ export function App() {
           </div>
         )}
         <AiTopButton />
-        <button className="icon ghost" aria-label={`Theme: ${theme.pref}. Click to change`} title={`Theme: ${theme.pref} (click to change)`} onClick={theme.cycle}>{themeIcon}</button>
+        <button className="icon ghost" aria-label={`Theme: ${themeNow}. Switch to ${themeNext}`} title={`Theme: ${themeNow}. Click for ${themeNext}`} onClick={theme.toggle}>{themeIcon}</button>
         {mode !== 'home' && !stacked && (
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the inspector' : 'Show or hide the flow inspector'} aria-expanded={rightOpen}
             title={`${rightOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'inspector' : 'flow, component and notes panel'}`} onClick={() => setRightOpen(o => !o)}>◫</button>

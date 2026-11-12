@@ -40,8 +40,10 @@ export function useTheme() {
     else root.dataset.theme = pref
     store.set('archstory.theme', pref)
   }, [pref])
-  const cycle = () => setPref(p => (p === 'system' ? 'light' : p === 'light' ? 'dark' : 'system'))
-  return { pref, resolved, cycle }
+  // Every click flips what is shown. Landing on what the system already shows goes back to following the system, so a
+  // click never changes only the icon (the old system, light, dark cycle had one invisible step whichever way the system was set).
+  const toggle = () => setPref(() => { const next = resolved === 'dark' ? 'light' : 'dark'; return next === (systemDark ? 'dark' : 'light') ? 'system' : next })
+  return { pref, resolved, toggle }
 }
 
 // ---------- flow player ----------

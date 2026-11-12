@@ -33,10 +33,10 @@ export function PlayerBar({ flows, flow, onFlow, player, picker = false }: {
         <ScenarioPicker flows={flows} current={flow.id} onPick={onFlow} variant="bar" />
       )}
       <div className="player-buttons">
-        <button className="icon" title="Restart" aria-label="Restart" onClick={() => jump(-1)}>⏮</button>
-        <button className="icon" title="Previous step (←)" aria-label="Previous step" onClick={() => jump(step - 1)}>◀</button>
+        <button className="icon" title="Restart" aria-label="Restart" disabled={step < 0} onClick={() => jump(-1)}>⏮</button>
+        <button className="icon" title="Previous step (←)" aria-label="Previous step" disabled={step < 0} onClick={() => jump(step - 1)}>◀</button>
         <button className="icon primary" title="Play / pause (Space)" aria-label={playing ? 'Pause' : 'Play'} onClick={toggle}>{playing ? '⏸' : '▶'}</button>
-        <button className="icon" title="Next step (→)" aria-label="Next step" onClick={() => jump(step + 1)}>▶|</button>
+        <button className="icon" title="Next step (→)" aria-label="Next step" disabled={step >= last} onClick={() => jump(step + 1)}>▶|</button>
       </div>
       <span className="kbd-hints" aria-hidden title="Keyboard shortcuts"><kbd>Space</kbd> play <kbd>←</kbd><kbd>→</kbd> step</span>
       <div className="scrub-wrap" style={{ ['--p' as string]: `${(length ? (step + 1) / length : 0) * 100}%` }}>
