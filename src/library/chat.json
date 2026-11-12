@@ -402,8 +402,6 @@
       "id": "waf",
       "label": "WAF (media)",
       "kind": "waf",
-      "tier": "entry",
-      "subnet": "none",
       "description": "Rule set attached to the media CDN: managed rules, per-IP rate rules, bot control",
       "cloud": {
         "aws": "AWS WAF",

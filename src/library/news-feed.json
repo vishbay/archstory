@@ -310,8 +310,6 @@
       "id": "waf",
       "label": "WAF",
       "kind": "waf",
-      "tier": "entry",
-      "subnet": "none",
       "description": "Rule set attached to the CDN: managed rules, per-IP rate rules, bot control",
       "cloud": {
         "aws": "AWS WAF",
