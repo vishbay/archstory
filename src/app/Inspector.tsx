@@ -1,4 +1,4 @@
-import type { Design, Flow } from '../model/schema'
+import { isOnPrem, type Design, type Flow } from '../model/schema'
 import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
@@ -8,7 +8,7 @@ import { Legend } from './Legend'
 import { resolvePhases } from '../model/phases'
 import { cloudIconUrl } from '../model/cloudIcons'
 import { crossing, placement } from '../model/network'
-import { haOf, impactOf, placementsOf, resilience, zoneName, type Impact } from '../model/availability'
+import { haOf, impactOf, ON_PREM_TEXT, placementsOf, resilience, zoneName, type Impact } from '../model/availability'
 import { footprintOf, homeRegion, regionDrill, regionImpactOf, replicationOf, STRATEGY_TEXT } from '../model/regions'
 import type { ZoneState } from './BandCanvas'
 import { KIND_TEXT, KIND_VAR } from './stepKinds'
@@ -142,6 +142,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
               <p className="net-note">🛟 {HA_TEXT[haOf(design, node)!]}.
                 {zoneFailed !== null && <> If {zoneName(zoneFailed, cloud)} fails: {impactOf(design, node, zoneFailed, cloud)!.text}</>}</p>
             )}
+            {network && design.network && isOnPrem(node) && <p className="net-note">🛟 {ON_PREM_TEXT} The data centre is one site, so plan for it or the hybrid link going down.</p>}
             {footprintOf(design, node) && (
               <p className="net-note">🌍 {FOOTPRINT_TEXT[footprintOf(design, node)!]}{replicationOf(design, node) ? `, with ${REPLICATION_TEXT[replicationOf(design, node)!]}` : ''}.
                 {regionFailed !== null && <> If {design.regions!.regions[regionFailed].name} fails: {regionImpactOf(design, node, regionFailed)!.text}</>}</p>
@@ -180,6 +181,11 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             {res.spofs.length > 0 && (
               <div className="card bad"><b>Single points of failure on the request path</b>
                 <ul className="reqs">{res.spofs.map(n => <li key={n.id}>{n.label}</li>)}</ul></div>
+            )}
+            {res.onPrem.length > 0 && (
+              <div className="card"><b>On the request path in your own data centre</b>
+                <ul className="reqs">{res.onPrem.map(n => <li key={n.id}>{n.label}</li>)}</ul>
+                <p className="small">Cloud zones do not cover them. The data centre is a single site: if it, or the hybrid link, goes down, these requests fail whatever the cloud zones do.</p></div>
             )}
             <h4>Per component</h4>
             <ImpactList impacts={res.impacts} cloud={cloud} />

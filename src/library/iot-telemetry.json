@@ -71,7 +71,7 @@
     {
       "id": "broker",
       "label": "MQTT Broker",
-      "kind": "websocket_gateway",
+      "kind": "mqtt_broker",
       "subnet": "app",
       "description": "Holds about 2M persistent MQTT sessions with mutual TLS, enforces per-device topic policies, queues QoS 1 messages for offline devices and runs the rules that route messages onward. AWS IoT Core is fully managed. Google Cloud IoT Core was retired in August 2023, so on GCP this is a self-run EMQX cluster on GKE (HiveMQ is the other common choice): 12 nodes across 3 zones at about 170k connections each",
       "cloud": { "aws": "AWS IoT Core", "gcp": "EMQX on GKE" }

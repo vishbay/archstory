@@ -8,7 +8,7 @@ import { kindInfo, nameOf, TIER_INFO, type Cloud } from '../model/kinds'
 import { subnetLabel, vpcLabel } from '../model/network'
 import { impactOf, zoneBadge, zoneName, type Level } from '../model/availability'
 import { regionImpactOf } from '../model/regions'
-import { layoutBands, NODE_H, NODE_W, OBS_NODE_W, type Layout, type Side } from '../layout/bands'
+import { layoutBands, NODE_H, NODE_W, OBS_NODE_W, ON_PREM_GROUP, type Layout, type Side } from '../layout/bands'
 import { midpoint, roundedPolyline, routeEdges, type Pt, type Rect } from '../layout/route'
 import { ZNODE_W, type Hop, type ZoneLayout } from '../layout/zones'
 import { emits, signalsFor, stackName, TELEMETRY, telemetryNodes, TELEMETRY_EDGES, traceId } from '../model/observability'
@@ -49,7 +49,7 @@ function BandNode({ data }: NodeProps) {
 }
 function GroupNode({ data }: NodeProps) {
   const { label, kind, w, h } = data as { label: string; kind: string; w: number; h: number }
-  return <div className={`group group-${kind}`} style={{ width: w, height: h }}><span>{kind} · {label}</span></div>
+  return <div className={`group group-${kind}`} style={{ width: w, height: h }}><span>{kind === 'onprem' ? label : `${kind} · ${label}`}</span></div>
 }
 function VpcNode({ data }: NodeProps) {
   const { label, w, h } = data as { label: string; w: number; h: number }
@@ -264,6 +264,8 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
         ...backdrop(design, cloud, zl),
         ...zl.zoneBoxes.map(z => ({ id: `zone:${z.zone}`, type: 'zone', position: { x: z.x, y: z.y }, ...fixed, zIndex: -2,
           data: { label: z.label ?? zoneName(z.zone, cloud), failed: z.zone === failed, w: z.w, h: z.h } })),
+        ...(zl.onprem ? [{ id: 'group:~onprem', type: 'boundary', position: { x: zl.onprem.x, y: zl.onprem.y }, ...fixed, zIndex: -2,
+          data: { label: ON_PREM_GROUP.label, kind: ON_PREM_GROUP.kind, w: zl.onprem.w, h: zl.onprem.h } }] : []),
         ...zl.insts.map(i => {
           const node = design.nodes.find(n => n.id === i.node)!
           const state: State = !flow ? 'visited' : hop && (hop.from === i.id || hop.to === i.id) ? 'active'

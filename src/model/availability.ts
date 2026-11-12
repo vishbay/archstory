@@ -1,5 +1,5 @@
 // Zone-level availability: where each component's instances live, and what a zone outage does to them.
-import type { Design, DNode, HAMode } from './schema'
+import { isOnPrem, type Design, type DNode, type HAMode } from './schema'
 import { tierOf, type Cloud } from './kinds'
 import { subnetFor } from './network'
 
@@ -14,9 +14,9 @@ export const zoneName = (i: number, cloud: Cloud) => {
   return cloud === 'aws' ? `AZ-${l}` : cloud === 'gcp' ? `zone-${l}` : `Zone ${l.toUpperCase()}`
 }
 
-/** null when the node isn't zonal at all (clients, edge, third parties) or the design has no network. */
+/** null when the node isn't zonal at all (clients, edge, third parties, your own data centre) or the design has no network. */
 export function haOf(d: Design, n: DNode): HAMode | null {
-  if (!d.network || OFF_NETWORK.has(tierOf(n))) return null
+  if (!d.network || OFF_NETWORK.has(tierOf(n)) || isOnPrem(n)) return null
   if (n.ha) return n.ha
   if (!subnetFor(d, n)) return 'regional'
   return KIND_HA[n.kind] ?? 'active-active'
@@ -33,7 +33,10 @@ export function placementsOf(d: Design, n: DNode): Placement[] {
   }
 }
 
+export const ON_PREM_TEXT = 'In your own data centre: not covered by cloud zones.'
+
 export function zoneBadge(d: Design, n: DNode, cloud: Cloud): string | null {
+  if (d.network && isOnPrem(n)) return 'on-prem'
   const ha = haOf(d, n)
   if (!ha) return null
   if (ha === 'regional') return 'regional'
@@ -54,6 +57,7 @@ export type Level = 'ok' | 'warn' | 'down'
 export interface Impact { level: Level; tag: string; text: string }
 
 export function impactOf(d: Design, n: DNode, failed: number, cloud: Cloud): Impact | null {
+  if (d.network && isOnPrem(n)) return { level: 'ok', tag: 'on-prem', text: `${ON_PREM_TEXT} Losing a cloud zone does not touch it.` }
   const ha = haOf(d, n)
   if (!ha) return null
   if (ha === 'regional') return { level: 'ok', tag: 'unaffected', text: 'Regional managed service: the provider already spreads it across zones.' }
@@ -90,6 +94,8 @@ export interface Resilience {
   zones: number
   perZoneShare: string
   spofs: DNode[]
+  /** On-prem components on the request path: not cloud single points of failure, but the data centre is one site. */
+  onPrem: DNode[]
   impacts: { node: DNode; impact: Impact }[]
   rto: string
   rpo: string
@@ -99,7 +105,8 @@ export function resilience(d: Design, failed: number, cloud: Cloud): Resilience 
   if (!d.network) return null
   const z = d.network.zones
   const impacts = d.nodes.flatMap(node => { const impact = impactOf(d, node, failed, cloud); return impact ? [{ node, impact }] : [] })
-  const spofs = d.nodes.filter(n => onRequestPath(d, n.id) && (haOf(d, n) === 'single' || (haOf(d, n) !== 'regional' && placementsOf(d, n).length === 1)))
+  const onPrem = d.nodes.filter(n => isOnPrem(n) && onRequestPath(d, n.id))
+  const spofs = d.nodes.filter(n => onRequestPath(d, n.id) && !isOnPrem(n) && (haOf(d, n) === 'single' || (haOf(d, n) !== 'regional' && placementsOf(d, n).length === 1)))
   const failing = impacts.filter(i => i.impact.level === 'down')
   const failovers = impacts.filter(i => i.impact.tag.startsWith('failover') && onRequestPath(d, i.node.id))
   const rto = failing.length ? 'until the zone recovers (a single-zone component is on the request path)'
@@ -108,5 +115,5 @@ export function resilience(d: Design, failed: number, cloud: Cloud): Resilience 
   const rpo = failovers.some(f => f.node.kind === 'cache') ? 'cache may lose recent writes (it is rebuilt from the database)'
     : 'no committed data lost'
   const share = z > 1 ? `${Math.round(100 / (z - 1))}% of peak per zone (${Math.round(100 * z / (z - 1))}% total)` : 'n/a with one zone'
-  return { zones: z, perZoneShare: share, spofs, impacts, rto, rpo }
+  return { zones: z, perZoneShare: share, spofs, onPrem, impacts, rto, rpo }
 }

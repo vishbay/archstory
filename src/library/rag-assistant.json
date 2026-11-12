@@ -107,7 +107,7 @@
     {
       "id": "vector_index",
       "label": "Vector + Keyword Index",
-      "kind": "search_index",
+      "kind": "vector_db",
       "description": "One record per chunk: text, 1024-dim embedding, BM25 terms, doc id, version, source link and the principals allowed to read it. Serves k-NN and keyword search with the permission filter applied inside the query",
       "cloud": {
         "aws": "Amazon OpenSearch Service",
@@ -168,7 +168,7 @@
     {
       "id": "llm",
       "label": "LLM API",
-      "kind": "external_api",
+      "kind": "llm",
       "description": "Managed model API: a small fast model for query rewriting and checks, a larger model for answers, and a fallback model with its own quota",
       "cloud": {
         "aws": "Amazon Bedrock",
@@ -178,7 +178,7 @@
     {
       "id": "embed",
       "label": "Embedding + Rerank API",
-      "kind": "external_api",
+      "kind": "llm",
       "description": "Managed embedding model (1024 dimensions) and a cross-encoder reranking model",
       "cloud": {
         "aws": "Amazon Bedrock",

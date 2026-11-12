@@ -10,15 +10,17 @@ const SYNONYMS: Record<string, string[]> = {
   dns: ['route53', 'domain'], cdn: ['cloudfront', 'edge', 'static'], waf: ['firewall'],
   load_balancer: ['lb', 'alb', 'l7', 'balancer'], network_load_balancer: ['nlb', 'l4', 'tcp'], api_gateway: ['gateway', 'api'],
   rate_limiter: ['throttle', 'limit'], websocket_gateway: ['ws', 'websocket', 'socket', 'realtime', 'push'],
+  mqtt_broker: ['mqtt', 'iot', 'iot core', 'emqx', 'mosquitto', 'devices'], hybrid_link: ['direct connect', 'interconnect', 'vpn', 'expressroute', 'on-prem', 'onprem', 'data centre', 'datacenter'],
   service: ['server', 'backend', 'api', 'app server', 'microservice'], auth: ['login', 'identity', 'oauth', 'idp'],
   key_gen: ['id', 'snowflake', 'key'], search: ['query'],
   cache: ['redis', 'memcached', 'elasticache'], sql_db: ['database', 'db', 'postgres', 'mysql', 'aurora', 'rds', 'relational'],
   nosql_db: ['dynamo', 'cassandra', 'mongo', 'bigtable', 'kv', 'key value', 'database', 'db'], db_replica: ['replica', 'follower', 'read'],
   object_store: ['s3', 'blob', 'gcs', 'files', 'bucket', 'storage'], search_index: ['elasticsearch', 'opensearch', 'index'],
-  geo_index: ['location', 'geohash', 'h3', 'map'],
+  geo_index: ['location', 'geohash', 'h3', 'map'], vector_db: ['vector', 'embeddings', 'pgvector', 'knn', 'rag', 'pinecone'],
+  schema_registry: ['avro', 'protobuf', 'schemas', 'confluent', 'apicurio'], data_catalog: ['glue', 'dataplex', 'metadata', 'lineage', 'catalogue'],
   queue: ['sqs', 'rabbit', 'rabbitmq', 'job', 'tasks'], stream: ['kafka', 'kinesis', 'pubsub', 'events', 'log'],
   worker: ['consumer', 'job', 'background', 'processor'], scheduler: ['cron', 'timer'], analytics: ['warehouse', 'bigquery', 'olap'],
-  payment_provider: ['stripe', 'psp', 'payments'], notification_provider: ['email', 'sms', 'push', 'apns', 'fcm'], external_api: ['third party', 'partner'],
+  llm: ['ai', 'gpt', 'claude', 'bedrock', 'vertex', 'model', 'genai'], payment_provider: ['stripe', 'psp', 'payments'], notification_provider: ['email', 'sms', 'push', 'apns', 'fcm'], external_api: ['third party', 'partner'],
 }
 
 /** Kinds that match what was typed, best first: name start, then name contains, then a synonym. */

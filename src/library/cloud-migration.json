@@ -303,8 +303,6 @@
       "id": "hybrid",
       "label": "Hybrid Link",
       "kind": "hybrid_link",
-      "icon": "🛤️",
-      "subnet": "none",
       "description": "Private connection to the data centre: two dedicated connections at two locations, with a site-to-site VPN as the fallback",
       "cloud": {
         "aws": "Direct Connect",
@@ -345,29 +343,20 @@
     },
     {
       "id": "monolith",
-      "label": "On-prem: Monolith",
+      "label": "Monolith",
       "kind": "service",
-      "tier": "async",
-      "group": "onprem",
-      "description": "The existing Java app tier behind an on-premises load balancer: cart, checkout, customers, payments, 95% of orders and the back office",
-      "subnet": "none"
+      "site": "onprem",
+      "description": "The existing Java app tier behind an on-premises load balancer: cart, checkout, customers, payments, 95% of orders and the back office"
     },
     {
       "id": "onprem_db",
-      "label": "On-prem: Oracle DB",
+      "label": "Oracle DB",
       "kind": "sql_db",
-      "tier": "external",
-      "group": "onprem",
+      "site": "onprem",
       "description": "One large Oracle database shared by every module of the monolith, with supplemental logging on for CDC"
     }
   ],
-  "groups": [
-    {
-      "id": "onprem",
-      "label": "On-premises data centre",
-      "kind": "boundary"
-    }
-  ],
+  "groups": [],
   "edges": [
     {
       "from": "client",

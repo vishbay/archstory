@@ -13,6 +13,7 @@ export const REGION_ROLES = ['primary', 'secondary', 'active'] as const
 export const DR_STRATEGIES = ['backup-restore', 'pilot-light', 'warm-standby', 'active-active'] as const
 export const FOOTPRINTS = ['all', 'primary', 'global'] as const
 export const REPLICATION_MODES = ['sync', 'async', 'backup', 'none'] as const
+export const SITES = ['cloud', 'onprem'] as const
 
 const Id = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, 'ids are lowercase letters, digits, "-" or "_"')
 
@@ -24,6 +25,8 @@ export const NodeSchema = z.object({
   description: z.string().optional(),
   group: Id.optional().describe('Id of a group (region, tenant, …) this node sits inside'),
   subnet: Id.optional().describe('Override the subnet chosen by tier; "none" places the node outside the VPC (managed service)'),
+  site: z.enum(SITES).optional()
+    .describe('Where it runs: "cloud" (default) or "onprem" (your own data centre, reached from the cloud over a hybrid_link node). An on-prem node sits outside the VPC, the cloud zones and the regions: it takes no cloud subnet, regions or replication, and zones and ha are ignored'),
   zones: z.number().int().positive().optional().describe('Availability zones this node spans; defaults to network.zones'),
   ha: z.enum(HA_MODES).optional()
     .describe('How it survives a zone failure. Defaults by kind: services active-active, SQL/cache primary-standby, managed services regional'),
@@ -227,10 +230,14 @@ export function parseDesign(input: unknown): ParseResult {
         else claimed.set(t, s.id)
       }
     }
-    for (const n of d.nodes) if (n.subnet && n.subnet !== 'none' && !subnetIds.has(n.subnet))
+    for (const n of d.nodes) if (n.subnet && n.subnet !== 'none' && !subnetIds.has(n.subnet) && n.site !== 'onprem')
       errors.push(`node "${n.id}": unknown subnet "${n.subnet}"`)
   } else {
     for (const n of d.nodes) if (n.subnet) errors.push(`node "${n.id}": has a subnet but the design has no network section`)
+  }
+  for (const n of d.nodes.filter(isOnPrem)) {
+    if (n.subnet && n.subnet !== 'none') errors.push(`node "${n.id}": is on-premises, so it cannot sit in the cloud subnet "${n.subnet}"`)
+    if (n.regions || n.replication) errors.push(`node "${n.id}": is on-premises, so it has no cloud regions or replication`)
   }
   if (d.regions) {
     const r = d.regions, ids = new Set<string>()
@@ -241,7 +248,7 @@ export function parseDesign(input: unknown): ParseResult {
     } else if (roles.filter(x => x === 'primary').length !== 1 || roles.includes('active'))
       errors.push(`regions: ${r.strategy} needs exactly one "primary" region, the others "secondary"`)
   } else {
-    for (const n of d.nodes) if (n.regions || n.replication) errors.push(`node "${n.id}": has regions or replication but the design has no regions section`)
+    for (const n of d.nodes) if ((n.regions || n.replication) && !isOnPrem(n)) errors.push(`node "${n.id}": has regions or replication but the design has no regions section`)
   }
   if (d.observability) {
     const o = d.observability, sloIds = new Set<string>(), alertIds = new Set<string>()
@@ -276,11 +283,15 @@ export function findEdge(d: Pick<Design, 'edges'>, from: string, to: string): { 
 export const edgeId = (e: DEdge) => `${e.from}->${e.to}`
 
 // Managed, regional services that normally live outside your VPC and are reached through a private endpoint.
-const MANAGED_KINDS = new Set(['object_store', 'queue', 'nosql_db', 'stream'])
+// The hybrid link is outside the subnets too: it attaches to the VPC through a gateway.
+const MANAGED_KINDS = new Set(['object_store', 'queue', 'nosql_db', 'stream', 'hybrid_link'])
+
+/** Runs in your own data centre rather than the cloud. */
+export const isOnPrem = (n: Pick<DNode, 'site'>) => n.site === 'onprem'
 
 /** The subnet a node sits in, or null when it is outside the VPC (or the design has no network). */
 export function subnetOf(d: Pick<Design, 'network'>, n: DNode, tier: Tier): Subnet | null {
-  if (!d.network || n.subnet === 'none') return null
+  if (!d.network || n.subnet === 'none' || isOnPrem(n)) return null
   if (n.subnet) return d.network.subnets.find(s => s.id === n.subnet) ?? null
   if (MANAGED_KINDS.has(n.kind)) return null
   return d.network.subnets.find(s => s.tiers.includes(tier)) ?? null

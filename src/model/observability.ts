@@ -56,6 +56,42 @@ const GOLDEN: Record<string, Golden[]> = {
     g('errors', 'Disconnects per minute, by reason', 'ws_disconnects_total{reason}'),
     g('saturation', 'Connections per node against its limit, memory per connection', 'ws_connections_per_node'),
   ],
+  mqtt_broker: [
+    g('latency', 'Publish to deliver latency through the broker', 'mqtt_publish_latency_seconds'),
+    g('traffic', 'Connected devices and messages per second', 'mqtt_connections, mqtt_messages_total'),
+    g('errors', 'Failed connects, auth failures and dropped messages', 'mqtt_connect_failures_total, mqtt_dropped_total'),
+    g('saturation', 'Connections and inflight QoS 1 messages against limits', 'mqtt_connections_per_node, mqtt_inflight'),
+  ],
+  hybrid_link: [
+    g('latency', 'Round trip between the cloud and the data centre', 'link_rtt_seconds'),
+    g('traffic', 'Bits per second in each direction', 'link_bits_total{direction}'),
+    g('errors', 'BGP sessions down, packet loss and failovers to the backup path', 'bgp_session_up, link_packet_loss_ratio'),
+    g('saturation', 'Bandwidth used against the link capacity', 'link_utilisation_ratio'),
+  ],
+  vector_db: [
+    g('latency', 'Nearest-neighbour query latency, p99', 'vector_query_duration_seconds'),
+    g('traffic', 'Queries and vectors upserted per second', 'vector_queries_total, vector_upserts_total'),
+    g('errors', 'Failed queries and upserts', 'vector_errors_total'),
+    g('saturation', 'Index memory against its limit, and recall drift', 'vector_index_memory_ratio'),
+  ],
+  schema_registry: [
+    g('latency', 'Schema lookup latency, p99 (clients cache schemas)', 'registry_request_duration_seconds'),
+    g('traffic', 'Lookups and registrations per second', 'registry_requests_total'),
+    g('errors', 'Rejected incompatible schemas and failed lookups', 'registry_incompatible_total, registry_errors_total'),
+    g('saturation', 'Schemas and versions held', 'registry_schemas'),
+  ],
+  data_catalog: [
+    g('latency', 'Metadata API latency, p99', 'catalog_request_duration_seconds'),
+    g('traffic', 'Metadata reads and updates per second', 'catalog_requests_total'),
+    g('errors', 'Failed crawls and metadata updates', 'catalog_errors_total'),
+    g('saturation', 'Throttled API calls and partitions per table', 'catalog_throttled_total'),
+  ],
+  llm: [
+    g('latency', 'Time to first token and total generation time, p95', 'llm_ttft_seconds, llm_duration_seconds'),
+    g('traffic', 'Calls and tokens per second, in and out', 'llm_requests_total, llm_tokens_total{direction}'),
+    g('errors', 'Errors, timeouts and blocked responses', 'llm_errors_total{code}'),
+    g('saturation', 'Throttling against the tokens per minute quota', 'llm_throttled_total, llm_quota_used_ratio'),
+  ],
   cache: [
     g('latency', 'Get and set latency, p99', 'cache_command_duration_seconds'),
     g('traffic', 'Operations per second', 'cache_commands_total'),
@@ -176,8 +212,8 @@ export const signalsFor = (kind: string): Golden[] => GOLDEN[kind] ?? SERVICE
 /** Which kinds of telemetry a component emits. Third parties and clients are measured from our side. */
 export function emits(kind: string): { metrics: boolean; logs: boolean; traces: boolean } {
   const none = { metrics: false, logs: false, traces: false }
-  if (['client', 'web_client', 'mobile_client', 'payment_provider', 'notification_provider', 'external_api'].includes(kind)) return none
-  if (kind === 'dns') return { metrics: true, logs: false, traces: false }
+  if (['client', 'web_client', 'mobile_client', 'payment_provider', 'notification_provider', 'external_api', 'llm'].includes(kind)) return none
+  if (kind === 'dns' || kind === 'hybrid_link') return { metrics: true, logs: false, traces: false }
   const traces = ['service', 'auth', 'key_gen', 'search', 'websocket_gateway', 'api_gateway', 'load_balancer', 'worker', 'rate_limiter'].includes(kind)
   return { metrics: true, logs: true, traces }
 }

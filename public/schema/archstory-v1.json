@@ -135,6 +135,14 @@
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9_-]*$"
           },
+          "site": {
+            "description": "Where it runs: \"cloud\" (default) or \"onprem\" (your own data centre, reached from the cloud over a hybrid_link node). An on-prem node sits outside the VPC, the cloud zones and the regions: it takes no cloud subnet, regions or replication, and zones and ha are ignored",
+            "type": "string",
+            "enum": [
+              "cloud",
+              "onprem"
+            ]
+          },
           "zones": {
             "description": "Availability zones this node spans; defaults to network.zones",
             "type": "integer",

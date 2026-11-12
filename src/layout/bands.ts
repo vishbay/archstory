@@ -1,8 +1,8 @@
 // Deterministic band layout: one horizontal band per tier (top → bottom), no coordinates needed in the JSON.
 // Nodes are split into column "segments" so boxed things (groups, the VPC) each draw as one clean rectangle:
-//   plain view:   [ungrouped] [group A] [group B] …
-//   network view: [VPC ungrouped] [group A] [group B] … [outside the VPC]
-import { subnetOf, TIERS, type Design, type DNode, type Tier } from '../model/schema'
+//   plain view:   [ungrouped] [group A] [group B] … [on-premises]
+//   network view: [VPC ungrouped] [group A] [group B] … [outside the VPC] [on-premises]
+import { isOnPrem, subnetOf, TIERS, type Design, type DNode, type Tier } from '../model/schema'
 import { tierOf } from '../model/kinds'
 
 export const NODE_W = 188, NODE_H = 58
@@ -24,13 +24,15 @@ export interface Layout {
   handles: (from: string, to: string) => [Side, Side]
 }
 
-const OUT = '\u0000out', VPC = '\u0000vpc'
+const OUT = '\u0000out', VPC = '\u0000vpc', PREM = '\u0000onprem'
+/** The box around on-prem components, drawn as a group of kind "onprem" (its id cannot clash with a group id). */
+export const ON_PREM_GROUP = { id: '~onprem', label: 'On-premises data centre', kind: 'onprem' }
 
 export function layoutBands(d: Design, opts: { network?: boolean; observability?: boolean; obsOpen?: boolean } = {}): Layout {
   const net = opts.network && d.network ? d.network : null
   const subnet = (n: DNode) => (net ? subnetOf(d, n, tierOf(n)) : null)
-  const segOf = (n: DNode) => n.group ?? (subnet(n) ? VPC : OUT)
-  const segs = (net ? [VPC, ...d.groups.map(g => g.id), OUT] : [OUT, ...d.groups.map(g => g.id)])
+  const segOf = (n: DNode) => (isOnPrem(n) ? PREM : n.group ?? (subnet(n) ? VPC : OUT))
+  const segs = (net ? [VPC, ...d.groups.map(g => g.id), OUT, PREM] : [OUT, ...d.groups.map(g => g.id), PREM])
     .filter(s => d.nodes.some(n => segOf(n) === s))
   const boxed = (s: string) => s !== OUT
 
@@ -75,16 +77,18 @@ export function layoutBands(d: Design, opts: { network?: boolean; observability?
   const colX = (s: string) => LABEL_W + segStart[s] * CELL
   const span = (idx: number[]) => ({ top: bands[Math.min(...idx)], bottom: bands[Math.max(...idx)] })
 
-  const groups: Layout['groups'] = d.groups.filter(g => segs.includes(g.id)).map(g => {
-    const { top, bottom } = span(d.nodes.filter(n => n.group === g.id).map(n => bandIdx[tierOf(n)]))
-    return { id: g.id, label: g.label, kind: g.kind, x: colX(g.id) + 6, w: segW[g.id] * CELL - 12, y: top.y + 4, h: bottom.y + bottom.h - top.y - 8 }
-  })
+  const boxOf = (s: string, g: { id: string; label: string; kind: string }) => {
+    const { top, bottom } = span(d.nodes.filter(n => segOf(n) === s).map(n => bandIdx[tierOf(n)]))
+    return { id: g.id, label: g.label, kind: g.kind, x: colX(s) + 6, w: segW[s] * CELL - 12, y: top.y + 4, h: bottom.y + bottom.h - top.y - 8 }
+  }
+  const groups: Layout['groups'] = d.groups.filter(g => segs.includes(g.id)).map(g => boxOf(g.id, g))
+  if (segs.includes(PREM)) groups.push(boxOf(PREM, ON_PREM_GROUP))
 
   let vpc: Box | null = null
   const subnets: Layout['subnets'] = []
   const inVpc = d.nodes.filter(n => subnet(n))
   if (net && inVpc.length) {
-    const vpcSegs = segs.filter(s => s !== OUT)
+    const vpcSegs = segs.filter(s => s !== OUT && s !== PREM)
     const x0 = colX(vpcSegs[0]), x1 = colX(vpcSegs.at(-1)!) + segW[vpcSegs.at(-1)!] * CELL
     const { top, bottom } = span(inVpc.map(n => bandIdx[tierOf(n)]))
     vpc = { x: x0 - 2, y: top.y - 6, w: x1 - x0 + 4, h: bottom.y + bottom.h - top.y + 12 }

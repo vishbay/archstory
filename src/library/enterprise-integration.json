@@ -196,7 +196,7 @@
         "why": "A rise in duplicates means redeliveries or replays; in_doubt means a side effect whose result was lost and had to be looked up in the target."
       },
       {
-        "target": "bus",
+        "target": "registry",
         "name": "Rejected schema changes",
         "metric": "schema_compat_failures_total{subject}",
         "why": "A producer trying to register a breaking change is caught here, before any consumer sees it."
@@ -282,12 +282,23 @@
       }
     },
     {
+      "id": "registry",
+      "label": "Schema Registry",
+      "kind": "schema_registry",
+      "ha": "regional",
+      "description": "Avro schemas for the canonical events with BACKWARD compatibility enforced; producers register and look up schema ids, consumers decode by the id in each message",
+      "cloud": {
+        "aws": "Glue Schema Registry",
+        "gcp": "Apicurio Registry on GKE"
+      }
+    },
+    {
       "id": "bus",
       "label": "Event Backbone",
       "kind": "stream",
       "subnet": "data",
       "ha": "quorum",
-      "description": "Canonical topics (OrderPlaced, CustomerUpdated, InventoryAdjusted) keyed by business id, 12 partitions, 7-day retention; retry and dead-letter topics per consumer; schema registry alongside (Glue Schema Registry on AWS) with BACKWARD compatibility enforced",
+      "description": "Canonical topics (OrderPlaced, CustomerUpdated, InventoryAdjusted) keyed by business id, 12 partitions, 7-day retention; retry and dead-letter topics per consumer; every event is serialized against a schema in the schema registry",
       "cloud": {
         "aws": "MSK (Kafka)",
         "gcp": "Managed Service for Apache Kafka"
@@ -390,6 +401,14 @@
     {
       "from": "ops",
       "to": "bus"
+    },
+    {
+      "from": "commerce",
+      "to": "registry"
+    },
+    {
+      "from": "crm_conn",
+      "to": "registry"
     },
     {
       "from": "bus",
@@ -1115,7 +1134,8 @@
       "targets": [
         "commerce",
         "crm_conn",
-        "bus"
+        "bus",
+        "registry"
       ]
     },
     {

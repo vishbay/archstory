@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
 import { addFlow, addNode, appendStep, blankAttempt, connect, removeNode, stepKindFor, stepProblem, updateNode } from './attempt'
-import { runChecks } from './checks'
+import { familyOf, nameOfFamily, runChecks } from './checks'
 import { parseDesign, type Design } from '../model/schema'
 import multiRegion from '../model/fixtures/multi-region.json'
 
@@ -138,5 +138,25 @@ describe('region checks', () => {
   it('flags the gaps the fixture has on purpose', () => {
     const titles = runChecks({ ...ref, id: 'attempt' }, ref).checks.filter(c => c.id.startsWith('region')).map(c => `${c.level}: ${c.title}`)
     expect(titles).toEqual(['pass: Says how it survives losing a region', 'warn: 1 data store has no cross-region replication'])
+  })
+})
+
+describe('families of the newer kinds', () => {
+  const fam = (kind: string) => familyOf({ id: 'x', label: 'X', kind })
+  it('treats equivalent choices as one family, and gives the rest their own', () => {
+    expect(fam('mqtt_broker')).toBe(fam('websocket_gateway'))
+    expect(fam('vector_db')).toBe(fam('search_index'))
+    expect(fam('data_catalog')).toBe(fam('schema_registry'))
+    expect(new Set(['llm', 'hybrid_link', 'push_gateway', 'search_index', 'catalog'].map(k => fam(k))).size).toBe(5)
+    expect(['llm', 'hybrid_link', 'vector_db', 'mqtt_broker', 'data_catalog'].map(k => nameOfFamily(fam(k)))).toEqual([
+      'a model endpoint (LLM)', 'a hybrid link to the data centre', 'a search or vector index', 'a WebSocket or MQTT gateway', 'a data catalog or schema registry'])
+  })
+  it('counts a search index the same as the reference\'s vector store', () => {
+    const rag = LIBRARY.find(d => d.id === 'rag-assistant')!
+    const swap = (from: string, to: string) => ({ ...rag, id: 'attempt', nodes: rag.nodes.map(n => (n.kind === from ? { ...n, kind: to } : n)) })
+    const check = (att: Design) => runChecks(att, rag).checks.find(c => c.id === 'has:search_index')!.level
+    expect(check(swap('vector_db', 'search_index'))).toBe('pass')
+    expect(check({ ...rag, id: 'attempt', nodes: rag.nodes.filter(n => n.kind !== 'vector_db') })).toBe('fail')
+    expect(runChecks(swap('llm', 'external_api'), rag).checks.find(c => c.id === 'has:llm')!.level).toBe('fail')
   })
 })

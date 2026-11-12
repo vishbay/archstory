@@ -1,14 +1,16 @@
 // Zones view: the VPC split into availability-zone columns with one box per instance.
 // Edges and flows are resolved to concrete instances, so cross-zone hops and failover paths become visible.
 // The regions view (layout/regions.ts) uses the same columns with one column group per region.
-import type { Design, DNode, Flow } from '../model/schema'
+import { isOnPrem, type Design, type DNode, type Flow } from '../model/schema'
 import { tierOf } from '../model/kinds'
 import { placementsOf, type Level, type Role } from '../model/availability'
-import { layoutBands, LABEL_W, type Box, type Layout, type Side } from './bands'
+import { layoutBands, LABEL_W, NODE_W, type Box, type Layout, type Side } from './bands'
 
 // Instances are drawn compact (icon + name) so three zones of components still fit on screen.
 export const ZNODE_W = 136
 const CELL = 150
+// On-prem components sit in their own box right of everything else, full width, after a gap.
+const PREM_CELL = NODE_W + 40, PREM_GAP = 60
 
 export type InstTag = { text: string; level?: Level | 'role' }
 export interface Inst { id: string; node: string; zone: number | null; role: Role | 'promoted' | 'outside'; failed: boolean; tag?: InstTag }
@@ -19,6 +21,8 @@ export interface ZoneLayout {
   pos: Record<string, { x: number; y: number }>
   bands: Layout['bands']; subnets: Layout['subnets']; vpc: Box | null
   zoneBoxes: (Box & { zone: number; label?: string })[]
+  /** The box around on-prem components, outside every zone or region. */
+  onprem: Box | null
   insts: Inst[]; edges: ZEdge[]
   width: number; height: number
   handles: (from: string, to: string) => [Side, Side]
@@ -49,20 +53,24 @@ export function layoutColumns(d: Design, base: Layout, o: {
 }): ZoneLayout {
   const { failed } = o, z = o.count
   const placed = new Map(d.nodes.map(n => [n.id, o.place(n)]))
-  const zonal = (n: DNode) => placed.get(n.id)!.length > 0
+  const zonal = (n: DNode) => !isOnPrem(n) && placed.get(n.id)!.length > 0
   const bandIdx = Object.fromEntries(base.bands.map((b, i) => [b.tier, i]))
   const byBand = base.bands.map(b => d.nodes.filter(n => tierOf(n) === b.tier).sort((a, c) => base.pos[a.id].x - base.pos[c.id].x))
   const W = Math.max(1, ...byBand.map(l => l.filter(zonal).length))
-  const outIn = (l: DNode[]) => (l.some(zonal) ? l.filter(n => !zonal(n)) : [])
+  const cloudOut = (l: DNode[]) => l.filter(n => !zonal(n) && !isOnPrem(n))
+  const outIn = (l: DNode[]) => (l.some(zonal) ? cloudOut(l) : [])
   const OUTW = Math.max(0, ...byBand.map(l => outIn(l).length))
-  const total = Math.max(z * W + OUTW, ...byBand.map(l => (l.some(zonal) ? 0 : l.length)))
+  const total = Math.max(z * W + OUTW, ...byBand.map(l => (l.some(zonal) ? 0 : cloudOut(l).length)))
   const cx = (col: number) => LABEL_W + col * CELL + (CELL - ZNODE_W) / 2
+  const PREMW = Math.max(0, ...byBand.map(l => l.filter(isOnPrem).length))
+  const premX = LABEL_W + total * CELL + PREM_GAP
+  const px = (col: number) => premX + 10 + col * PREM_CELL + (PREM_CELL - NODE_W) / 2
 
   const insts: Inst[] = []
   const pos: ZoneLayout['pos'] = {}
   byBand.forEach(list => {
     const y = base.pos[list[0].id].y
-    const inZones = list.filter(zonal), out = list.filter(n => !zonal(n))
+    const inZones = list.filter(zonal), out = cloudOut(list), prem = list.filter(isOnPrem)
     inZones.forEach((n, slot) => {
       for (const p of placed.get(n.id)!) {
         const id = `${n.id}@${p.zone}`
@@ -74,6 +82,10 @@ export function layoutColumns(d: Design, base: Layout, o: {
     out.forEach((n, i) => {
       insts.push({ id: n.id, node: n.id, zone: null, role: 'outside', failed: false })
       pos[n.id] = { x: cx(lone ? (total - out.length) / 2 + i : z * W + (OUTW - out.length) / 2 + i), y: base.pos[n.id].y }
+    })
+    prem.forEach((n, i) => {
+      insts.push({ id: n.id, node: n.id, zone: null, role: 'outside', failed: false, tag: { text: 'on-prem', level: 'role' } })
+      pos[n.id] = { x: px((PREMW - prem.length) / 2 + i), y: base.pos[n.id].y }
     })
   })
 
@@ -107,7 +119,13 @@ export function layoutColumns(d: Design, base: Layout, o: {
     for (let k = 0; k < z; k++) zoneBoxes.push({ zone: k, x: x0 + k * W * CELL + 4, w: W * CELL - 8, y: top.y - 2, h: bottom.y + bottom.h - top.y + 4,
       ...(o.label && { label: o.label(k) }) })
   }
-  const width = LABEL_W + total * CELL + 12
+  let onprem: Box | null = null
+  const premBands = byBand.map((l, i) => (l.some(isOnPrem) ? i : -1)).filter(i => i >= 0)
+  if (premBands.length) {
+    const top = base.bands[premBands[0]], bottom = base.bands[premBands.at(-1)!]
+    onprem = { x: premX, y: top.y + 4, w: PREMW * PREM_CELL + 20, h: bottom.y + bottom.h - top.y - 8 }
+  }
+  const width = onprem ? onprem.x + onprem.w + 12 : LABEL_W + total * CELL + 12
   const bands = base.bands.map(b => ({ ...b, w: width }))
   const subnets = base.subnets.map(s => ({ ...s, x: x0 + 4, w: x1 - x0 - 8 }))
 
@@ -117,7 +135,7 @@ export function layoutColumns(d: Design, base: Layout, o: {
     if (dt !== 0) return dt > 0 ? ['bottom', 'top'] : ['top', 'bottom']
     return pos[to].x > pos[from].x ? ['right', 'left'] : ['left', 'right']
   }
-  return { unit: o.unit, pos, bands, subnets, vpc, zoneBoxes, insts, edges: [...edges.values()], width, height: base.height, handles }
+  return { unit: o.unit, pos, bands, subnets, vpc, zoneBoxes, onprem, insts, edges: [...edges.values()], width, height: base.height, handles }
 }
 
 export interface Hop { from: string | null; to: string | null; edge: ZEdge | null; reverse: boolean; cross: boolean }

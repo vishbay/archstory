@@ -1,6 +1,6 @@
 // Region-level disaster recovery: where each component runs across regions, and what losing a whole region does.
 // The zone drill (availability.ts) asks "can we survive a data centre"; this one asks "can we survive a region".
-import type { Design, DNode, Footprint, Region, Replication } from './schema'
+import { isOnPrem, type Design, type DNode, type Footprint, type Region, type Replication } from './schema'
 import { tierOf } from './kinds'
 import { onRequestPath, type Impact, type Role } from './availability'
 
@@ -25,15 +25,15 @@ const derived = (n: DNode) => DERIVED.has(n.kind)
 /** A data store whose contents would be lost (not a cache or read replica rebuilt from one). */
 export const holdsData = (n: DNode) => isStore(n) && !derived(n)
 
-/** null when the design has no regions section, or for clients and third parties (not ours to place). */
+/** null when the design has no regions section, for clients and third parties (not ours to place), and for on-prem components. */
 export function footprintOf(d: Design, n: DNode): Footprint | null {
-  if (!d.regions || NOT_OURS.has(tierOf(n))) return null
+  if (!d.regions || NOT_OURS.has(tierOf(n)) || isOnPrem(n)) return null
   return n.regions ?? (tierOf(n) === 'edge' ? 'global' : 'all')
 }
 
 /** How a data store's contents reach other regions; null for anything that is not a data store. */
 export function replicationOf(d: Design, n: DNode): Replication | null {
-  if (!d.regions || !isStore(n)) return null
+  if (!d.regions || !isStore(n) || isOnPrem(n)) return null
   return n.replication ?? (derived(n) ? 'none' : d.regions.strategy === 'backup-restore' ? 'backup' : 'async')
 }
 
@@ -81,6 +81,7 @@ export function regionPlacements(d: Design, n: DNode, failed: number | null): Re
 
 /** What losing region `failed` does to one component. null for clients and third parties. */
 export function regionImpactOf(d: Design, n: DNode, failed: number): Impact | null {
+  if (d.regions && isOnPrem(n)) return { level: 'ok', tag: 'on-prem', text: 'In your own data centre: not in any cloud region, so losing one does not touch it. It is reached over the hybrid link.' }
   const fp = footprintOf(d, n)
   if (!fp) return null
   const R = d.regions!, lost = R.regions[failed].name, h = homeRegion(d), home = R.regions[h].name
@@ -145,6 +146,7 @@ export function regionWarnings(d: Design): string[] {
   const where = aa ? 'losing a region loses the data that lived only there' : `losing ${home} loses its data`
   for (const n of d.nodes) {
     const fp = footprintOf(d, n), rep = replicationOf(d, n)
+    if (isOnPrem(n) && onRequestPath(d, n.id)) out.push(`${n.label} runs in your own data centre, a single site: no cloud region takes over if the data centre or the hybrid link goes down.`)
     if (!fp) continue
     if (isStore(n) && !derived(n)) {
       if (fp === 'primary' || rep === 'none') out.push(`${n.label} has no cross-region replication, so ${where}.`)

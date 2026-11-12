@@ -307,9 +307,7 @@
     {
       "id": "registry",
       "label": "Catalog and Schema Registry",
-      "kind": "service",
-      "tier": "data",
-      "icon": "📚",
+      "kind": "data_catalog",
       "ha": "regional",
       "description": "Table metadata and Iceberg snapshot pointers, event schemas with compatibility rules, data contracts for SaaS exports, column tags (PII) that drive access policies, and lineage",
       "cloud": {

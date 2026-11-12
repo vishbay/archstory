@@ -98,6 +98,17 @@ Two optional fields on components say where they run. `regions` is `all` (a copy
 ]
 ```
 
+### Hybrid and on-premises designs
+
+For migration or hybrid questions, give a component that runs in the customer's own data centre `"site": "onprem"` (the default is `cloud`). It is drawn in an On-premises box outside the VPC, the zones and the regions, and failing a cloud zone or region does not touch it; the Resilience panel still warns that the data centre is a single site. An on-prem component takes no cloud `subnet`, `regions` or `replication`. Connect it to the cloud through a `hybrid_link` node (Direct Connect, Cloud Interconnect or a site-to-site VPN), and hops across it are described with their latency and per-GB cost.
+
+```json
+{ "id": "link", "label": "Hybrid Link", "kind": "hybrid_link", "cloud": { "aws": "Direct Connect", "gcp": "Cloud Interconnect" } },
+{ "id": "erp", "label": "ERP", "kind": "service", "site": "onprem" }
+```
+
+Other kinds for these questions: `mqtt_broker` (IoT devices), `vector_db` (embeddings for retrieval), `llm` (a model endpoint such as Amazon Bedrock or Vertex AI), `schema_registry` and `data_catalog`. Any other kind still works and draws as a generic component.
+
 ## License
 
 [MIT](LICENSE). AWS and Google Cloud icons are downloaded from the providers on first run and are not part of this repository; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). ArchStory is not affiliated with Amazon or Google.
