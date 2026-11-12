@@ -1,7 +1,7 @@
 // Calls an AI provider straight from the browser with the user's own key. There is no ArchStory server in between.
 // Request building and reply parsing are pure so they can be tested without a network.
 
-export type ProviderId = 'anthropic' | 'openai' | 'gemini' | 'custom'
+export type ProviderId = 'anthropic' | 'openai' | 'gemini' | 'deepseek' | 'custom'
 export interface Message { role: 'user' | 'assistant'; content: string }
 export interface AiConfig {
   provider: ProviderId
@@ -39,6 +39,7 @@ export const PROVIDERS: Record<ProviderId, { label: string; defaultModel: string
   anthropic: { label: 'Anthropic (Claude)', defaultModel: 'claude-sonnet-5-5', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys', needsKey: true },
   openai: { label: 'OpenAI', defaultModel: 'gpt-6.1-sol', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys', needsKey: true },
   gemini: { label: 'Google Gemini', defaultModel: 'gemini-3.8-flash', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey', needsKey: true },
+  deepseek: { label: 'DeepSeek', defaultModel: 'deepseek-v4-pro', keyHint: 'sk-…', keyUrl: 'https://platform.deepseek.com/api_keys', needsKey: true },
   custom: { label: 'Custom (OpenAI-compatible)', defaultModel: 'llama3.1', keyHint: 'optional', needsKey: false },
 }
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[]
@@ -46,12 +47,12 @@ export const DEFAULT_BASE_URL = 'http://localhost:11434/v1'   // Ollama's OpenAI
 
 export const emptyConfig = (): AiConfig => ({
   provider: 'anthropic',
-  keys: { anthropic: '', openai: '', gemini: '', custom: '' },
-  models: { anthropic: PROVIDERS.anthropic.defaultModel, openai: PROVIDERS.openai.defaultModel, gemini: PROVIDERS.gemini.defaultModel, custom: PROVIDERS.custom.defaultModel },
+  keys: { anthropic: '', openai: '', gemini: '', deepseek: '', custom: '' },
+  models: { anthropic: PROVIDERS.anthropic.defaultModel, openai: PROVIDERS.openai.defaultModel, gemini: PROVIDERS.gemini.defaultModel, deepseek: PROVIDERS.deepseek.defaultModel, custom: PROVIDERS.custom.defaultModel },
   baseUrl: DEFAULT_BASE_URL,
   remember: false,
   prices: { input: '', output: '' },
-  featureModels: { anthropic: noFeatureModels(), openai: noFeatureModels(), gemini: noFeatureModels(), custom: noFeatureModels() },
+  featureModels: { anthropic: noFeatureModels(), openai: noFeatureModels(), gemini: noFeatureModels(), deepseek: noFeatureModels(), custom: noFeatureModels() },
 })
 
 /** Whether there is enough to send a request: a key (unless the provider does not need one) and a model. */
@@ -69,6 +70,7 @@ export function hostOf(c: AiConfig): string {
   if (c.provider === 'anthropic') return 'api.anthropic.com'
   if (c.provider === 'openai') return 'api.openai.com'
   if (c.provider === 'gemini') return 'generativelanguage.googleapis.com'
+  if (c.provider === 'deepseek') return 'api.deepseek.com'
   try { return new URL(c.baseUrl).host } catch { return c.baseUrl }
 }
 
@@ -107,7 +109,8 @@ export function buildRequest(c: AiConfig, messages: Message[], maxTokens: number
       ...(extras.system ? { systemInstruction: { parts: [{ text: extras.system }] } } : {}),
     })
   }
-  const base = c.provider === 'openai' ? 'https://api.openai.com/v1' : c.baseUrl.trim().replace(/\/+$/, '')
+  // OpenAI, DeepSeek and custom servers share the OpenAI chat completions format
+  const base = c.provider === 'openai' ? 'https://api.openai.com/v1' : c.provider === 'deepseek' ? 'https://api.deepseek.com' : c.baseUrl.trim().replace(/\/+$/, '')
   return post(`${base}/chat/completions`, key ? { authorization: `Bearer ${key}` } : {},
     { model, messages: extras.system ? [{ role: 'system', content: extras.system }, ...messages] : messages })
 }
@@ -138,7 +141,7 @@ export function parseReply(provider: ProviderId, json: unknown): Reply | null {
   }
   const choice = j.choices?.[0]
   if (!choice) return null
-  const u = j.usage, cached = num(u?.prompt_tokens_details?.cached_tokens)
+  const u = j.usage, cached = num(u?.prompt_tokens_details?.cached_tokens) || num(u?.prompt_cache_hit_tokens)   // DeepSeek reports cache hits its own way
   return {
     text: choice.message?.content ?? '', truncated: choice.finish_reason === 'length',
     usage: u ? { input: Math.max(0, num(u.prompt_tokens) - cached), output: num(u.completion_tokens), cacheRead: cached, cacheWrite: 0 } : null,

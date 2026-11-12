@@ -31,6 +31,16 @@ describe('buildRequest', () => {
     expect(c.url).toBe('http://localhost:11434/v1/chat/completions')
     expect(c.init.headers.authorization).toBeUndefined()
   })
+  it('sends DeepSeek calls to its OpenAI-compatible endpoint with a bearer token', () => {
+    const c = cfg({ provider: 'deepseek' })
+    const r = buildRequest(c, msg, 10, { system: 'be brief' })
+    expect(r.url).toBe('https://api.deepseek.com/chat/completions')
+    expect(r.init.headers.authorization).toBe('Bearer sk-test-1234567890')
+    expect(JSON.parse(r.init.body)).toMatchObject({ model: 'deepseek-v4-pro', messages: [{ role: 'system', content: 'be brief' }, ...msg] })
+    expect(hostOf(c)).toBe('api.deepseek.com')
+    expect(isConfigured(c)).toBe(true)
+    expect(isConfigured(cfg({ provider: 'deepseek' }, ''))).toBe(false)
+  })
   it('maps Gemini roles and keeps the key out of the URL', () => {
     const r = buildRequest(cfg({ provider: 'gemini' }), [...msg, { role: 'assistant', content: 'ok' }], 50)
     expect(r.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent')
@@ -63,6 +73,8 @@ describe('parseReply', () => {
       .toEqual({ input: 20, output: 7, cacheRead: 100, cacheWrite: 0 })
     expect(parseReply('gemini', { candidates: [{ content: { parts: [] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 4, thoughtsTokenCount: 6 } })?.usage)
       .toEqual({ input: 50, output: 10, cacheRead: 0, cacheWrite: 0 })
+    expect(parseReply('deepseek', { choices: [{ message: { content: '' } }], usage: { prompt_tokens: 120, completion_tokens: 7, prompt_cache_hit_tokens: 90, prompt_cache_miss_tokens: 30 } })?.usage)
+      .toEqual({ input: 30, output: 7, cacheRead: 90, cacheWrite: 0 })
     expect(parseReply('openai', { choices: [{ message: { content: 'x' } }] })?.usage).toBeNull()
   })
 
@@ -115,6 +127,14 @@ describe('configuration', () => {
     expect(isConfigured({ ...emptyConfig(), provider: 'custom' })).toBe(true)
     expect(isConfigured({ ...emptyConfig(), provider: 'custom', baseUrl: ' ' })).toBe(false)
     expect(hostOf({ ...emptyConfig(), provider: 'custom', baseUrl: 'http://localhost:11434/v1' })).toBe('localhost:11434')
+  })
+  it('loads settings saved before DeepSeek existed, with DeepSeek on its defaults', () => {
+    const old = { provider: 'openai', keys: { anthropic: '', openai: 'sk-x', gemini: '', custom: '' }, models: { openai: 'gpt-6.1-sol' } }
+    const c = normalise(old)
+    expect(c.provider).toBe('openai')
+    expect(c.keys.deepseek).toBe('')
+    expect(c.models.deepseek).toBe('deepseek-v4-pro')
+    expect(c.featureModels.deepseek).toEqual({ review: '', generate: '', interview: '' })
   })
   it('ignores stored junk and falls back to defaults', () => {
     const n = normalise({ provider: 'nope', keys: { openai: 5 }, models: { openai: '' }, remember: 'yes' })
