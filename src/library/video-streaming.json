@@ -233,26 +233,6 @@
   },
   "nodes": [
     {
-      "id": "viewer",
-      "label": "Viewer",
-      "kind": "mobile_client"
-    },
-    {
-      "id": "creator",
-      "label": "Creator",
-      "kind": "web_client"
-    },
-    {
-      "id": "dns",
-      "label": "DNS",
-      "kind": "dns",
-      "description": "Points video.example.com (site and API) at the WAF-protected CDN distribution and cdn.example.com at the segment distribution",
-      "cloud": {
-        "aws": "Route 53",
-        "gcp": "Cloud DNS"
-      }
-    },
-    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
@@ -263,55 +243,6 @@
       }
     },
     {
-      "id": "waf",
-      "label": "WAF",
-      "kind": "waf",
-      "description": "Attached to the site and API distribution: managed rule sets, rate rules on uploads and API calls, bot control. Segment requests do not pass through it",
-      "cloud": {
-        "aws": "AWS WAF",
-        "gcp": "Cloud Armor"
-      }
-    },
-    {
-      "id": "lb",
-      "label": "Load Balancer (L7)",
-      "kind": "load_balancer",
-      "cloud": {
-        "aws": "ALB",
-        "gcp": "External Application Load Balancer"
-      }
-    },
-    {
-      "id": "upload_svc",
-      "label": "Upload Service",
-      "kind": "service",
-      "description": "Creates uploads and signs URLs; never touches video bytes",
-      "cloud": {
-        "aws": "ECS Fargate",
-        "gcp": "Cloud Run"
-      }
-    },
-    {
-      "id": "meta_svc",
-      "label": "Playback API",
-      "kind": "service",
-      "description": "Video metadata, a signed playback token per viewer and one view event per play. Hot video rows sit in an in-process cache for a few seconds, so the database sees a small share of the ~140,000 plays/s at peak",
-      "cloud": {
-        "aws": "ECS Fargate",
-        "gcp": "Cloud Run"
-      }
-    },
-    {
-      "id": "meta_db",
-      "label": "Metadata DB",
-      "kind": "sql_db",
-      "description": "videos(id, owner, title, status, manifest_url, views) and chunks_done(video, chunk, rendition); primary-standby across zones",
-      "cloud": {
-        "aws": "Aurora PostgreSQL",
-        "gcp": "Cloud SQL Postgres"
-      }
-    },
-    {
       "id": "raw",
       "label": "Raw Uploads",
       "kind": "object_store",
@@ -319,6 +250,16 @@
       "cloud": {
         "aws": "S3",
         "gcp": "Cloud Storage"
+      }
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Attached to the site and API distribution: managed rule sets, rate rules on uploads and API calls, bot control. Segment requests do not pass through it",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
       }
     },
     {
@@ -342,6 +283,16 @@
       "description": "One message per uploaded video, then one per chunk and rendition from the splitter. After 3 failed receives a message moves to a dead-letter queue"
     },
     {
+      "id": "dns",
+      "label": "DNS",
+      "kind": "dns",
+      "description": "Points video.example.com (site and API) at the WAF-protected CDN distribution and cdn.example.com at the segment distribution",
+      "cloud": {
+        "aws": "Route 53",
+        "gcp": "Cloud DNS"
+      }
+    },
+    {
       "id": "transcoder",
       "label": "Transcoders",
       "kind": "worker",
@@ -349,6 +300,15 @@
       "cloud": {
         "aws": "ECS",
         "gcp": "GKE"
+      }
+    },
+    {
+      "id": "lb",
+      "label": "Load Balancer (L7)",
+      "kind": "load_balancer",
+      "cloud": {
+        "aws": "ALB",
+        "gcp": "External Application Load Balancer"
       }
     },
     {
@@ -361,12 +321,52 @@
       }
     },
     {
+      "id": "creator",
+      "label": "Creator",
+      "kind": "web_client"
+    },
+    {
+      "id": "meta_svc",
+      "label": "Playback API",
+      "kind": "service",
+      "description": "Video metadata, a signed playback token per viewer and one view event per play. Hot video rows sit in an in-process cache for a few seconds, so the database sees a small share of the ~140,000 plays/s at peak",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
+    },
+    {
+      "id": "viewer",
+      "label": "Viewer",
+      "kind": "mobile_client"
+    },
+    {
+      "id": "meta_db",
+      "label": "Metadata DB",
+      "kind": "sql_db",
+      "description": "videos(id, owner, title, status, manifest_url, views) and chunks_done(video, chunk, rendition); primary-standby across zones",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
       "id": "counter",
       "label": "View Aggregator",
       "kind": "worker",
       "cloud": {
         "aws": "Lambda",
         "gcp": "Cloud Run Job"
+      }
+    },
+    {
+      "id": "upload_svc",
+      "label": "Upload Service",
+      "kind": "service",
+      "description": "Creates uploads and signs URLs; never touches video bytes",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
       }
     }
   ],

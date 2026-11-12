@@ -291,7 +291,9 @@
       "cloud": {
         "aws": "AWS WAF",
         "gcp": "Cloud Armor"
-      }
+      },
+      "tier": "entry",
+      "subnet": "none"
     },
     {
       "id": "client",

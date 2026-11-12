@@ -9,6 +9,8 @@ import { layoutBands, LABEL_W, NODE_W, type Box, type Layout, type Side } from '
 // Instances are drawn compact (icon + name) so three zones of components still fit on screen.
 export const ZNODE_W = 136
 const CELL = 150
+/** Nodes outside the zones are drawn full width (NODE_W), wider than a zone cell, so they get a slot of their own width. */
+const OUT_CELL = NODE_W + 40, OCELL = OUT_CELL / CELL
 // On-prem components sit in their own box right of everything else, full width, after a gap.
 const PREM_CELL = NODE_W + 40, PREM_GAP = 60
 
@@ -59,9 +61,10 @@ export function layoutColumns(d: Design, base: Layout, o: {
   const W = Math.max(1, ...byBand.map(l => l.filter(zonal).length))
   const cloudOut = (l: DNode[]) => l.filter(n => !zonal(n) && !isOnPrem(n))
   const outIn = (l: DNode[]) => (l.some(zonal) ? cloudOut(l) : [])
-  const OUTW = Math.max(0, ...byBand.map(l => outIn(l).length))
-  const total = Math.max(z * W + OUTW, ...byBand.map(l => (l.some(zonal) ? 0 : cloudOut(l).length)))
+  const OUTW = Math.max(0, ...byBand.map(l => outIn(l).length * OCELL))
+  const total = Math.max(z * W + OUTW, ...byBand.map(l => (l.some(zonal) ? 0 : cloudOut(l).length * OCELL)))
   const cx = (col: number) => LABEL_W + col * CELL + (CELL - ZNODE_W) / 2
+  const ox = (col: number) => LABEL_W + col * CELL + (OUT_CELL - NODE_W) / 2
   const PREMW = Math.max(0, ...byBand.map(l => l.filter(isOnPrem).length))
   const premX = LABEL_W + total * CELL + PREM_GAP
   const px = (col: number) => premX + 10 + col * PREM_CELL + (PREM_CELL - NODE_W) / 2
@@ -81,7 +84,7 @@ export function layoutColumns(d: Design, base: Layout, o: {
     const lone = inZones.length === 0
     out.forEach((n, i) => {
       insts.push({ id: n.id, node: n.id, zone: null, role: 'outside', failed: false })
-      pos[n.id] = { x: cx(lone ? (total - out.length) / 2 + i : z * W + (OUTW - out.length) / 2 + i), y: base.pos[n.id].y }
+      pos[n.id] = { x: ox(lone ? (total - out.length * OCELL) / 2 + i * OCELL : z * W + (OUTW - out.length * OCELL) / 2 + i * OCELL), y: base.pos[n.id].y }
     })
     prem.forEach((n, i) => {
       insts.push({ id: n.id, node: n.id, zone: null, role: 'outside', failed: false, tag: { text: 'on-prem', level: 'role' } })
