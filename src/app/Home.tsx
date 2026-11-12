@@ -86,112 +86,116 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
   const cards = deckStats(everything, deck, today())
 
   return (
-    <div className="home">
-      <section className="hero">
-        <div className="hero-copy">
-          <a className="hero-pill" href="#library" onClick={e => { e.preventDefault(); document.getElementById('library')?.scrollIntoView({ behavior: 'smooth' }) }}>
-            <span className="hero-pill-tag">New</span> Solutions architect scenarios, regions and DR <span aria-hidden>→</span>
-          </a>
-          <h1>System design, <span className="hero-grad">one request at a time.</span></h1>
-          <p>Watch real architectures handle each request hop by hop, build your own answer, and get it checked and reviewed. Then rehearse it as a timed or AI mock interview.</p>
-          <div className="row wrap hero-ctas">
-            <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
-            <button className="big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
-            <button className="link" onClick={onTour}>Take the 1-minute tour</button>
-          </div>
-          <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span></p>
-        </div>
-        <HeroPreview />
-      </section>
-
-      <section className="stats" aria-label="At a glance">
-        {[
-          [String(library.length), 'designs, from URL shortener to multi-region'],
-          [String(library.reduce((n, d) => n + d.questions.length, 0)), 'follow-up questions with model answers'],
-          ['3', 'clouds: neutral names, AWS or GCP'],
-          ['Any', 'AI: paste into your assistant or use your key'],
-        ].map(([n, label]) => <div key={label} className="stat"><b>{n}</b><span>{label}</span></div>)}
-      </section>
-
-      <section className="features">
-        <p className="eyebrow">How it works</p>
-        <h2 className="section-title">From watching to rehearsing</h2>
-        <div className="how">
-          {[
-            { icon: <path d="M8 5v14l11-7z" />, title: 'Watch', body: 'Pick a design and press play. Each request moves hop by hop, with the real message and why it happens.' },
-            { icon: <path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" />, title: 'Build', body: 'In Practice, add components, connect them and record how your requests flow.' },
-            { icon: <path d="M5 12l5 5L20 7" />, title: 'Check', body: 'Automatic checks against a reference design, then an optional review by your own AI assistant, with a score and follow-up questions.' },
-            { icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>, title: 'Rehearse', body: 'Timed mock interviews with a checklist for each phase, an AI interviewer you can talk to, and questions that come back until you know them.' },
-          ].map(s => (
-            <div key={s.title} className="how-step">
-              <span className="how-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{s.icon}</svg></span>
-              <b>{s.title}</b><p>{s.body}</p>
+    <div className="home-page">
+      <div className="hero-band">
+        <section className="hero">
+          <div className="hero-copy">
+            <a className="hero-pill" href="#library" onClick={e => { e.preventDefault(); document.getElementById('library')?.scrollIntoView({ behavior: 'smooth' }) }}>
+              <span className="hero-pill-tag">New</span> Solutions architect scenarios, regions and DR <span aria-hidden>→</span>
+            </a>
+            <h1>System design, <span className="hero-grad">one request at a time.</span></h1>
+            <p>Watch real architectures handle each request hop by hop, build your own answer, and get it checked and reviewed. Then rehearse it as a timed or AI mock interview.</p>
+            <div className="row wrap hero-ctas">
+              <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
+              <button className="big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
+              <button className="link" onClick={onTour}>Take the 1-minute tour</button>
             </div>
-          ))}
-        </div>
-      </section>
-
-      <p className="eyebrow">Bring your own question</p>
-      <HowToImport onImport={onImport} onGenerate={onGenerate} />
-      <p className="eyebrow">Mock interviews</p>
-      <HowToInterview onPractice={() => onPractice(first.id)} onConnect={openAiSettings} />
-
-      {cards.total > 0 && (
-        <section className="home-drill">
-          <div>
-            <b>Follow-up questions</b>
-            <p className="muted small">{cards.seen === 0
-              ? `${cards.total} questions interviewers ask next, with model answers. Ten new ones a day, and the ones you miss come back sooner.`
-              : `${cards.due} due today · ${cards.learned} of ${cards.total} learned · ${cards.total - cards.seen} not seen yet`}</p>
+            <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span></p>
           </div>
-          <span className="spacer" />
-          <button className="primary" onClick={() => openDrill()}>{cards.seen === 0 ? 'Start the daily drill' : 'Drill now'}</button>
+          <HeroPreview />
         </section>
-      )}
+      </div>
 
-      <section id="library">
-        <p className="eyebrow">Library</p>
-        <div className="lib-head">
-          <h2>Designs to explore and practise</h2>
-          {done > 0 && <span className="lib-progress">Practised {done} of {everything.length}</span>}
-          <div className="seg" role="group" aria-label="Difficulty">
-            {(['all', 'easy', 'medium', 'hard'] as const).map(l => (
-              <button key={l} className={level === l ? 'on' : ''} onClick={() => setLevel(l)}>{l === 'all' ? 'All' : l[0].toUpperCase() + l.slice(1)}</button>
+      <div className="home">
+        <section className="stats" aria-label="At a glance">
+          {[
+            [String(library.length), 'designs, from URL shortener to multi-region'],
+            [String(library.reduce((n, d) => n + d.questions.length, 0)), 'follow-up questions with model answers'],
+            ['3', 'clouds: neutral names, AWS or GCP'],
+            ['Any', 'AI: paste into your assistant or use your key'],
+          ].map(([n, label]) => <div key={label} className="stat"><b>{n}</b><span>{label}</span></div>)}
+        </section>
+
+        <section className="features">
+          <p className="eyebrow">How it works</p>
+          <h2 className="section-title">From watching to rehearsing</h2>
+          <div className="how">
+            {[
+              { icon: <path d="M8 5v14l11-7z" />, title: 'Watch', body: 'Pick a design and press play. Each request moves hop by hop, with the real message and why it happens.' },
+              { icon: <path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" />, title: 'Build', body: 'In Practice, add components, connect them and record how your requests flow.' },
+              { icon: <path d="M5 12l5 5L20 7" />, title: 'Check', body: 'Automatic checks against a reference design, then an optional review by your own AI assistant, with a score and follow-up questions.' },
+              { icon: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>, title: 'Rehearse', body: 'Timed mock interviews with a checklist for each phase, an AI interviewer you can talk to, and questions that come back until you know them.' },
+            ].map(s => (
+              <div key={s.title} className="how-step">
+                <span className="how-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{s.icon}</svg></span>
+                <b>{s.title}</b><p>{s.body}</p>
+              </div>
             ))}
           </div>
-          <input className="search" placeholder="Search designs or tags…" value={q} onChange={e => setQ(e.target.value)} />
-        </div>
-        <p className="lib-note muted">These {library.length} are reference designs, not the only right answers, and you can add your own questions below. Interviewers accept other approaches when you can explain the trade-offs, so use them to compare with your own.</p>
-        <div className="card-grid">
-          {shown.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}
-          {!shown.length && <p className="muted">No designs match.</p>}
-        </div>
-      </section>
+        </section>
 
-      <section>
-        <div className="lib-head"><h2>My designs</h2></div>
-        {mine.length > 0
-          ? <div className="card-grid">{mine.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}</div>
-          : <p className="muted">The {library.length} designs above are just a start. Any other interview question works too: <button className="link" onClick={onImport}>import a design</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>, and it appears here with the same Explore, Practice, checks and review as the library.</p>}
-      </section>
+        <p className="eyebrow">Bring your own question</p>
+        <HowToImport onImport={onImport} onGenerate={onGenerate} />
+        <p className="eyebrow">Mock interviews</p>
+        <HowToInterview onPractice={() => onPractice(first.id)} onConnect={openAiSettings} />
 
-      <section className="cta-band">
-        <h2>Ready for your next system design round?</h2>
-        <p>Start with a classic, or bring the question you are worried about.</p>
-        <div className="row wrap">
-          <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
-          <button className="big" onClick={onGenerate}>Prompt for your AI</button>
-          <button className="big" onClick={onImport}>Import a design</button>
-        </div>
-      </section>
+        {cards.total > 0 && (
+          <section className="home-drill">
+            <div>
+              <b>Follow-up questions</b>
+              <p className="muted small">{cards.seen === 0
+                ? `${cards.total} questions interviewers ask next, with model answers. Ten new ones a day, and the ones you miss come back sooner.`
+                : `${cards.due} due today · ${cards.learned} of ${cards.total} learned · ${cards.total - cards.seen} not seen yet`}</p>
+            </div>
+            <span className="spacer" />
+            <button className="primary" onClick={() => openDrill()}>{cards.seen === 0 ? 'Start the daily drill' : 'Drill now'}</button>
+          </section>
+        )}
 
-      <footer className="home-foot">
-        <span className="foot-brand">Arch<span>Story</span></span>
-        <span className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</span>
-        <span className="spacer" />
-        <button className="link small" onClick={openAiSettings}>AI settings</button>
-        <a className="small" href="https://github.com/vishbay/archstory" target="_blank" rel="noreferrer">GitHub</a>
-      </footer>
+        <section id="library">
+          <p className="eyebrow">Library</p>
+          <div className="lib-head">
+            <h2>Designs to explore and practise</h2>
+            {done > 0 && <span className="lib-progress">Practised {done} of {everything.length}</span>}
+            <div className="seg" role="group" aria-label="Difficulty">
+              {(['all', 'easy', 'medium', 'hard'] as const).map(l => (
+                <button key={l} className={level === l ? 'on' : ''} onClick={() => setLevel(l)}>{l === 'all' ? 'All' : l[0].toUpperCase() + l.slice(1)}</button>
+              ))}
+            </div>
+            <input className="search" placeholder="Search designs or tags…" value={q} onChange={e => setQ(e.target.value)} />
+          </div>
+          <p className="lib-note muted">These {library.length} are reference designs, not the only right answers, and you can add your own questions below. Interviewers accept other approaches when you can explain the trade-offs, so use them to compare with your own.</p>
+          <div className="card-grid">
+            {shown.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}
+            {!shown.length && <p className="muted">No designs match.</p>}
+          </div>
+        </section>
+
+        <section>
+          <div className="lib-head"><h2>My designs</h2></div>
+          {mine.length > 0
+            ? <div className="card-grid">{mine.map(d => <Card key={d.id} d={d} progress={progress[d.id]} onExplore={() => onExplore(d.id)} onPractice={() => onPractice(d.id)} />)}</div>
+            : <p className="muted">The {library.length} designs above are just a start. Any other interview question works too: <button className="link" onClick={onImport}>import a design</button> or <button className="link" onClick={onGenerate}>make one with your own AI assistant</button>, and it appears here with the same Explore, Practice, checks and review as the library.</p>}
+        </section>
+
+        <section className="cta-band">
+          <h2>Ready for your next system design round?</h2>
+          <p>Start with a classic, or bring the question you are worried about.</p>
+          <div className="row wrap">
+            <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
+            <button className="big" onClick={onGenerate}>Prompt for your AI</button>
+            <button className="big" onClick={onImport}>Import a design</button>
+          </div>
+        </section>
+
+        <footer className="home-foot">
+          <span className="foot-brand">Arch<span>Story</span></span>
+          <span className="muted small">Open source under the MIT license. Not affiliated with Amazon or Google.</span>
+          <span className="spacer" />
+          <button className="link small" onClick={openAiSettings}>AI settings</button>
+          <a className="small" href="https://github.com/vishbay/archstory" target="_blank" rel="noreferrer">GitHub</a>
+        </footer>
+      </div>
     </div>
   )
 }
