@@ -85,6 +85,18 @@
       }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Inspects every API and notifier request before the load balancer: managed rule sets, per-IP and per-account rate rules, bot control",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      },
+      "tier": "entry",
+      "subnet": "none"
+    },
+    {
       "id": "lb",
       "label": "Load Balancer (L7)",
       "kind": "load_balancer",
@@ -97,48 +109,48 @@
       "id": "notify",
       "label": "Change Notifier",
       "kind": "websocket_gateway",
-      "description": "Holds a long-poll from every online device and answers it when something changes",
+      "description": "Holds a long-poll from every online device and answers it when the account's sequence passes the device's cursor, or with \"nothing new\" after about 50 s so the load balancer's 60 s idle timeout never cuts it",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "GKE"
-      }
+      },
+      "subnet": "app"
     },
     {
       "id": "api",
       "label": "Metadata API",
       "kind": "service",
-      "description": "Files, versions, block lists and sharing; signs upload and download URLs",
-      "replicas": 3,
+      "description": "Files, versions, block lists, the account journal and sharing; signs upload and download URLs. Autoscaled: about 70 tasks at the ~140,000 requests/s peak (2,000 per task)",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
       }
     },
     {
-      "id": "meta_db",
-      "label": "Metadata DB",
-      "kind": "sql_db",
-      "description": "Sharded by account, so one account's changes are ordered on one shard",
-      "cloud": {
-        "aws": "Aurora PostgreSQL",
-        "gcp": "Cloud SQL Postgres"
-      }
-    },
-    {
       "id": "blocks",
       "label": "Block Storage",
       "kind": "object_store",
-      "description": "4 MB blocks named by their SHA-256 hash, so identical blocks are stored once",
+      "description": "4 MB blocks named by their SHA-256 hash, written once (create-only) and never overwritten, so identical blocks are stored once",
       "cloud": {
         "aws": "S3",
         "gcp": "Cloud Storage"
       }
     },
     {
+      "id": "meta_db",
+      "label": "Metadata DB",
+      "kind": "sql_db",
+      "description": "Sharded by account, so one account's changes are ordered on one shard. Holds files, versions, each account's journal (the sync cursor) and the per-account block index. One writer cannot take 50,000 multi-statement commits/s, so it is many shards, each primary-standby across zones",
+      "cloud": {
+        "aws": "Aurora PostgreSQL",
+        "gcp": "Cloud SQL Postgres"
+      }
+    },
+    {
       "id": "changes",
       "label": "Change Log",
       "kind": "stream",
-      "description": "Ordered stream of changes per account",
+      "description": "Wake-up events partitioned by account id; the journal in the Metadata DB stays the source of truth",
       "cloud": {
         "aws": "Kinesis Data Streams",
         "gcp": "Pub/Sub"
@@ -157,10 +169,14 @@
     },
     {
       "from": "laptop",
-      "to": "lb"
+      "to": "waf"
     },
     {
       "from": "phone",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
       "to": "lb"
     },
     {
@@ -191,6 +207,11 @@
     {
       "from": "notify",
       "to": "changes"
+    },
+    {
+      "from": "api",
+      "to": "blocks",
+      "label": "confirm uploads"
     }
   ],
   "flows": [
@@ -205,7 +226,7 @@
           "kind": "local",
           "phase": "Chunk",
           "label": "split into 4 MB blocks, hash each",
-          "detail": "The client cuts the file into fixed-size blocks and hashes each one. An edit in the middle of a large file usually changes one or two blocks, so only those need to travel."
+          "detail": "The client cuts the file into fixed-size blocks and hashes each one. An in-place edit changes one or two blocks, so only those travel. An insertion near the start shifts every later block boundary, so fixed blocks all change; systems that care cut blocks at content-defined boundaries (a rolling hash) instead, at the cost of variable block sizes."
         },
         {
           "from": "laptop",
@@ -219,16 +240,24 @@
           "to": "laptop",
           "kind": "res",
           "phase": "DNS",
-          "label": "load balancer address"
+          "label": "load balancer address (WAF attached)"
         },
         {
           "from": "laptop",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Find missing blocks",
           "label": "POST /commit (block hashes)",
-          "detail": "The client first proposes the new version as a list of block hashes, without sending any file data.",
-          "payload": "POST /commit\n{ \"path\": \"/docs/plan.md\", \"parent\": 7,\n  \"blocks\": [\"a41f…\", \"9be0…\", \"c9e1…\"] }"
+          "detail": "The client first proposes the new version as a list of block hashes, without sending any file data. A trace id starts here and is passed on every hop, so one commit can be followed through the API, the database and the notifier.",
+          "payload": "POST /commit\nAuthorization: Bearer <device token>\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n\n{ \"path\": \"/docs/plan.md\", \"parent\": 7, \"commit_id\": \"laptop-3f1a:118\",\n  \"blocks\": [\"a41f…\", \"9be0…\", \"c9e1…\"] }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Find missing blocks",
+          "label": "inspect, then forward",
+          "detail": "Managed rule sets, per-IP and per-account rate rules and bot control run before anything reaches the services, so a client stuck in a retry loop is throttled here."
         },
         {
           "from": "lb",
@@ -242,9 +271,9 @@
           "to": "meta_db",
           "kind": "req",
           "phase": "Find missing blocks",
-          "label": "which hashes are stored?",
-          "detail": "The block index says which hashes already exist, for this user or anyone else. Shared content, such as a common installer, is stored once.",
-          "payload": "SELECT hash FROM blocks WHERE hash IN ('a41f…','9be0…','c9e1…')"
+          "label": "which hashes does this account have?",
+          "detail": "The account's block index says which of these hashes it already references, from earlier versions or other files. Blocks that only other users hold are not skipped: trusting a hash alone would let anyone who learns a hash claim, then download, someone else's file. Those still upload, and storage keeps one copy because the name is the hash.",
+          "payload": "SELECT hash FROM account_blocks\nWHERE account_id = 9 AND hash IN ('a41f…','9be0…','c9e1…')"
         },
         {
           "from": "meta_db",
@@ -259,10 +288,17 @@
           "kind": "res",
           "phase": "Find missing blocks",
           "label": "upload c9e1 to signed URL",
-          "detail": "The API signs a short-lived URL for each missing block. Bytes never pass through the API servers."
+          "detail": "The API signs a short-lived, create-only URL for each missing block that pins the block's SHA-256, so storage rejects bytes that do not match the name. Bytes never pass through the API servers."
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Find missing blocks",
+          "label": "missing: [c9e1] + URL"
+        },
+        {
+          "from": "waf",
           "to": "laptop",
           "kind": "res",
           "phase": "Find missing blocks",
@@ -274,7 +310,8 @@
           "kind": "req",
           "phase": "Upload blocks",
           "label": "PUT block c9e1",
-          "detail": "The client uploads straight to object storage. A large upload is many independent blocks, so a dropped connection only retries one block."
+          "detail": "The client uploads straight to object storage. A large upload is many independent blocks, so a dropped connection only retries one block. The checksum header must match the signed one and If-None-Match makes the write create-only, so no client can overwrite a block other files share.",
+          "payload": "PUT https://blocks…/c9e1…?X-Amz-Signature=…\nx-amz-checksum-sha256: <base64 of c9e1…>\nIf-None-Match: *\nContent-Length: 4194304"
         },
         {
           "from": "blocks",
@@ -285,10 +322,18 @@
         },
         {
           "from": "laptop",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Commit",
+          "label": "POST /commit (retry)",
+          "detail": "The same request again, now that every block is uploaded. It carries the client's commit id, so if this response is lost and the client retries once more, the API finds the version that id already created and returns it instead of a 409 against its own commit."
+        },
+        {
+          "from": "waf",
           "to": "lb",
           "kind": "req",
           "phase": "Commit",
-          "label": "POST /commit (retry)"
+          "label": "inspect, then forward"
         },
         {
           "from": "lb",
@@ -299,27 +344,43 @@
         },
         {
           "from": "api",
+          "to": "blocks",
+          "kind": "req",
+          "phase": "Commit",
+          "label": "HEAD c9e1",
+          "detail": "The client said it uploaded the block; the API checks before any version references it, so a buggy client cannot commit a file whose bytes are missing."
+        },
+        {
+          "from": "blocks",
+          "to": "api",
+          "kind": "res",
+          "phase": "Commit",
+          "label": "200, checksum matches"
+        },
+        {
+          "from": "api",
           "to": "meta_db",
           "kind": "req",
           "phase": "Commit",
-          "label": "INSERT v8 if parent is v7",
-          "detail": "The new version is recorded only if the file is still at the version the client edited. This compare-and-set is what detects conflicting edits.",
-          "payload": "INSERT INTO versions (file_id, version, parent, blocks)\nSELECT 42, 8, 7, '{a41f…,9be0…,c9e1…}'\nWHERE (SELECT head FROM files WHERE id = 42) = 7"
+          "label": "move head 7 to 8 + journal, one transaction",
+          "detail": "The head moves only if the file is still at the version the client edited. The UPDATE takes the row lock, so two concurrent commits from v7 cannot both win, which a separate SELECT-then-INSERT check would allow. The same transaction records the new blocks in the account's index and appends to the account's journal with its next sequence number (1042): the cursor every device syncs from.",
+          "payload": "BEGIN;\nUPDATE files SET head = 8 WHERE id = 42 AND head = 7;  -- 0 rows: conflict, ROLLBACK\nINSERT INTO versions (file_id, version, parent, blocks, commit_id)\n  VALUES (42, 8, 7, '{a41f…,9be0…,c9e1…}', 'laptop-3f1a:118');\nINSERT INTO account_blocks (account_id, hash) VALUES (9, 'c9e1…') ON CONFLICT DO NOTHING;\nINSERT INTO journal (account_id, seq, file_id, version) VALUES (9, 1042, 42, 8);\nCOMMIT;"
         },
         {
           "from": "meta_db",
           "to": "api",
           "kind": "res",
           "phase": "Commit",
-          "label": "committed v8"
+          "label": "committed v8, seq 1042"
         },
         {
           "from": "api",
           "to": "changes",
           "kind": "async",
           "phase": "Commit",
-          "label": "changed /docs/plan.md v8",
-          "detail": "The change goes on the account's ordered log, which is how every other device finds out."
+          "label": "account 9 at seq 1042",
+          "detail": "The commit is already durable in the journal; this event only wakes the notifiers. It is keyed by account id so one account's events stay in order. If the publish fails or the API dies first, nothing is lost: a relay in the API re-publishes journal rows the stream has not acknowledged, and devices catch up from their cursor anyway.",
+          "payload": "{ \"account\": 9, \"seq\": 1042, \"file\": 42, \"version\": 8, \"trace\": \"4bf92f35…\" }"
         },
         {
           "from": "api",
@@ -330,6 +391,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 committed v8"
+        },
+        {
+          "from": "waf",
           "to": "laptop",
           "kind": "res",
           "phase": "Respond",
@@ -354,36 +422,44 @@
           "to": "phone",
           "kind": "res",
           "phase": "DNS",
-          "label": "load balancer address"
+          "label": "load balancer address (WAF attached)"
         },
         {
           "from": "phone",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Wait for changes",
           "label": "GET /changes?cursor=1041 (held open)",
-          "detail": "The phone keeps one request open and remembers a cursor: the last change it has seen. If the connection drops it reconnects with the same cursor and misses nothing."
+          "detail": "The phone keeps one request open and remembers a cursor: the last journal sequence it has applied. If the connection drops it reconnects with the same cursor and misses nothing."
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Wait for changes",
+          "label": "inspect, then forward"
         },
         {
           "from": "lb",
           "to": "notify",
           "kind": "req",
           "phase": "Wait for changes",
-          "label": "hold until something changes"
+          "label": "hold until account 9 passes 1041"
         },
         {
           "from": "notify",
           "to": "changes",
           "kind": "req",
           "phase": "Wait for changes",
-          "label": "read after 1041"
+          "label": "consume account events",
+          "detail": "Every notifier instance consumes the Change Log and keeps the latest sequence it has seen for each account whose requests it holds. It never reads one account's history from the log: that lives in the journal."
         },
         {
           "from": "changes",
           "to": "notify",
           "kind": "res",
           "phase": "Wait for changes",
-          "label": "1042: /docs/plan.md v8"
+          "label": "account 9 at 1042"
         },
         {
           "from": "notify",
@@ -394,51 +470,75 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Wait for changes",
+          "label": "changes available"
+        },
+        {
+          "from": "waf",
           "to": "phone",
           "kind": "res",
           "phase": "Wait for changes",
-          "label": "cursor 1042"
+          "label": "behind: head is 1042"
         },
         {
           "from": "phone",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Fetch what changed",
+          "label": "GET /delta?cursor=1041",
+          "detail": "The notifier only said that something changed. The phone asks the Metadata API what changed since its cursor, so a lost notification or a reconnect never loses a change."
+        },
+        {
+          "from": "waf",
           "to": "lb",
           "kind": "req",
-          "phase": "Fetch the new version",
-          "label": "GET /files/42?version=8"
+          "phase": "Fetch what changed",
+          "label": "inspect, then forward"
         },
         {
           "from": "lb",
           "to": "api",
           "kind": "req",
-          "phase": "Fetch the new version",
+          "phase": "Fetch what changed",
           "label": "route to metadata API"
         },
         {
           "from": "api",
           "to": "meta_db",
           "kind": "req",
-          "phase": "Fetch the new version",
-          "label": "block list for v8"
+          "phase": "Fetch what changed",
+          "label": "journal after 1041 + block lists",
+          "detail": "One indexed range read on the account's shard returns every change since the cursor, in order.",
+          "payload": "SELECT j.seq, v.file_id, v.version, v.blocks\nFROM journal j JOIN versions v USING (file_id, version)\nWHERE j.account_id = 9 AND j.seq > 1041\nORDER BY j.seq LIMIT 1000"
         },
         {
           "from": "meta_db",
           "to": "api",
           "kind": "res",
-          "phase": "Fetch the new version",
-          "label": "[a41f, 9be0, c9e1]"
+          "phase": "Fetch what changed",
+          "label": "1042: file 42 v8 [a41f, 9be0, c9e1]"
         },
         {
           "from": "api",
           "to": "lb",
           "kind": "res",
-          "phase": "Fetch the new version",
-          "label": "block list + signed URLs"
+          "phase": "Fetch what changed",
+          "label": "changes + signed URLs, cursor 1042"
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Fetch what changed",
+          "label": "changes + signed URLs"
+        },
+        {
+          "from": "waf",
           "to": "phone",
           "kind": "res",
-          "phase": "Fetch the new version",
+          "phase": "Fetch what changed",
           "label": "3 blocks, has 2"
         },
         {
@@ -447,7 +547,7 @@
           "kind": "req",
           "phase": "Download blocks",
           "label": "GET block c9e1",
-          "detail": "The phone already has two of the blocks from the previous version, so it downloads only the new one."
+          "detail": "The phone already has two of the blocks from the previous version, so it downloads only the new one, and checks its SHA-256 against the name before using it."
         },
         {
           "from": "blocks",
@@ -461,8 +561,8 @@
           "to": "phone",
           "kind": "local",
           "phase": "Rebuild",
-          "label": "assemble v8 from blocks",
-          "detail": "The file is rebuilt from blocks it had plus the new one, then swapped into place atomically."
+          "label": "assemble v8, save cursor 1042",
+          "detail": "The file is rebuilt from blocks it had plus the new one and swapped into place atomically. Only then does the phone save cursor 1042, so a crash halfway simply repeats the delta."
         }
       ]
     },
@@ -481,10 +581,17 @@
         },
         {
           "from": "phone",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Commit attempt",
           "label": "POST /commit parent=7"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Commit attempt",
+          "label": "inspect, then forward"
         },
         {
           "from": "lb",
@@ -498,15 +605,17 @@
           "to": "meta_db",
           "kind": "req",
           "phase": "Commit attempt",
-          "label": "INSERT v9 if parent is v7"
+          "label": "move head to 8 if still 7",
+          "detail": "The phone never saw version 8, so it proposes its edit as the next version after 7.",
+          "payload": "UPDATE files SET head = 8 WHERE id = 42 AND head = 7;  -- 0 rows"
         },
         {
           "from": "meta_db",
           "to": "api",
           "kind": "res",
           "phase": "Commit attempt",
-          "label": "rejected: head is v8",
-          "detail": "The compare-and-set fails because the file moved on. Silently overwriting would lose the laptop's work."
+          "label": "rejected: head is already 8",
+          "detail": "The compare-and-set fails because the laptop's commit moved the file on. Silently overwriting would lose the laptop's work."
         },
         {
           "from": "api",
@@ -517,6 +626,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Commit attempt",
+          "label": "409 Conflict"
+        },
+        {
+          "from": "waf",
           "to": "phone",
           "kind": "res",
           "phase": "Commit attempt",
@@ -537,7 +653,7 @@
     {
       "target": "blocks",
       "kind": "tradeoff",
-      "text": "Content-addressed blocks give deduplication for free: identical blocks across versions and users are stored once. The cost is reference counting or a garbage collector before any block can be deleted."
+      "text": "Content-addressed blocks give deduplication for free: identical blocks across versions and users are stored once. The cost is reference counting or a garbage collector (a background job, not drawn here) before any block can be deleted; it only deletes blocks unreferenced for days, so it cannot race a commit that is about to reference one."
     },
     {
       "target": "api",
@@ -547,17 +663,27 @@
     {
       "target": "meta_db",
       "kind": "scaling",
-      "text": "Shard metadata by account (or by shared folder) so one account's changes live on one shard and can be ordered by a single sequence."
+      "text": "Shard metadata by account (or by shared folder) so one account's changes live on one shard and can be ordered by a single sequence. A shared folder with thousands of members, or one account with millions of files, makes its shard hot; such namespaces are moved to a shard of their own."
     },
     {
       "target": "notify",
       "kind": "failure",
-      "text": "Notifications can be lost without losing changes: a device that missed one simply asks for everything after its saved cursor."
+      "text": "Notifications can be lost without losing changes: a device that missed one asks the Metadata API for everything after its saved cursor, read from the journal."
+    },
+    {
+      "target": "notify",
+      "kind": "scaling",
+      "text": "Each notifier instance must hear about every account whose long-polls it holds. Here every instance reads the whole Change Log, which works while events are small (50,000/s × ~200 bytes ≈ 10 MB/s), but every extra reader adds stream reads (Kinesis shares 2 MB/s per shard among readers unless enhanced fan-out is used). With many instances, assign log partitions to instances and route each device to the instance that owns its account, or put a pub/sub layer keyed by account in between."
     },
     {
       "target": "blocks",
       "kind": "security",
-      "text": "Signed URLs expire in minutes and cover one block. Blocks are encrypted at rest and the bucket is never public."
+      "text": "Signed URLs expire in minutes, cover one block and pin its SHA-256, and the write is create-only, so a client cannot overwrite or poison a block other files share. (S3 checks a signed SHA-256 checksum header; where storage cannot check SHA-256, new blocks must be rehashed before a commit may reference them.) The skip-upload check only counts blocks the same account already references. Blocks are encrypted at rest and the bucket is never public."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The WAF covers the API and notifier hostnames: managed rule sets, per-IP and per-account rate rules and bot control, so credential stuffing and runaway clients stop at the edge. Block uploads and downloads go straight to object storage and bypass it; their protection is the short-lived, single-block signature."
     }
   ],
   "network": {
@@ -607,7 +733,7 @@
         "id": "change-propagation",
         "name": "Changes reach other devices",
         "kind": "freshness",
-        "sli": "Commits whose notification reaches waiting devices within the threshold, measured from commit to long-poll answer",
+        "sli": "Commits whose notification reaches waiting devices within the threshold, measured by the notifier from the commit time in the event to the long-poll answer",
         "target": 99,
         "threshold": "< 5 s",
         "window": 30
@@ -616,7 +742,7 @@
         "id": "block-durability",
         "name": "Committed files stay complete",
         "kind": "durability",
-        "sli": "Committed versions whose blocks are all present in storage, checked by a daily audit sample",
+        "sli": "Committed versions whose blocks are all present in storage, checked by a daily audit sample. A sample cannot demonstrate 11 nines: the target is the storage design figure, and the audit exists to catch any loss event (a garbage collector or client bug), which pages at once.",
         "target": 99.999999999,
         "window": 30
       }
@@ -625,7 +751,7 @@
       {
         "id": "sync-burn",
         "severity": "page",
-        "when": "Metadata API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Metadata API 5xx burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket instead)",
         "why": "Devices cannot commit or fetch changes right now.",
         "target": "lb",
         "slo": "sync-availability"
@@ -633,7 +759,7 @@
       {
         "id": "propagation-slow",
         "severity": "page",
-        "when": "p99 commit-to-notification above 5 s for 15 minutes",
+        "when": "Notifications later than 5 s burning the error budget 14 times too fast over 1 hour and over 5 minutes",
         "why": "Users see stale files on their other devices and start editing old versions, which creates conflicts.",
         "target": "notify",
         "slo": "change-propagation"
@@ -652,6 +778,20 @@
         "when": "Change Log consumer lag above 30 s for 10 minutes",
         "why": "A cause, not yet a symptom: notifications will slow down if it keeps growing.",
         "target": "changes"
+      },
+      {
+        "id": "journal-unpublished",
+        "severity": "ticket",
+        "when": "Oldest journal row not yet published to the Change Log above 30 s for 10 minutes",
+        "why": "The relay is stuck: devices still converge from their cursors, but only when their long-poll times out, so propagation will slow down.",
+        "target": "api"
+      },
+      {
+        "id": "hot-shard",
+        "severity": "ticket",
+        "when": "Any metadata shard above 70% CPU or commit p99 above 200 ms for 15 minutes",
+        "why": "One huge shared folder or account can saturate its shard long before the fleet looks busy; move that namespace before its commits start failing.",
+        "target": "meta_db"
       },
       {
         "id": "conflict-rate",
@@ -679,6 +819,12 @@
         "name": "Commit conflicts",
         "metric": "commit_conflicts_total",
         "why": "Every conflict is a user who has to sort out two copies."
+      },
+      {
+        "target": "meta_db",
+        "name": "Journal entries per delta read",
+        "metric": "delta_changes_returned",
+        "why": "Large deltas mean devices were offline or notifications are not arriving; a sudden rise across accounts points at the notifier."
       }
     ],
     "debug": [
@@ -699,6 +845,15 @@
           "Check object storage error rates and throttling.",
           "Confirm the commit retry finds the uploaded blocks (dedup hit ratio)."
         ]
+      },
+      {
+        "symptom": "A user says one device shows an old version of a file",
+        "steps": [
+          "Look up the file's head and the account's journal: did the commit happen at all?",
+          "Compare the device's last cursor (from its delta requests) with the journal head for the account.",
+          "If the cursor is behind, check whether the device holds a long-poll and whether the notifier saw the account's event.",
+          "If the device is up to date, look for a conflicted copy: the user may be looking at the losing edit."
+        ]
       }
     ]
   },
@@ -706,7 +861,7 @@
     {
       "id": "chunking",
       "q": "Why split files into blocks instead of uploading whole files?",
-      "a": "Only changed blocks travel, so a small edit to a large file uploads a few megabytes instead of the whole file. Content-addressed blocks are also deduplicated across versions and users. Uploads become many small retryable pieces, which handles flaky networks.",
+      "a": "Only changed blocks travel, so a small edit to a large file uploads a few megabytes instead of the whole file. Content-addressed blocks are also stored once across versions and users. Uploads become many small retryable pieces, which handles flaky networks. Fixed-size blocks break on insertions, which shift every later boundary; content-defined chunking with a rolling hash fixes that.",
       "topic": "performance",
       "targets": [
         "laptop",
@@ -726,7 +881,7 @@
     {
       "id": "notify-scale",
       "q": "Millions of devices are online. How do they learn about changes without constant polling?",
-      "a": "Each device holds one long-poll or WebSocket open to the notifier, which answers it when the account's change log moves. A device that reconnects asks for everything after its cursor, so a dropped notification is never a lost change. The notifier only says that something changed; the details come from the metadata API.",
+      "a": "Each device holds one long-poll or WebSocket open to the notifier, which answers it when the account's sequence passes the device's cursor. A device that reconnects asks the Metadata API for everything after its cursor, so a dropped notification is never a lost change. The notifier only says that something changed; the details come from the journal through the metadata API.",
       "topic": "scale",
       "targets": [
         "notify",

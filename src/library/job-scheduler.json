@@ -122,6 +122,14 @@
         "target": 99.9
       },
       {
+        "id": "lease-recovery",
+        "name": "Dead workers caught quickly",
+        "kind": "freshness",
+        "sli": "Expired leases rescheduled within the threshold of lease_until, divided by all expired leases, measured from the runs table by the sweep",
+        "target": 99,
+        "threshold": "< 90 s"
+      },
+      {
         "id": "no-lost-runs",
         "name": "No lost runs",
         "kind": "correctness",
@@ -133,7 +141,7 @@
       {
         "id": "lag-burn",
         "severity": "page",
-        "when": "Runs starting more than 10 s late above 1% of runs for 5 minutes, and above 1% over 1 hour",
+        "when": "Runs starting more than 10 s late burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Jobs are firing late for many tenants, which is the main promise of a scheduler.",
         "target": "scheduler",
         "slo": "start-lag"
@@ -141,7 +149,7 @@
       {
         "id": "api-burn",
         "severity": "page",
-        "when": "Job API 5xx burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Job API 5xx burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Tenants cannot create, cancel or inspect jobs.",
         "target": "job_api",
         "slo": "api-availability"
@@ -153,6 +161,14 @@
         "why": "A run that nobody is going to pick up is a silently skipped job, the one failure the design promises never happens.",
         "target": "jobs_db",
         "slo": "no-lost-runs"
+      },
+      {
+        "id": "sweep-stalled",
+        "severity": "page",
+        "when": "RUNNING rows with lease_until more than 2 minutes in the past for 5 minutes",
+        "why": "The sweep has stopped, so runs on dead workers are never retried and their tenants' slots stay taken.",
+        "target": "scheduler",
+        "slo": "lease-recovery"
       },
       {
         "id": "queue-age",
@@ -181,6 +197,13 @@
         "severity": "ticket",
         "when": "Dispatch query p99 above 250 ms for 15 minutes",
         "why": "Usually index bloat or vacuum falling behind on the runs table. It comes before start lag.",
+        "target": "jobs_db"
+      },
+      {
+        "id": "db-failover",
+        "severity": "ticket",
+        "when": "Jobs DB failover happened, or primary CPU above 75% for 15 minutes",
+        "why": "Dispatch, claims and heartbeats all write to one primary; saturation shows up as start lag next.",
         "target": "jobs_db"
       }
     ],
@@ -254,10 +277,20 @@
       "id": "dns",
       "label": "DNS",
       "kind": "dns",
-      "description": "Points the API hostname at the load balancer",
+      "description": "Points the API hostname at the load balancer, which has the WAF attached",
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Attached to the load balancer: managed rule sets, per-tenant and per-IP rate rules, bot control on the console",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
       }
     },
     {
@@ -284,7 +317,7 @@
       "id": "jobs_db",
       "label": "Jobs DB",
       "kind": "sql_db",
-      "description": "Source of truth: job definitions, tenant limits and one row per active run with state, due time, attempt and lease",
+      "description": "Source of truth: job definitions, tenant limits and one row per active run with state, due time, attempt and lease. Survives a zone loss (Aurora keeps 6 storage copies across 3 zones; Cloud SQL HA keeps a synchronous standby in another zone); a failover pauses dispatch for under a minute or so, which shows up as start lag, not lost runs",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -323,7 +356,7 @@
       "id": "dlq",
       "label": "Dead-letter Queue",
       "kind": "queue",
-      "description": "Runs that used up every attempt, kept for inspection and replay",
+      "description": "Notification copy of runs whose row is DEAD in the Jobs DB; operator tooling and tenant alerts consume it. Replay goes through the Job API, which moves the DEAD row back to SCHEDULED",
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
@@ -333,7 +366,7 @@
       "id": "worker",
       "label": "Workers",
       "kind": "worker",
-      "description": "Claim a run with a lease, heartbeat while it runs, call the target, record the result",
+      "description": "Claim a run with a lease, heartbeat while it runs, call the target, record the result. Each task holds hundreds of target calls at once (40k in flight at peak), and reaches the internet through NAT with fixed egress IPs",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "GKE"
@@ -364,6 +397,10 @@
     },
     {
       "from": "client",
+      "to": "waf"
+    },
+    {
+      "from": "waf",
       "to": "lb"
     },
     {
@@ -438,17 +475,25 @@
           "to": "client",
           "kind": "res",
           "phase": "DNS",
-          "label": "load balancer IPs",
+          "label": "load balancer IPs (WAF attached)",
           "payload": "jobs.example.com.  60  IN A  198.51.100.20"
         },
         {
           "from": "client",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /v1/jobs",
           "detail": "The idempotency key makes a retried submit return the same job instead of creating a second one that would run every night as well.",
           "payload": "POST /v1/jobs\nAuthorization: Bearer <tenant token>\nIdempotency-Key: 6f1c0e2a\n\n{ \"name\": \"nightly-invoice-export\",\n  \"schedule\": { \"cron\": \"0 2 * * *\", \"timezone\": \"America/New_York\", \"jitter_s\": 60 },\n  \"target\": { \"url\": \"https://billing.acme.example/hooks/export\", \"method\": \"POST\" },\n  \"priority\": \"standard\", \"timeout_s\": 900,\n  \"retry\": { \"max_attempts\": 5, \"base_s\": 30, \"max_s\": 3600 },\n  \"overlap\": \"skip\", \"misfire\": \"run_once\" }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect, then forward",
+          "detail": "Managed rule sets, per-tenant and per-IP rate rules and bot control on the console stop abuse before it reaches the API, which still enforces each tenant's own limits."
         },
         {
           "from": "lb",
@@ -481,7 +526,7 @@
           "kind": "res",
           "phase": "Persist",
           "label": "COMMIT ok",
-          "detail": "Committed to the primary and its synchronous standby, so the job survives a zone failure."
+          "detail": "Committed durably across zones (Aurora's quorum storage, or Cloud SQL's synchronous standby), so the job survives a zone failure."
         },
         {
           "from": "job_api",
@@ -492,6 +537,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 Created"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -511,7 +563,7 @@
           "kind": "local",
           "phase": "Find due runs",
           "label": "tick (every 1 s)",
-          "detail": "All three scheduler instances run this loop at the same time. There is no leader: the database lock in the next step decides who gets which rows."
+          "detail": "All three scheduler instances run this loop at the same time. There is no leader: the database lock in the next step decides who gets which rows. An instance whose batch comes back full loops again at once instead of waiting for the next tick: at the top of the hour about 3.3k runs/s come due, more than 500 rows per second per instance would cover."
         },
         {
           "from": "scheduler",
@@ -552,8 +604,8 @@
           "kind": "async",
           "phase": "Enqueue",
           "label": "SendMessageBatch (10 per call)",
-          "detail": "Priority picks the queue. The message carries only the run id; the database row stays the source of truth.",
-          "payload": "{ \"run_id\": \"r_8c2_20261111T0700Z\", \"job_id\": \"j_8c2\", \"tenant_id\": \"t_acme\" }"
+          "detail": "Priority picks the queue. The message carries only the run id and a trace context; the database row stays the source of truth.",
+          "payload": "{ \"run_id\": \"r_8c2_20261111T0700Z\", \"job_id\": \"j_8c2\", \"tenant_id\": \"t_acme\", \"traceparent\": \"00-9f2c4d1a7be04c3e8d55a1f0e6b2c7d9-3a1b5c7d9e0f2a4b-01\" }"
         },
         {
           "from": "scheduler",
@@ -609,8 +661,8 @@
           "kind": "req",
           "phase": "Run",
           "label": "POST /hooks/export",
-          "detail": "Execution is at least once, so this call may be a repeat of an earlier attempt. The run id is sent as an idempotency key and the target uses it to skip work it already did. The request is signed so the tenant can verify it came from the scheduler.",
-          "payload": "POST /hooks/export\nIdempotency-Key: r_8c2_20261111T0700Z\nX-Job-Attempt: 1\nX-Signature: t=1762844413,v1=5d1e...\n\n{ \"job_id\": \"j_8c2\", \"scheduled_for\": \"2026-11-11T07:00:00Z\" }"
+          "detail": "Execution is at least once, so this call may be a repeat of an earlier attempt. The run id is sent as an idempotency key and the target uses it to skip work it already did. The request is signed with a key from the secrets manager so the tenant can verify it came from the scheduler, and the trace context lets a tenant line up our attempt with their own logs.",
+          "payload": "POST /hooks/export\nIdempotency-Key: r_8c2_20261111T0700Z\nX-Job-Attempt: 1\nX-Signature: t=1762844413,v1=5d1e...\ntraceparent: 00-9f2c4d1a7be04c3e8d55a1f0e6b2c7d9-6c8e0a2b4d6f8a1c-01\n\n{ \"job_id\": \"j_8c2\", \"scheduled_for\": \"2026-11-11T07:00:00Z\" }"
         },
         {
           "from": "worker",
@@ -657,7 +709,7 @@
           "kind": "async",
           "phase": "Record result",
           "label": "append attempt record",
-          "detail": "Attempt details go to a store built for a billion append-only records, keeping the hot runs table small. Finished run rows are deleted from the database later by a cleanup job.",
+          "detail": "Attempt details go to a store built for a billion append-only records, keeping the hot runs table small. Finished run rows are deleted from the database later by the scheduler's cleanup pass, once their record is in history.",
           "payload": "{ \"pk\": \"j_8c2\", \"sk\": \"2026-11-11T07:00:00Z#1\", \"run_id\": \"r_8c2_20261111T0700Z\", \"status\": \"SUCCEEDED\", \"http_status\": 200, \"started_at\": \"2026-11-11T07:00:13Z\", \"duration_ms\": 241812, \"worker\": \"w-17\" }"
         }
       ]
@@ -725,9 +777,9 @@
           "to": "jobs_db",
           "kind": "req",
           "phase": "Detect expired lease",
-          "label": "SELECT RUNNING with expired lease",
-          "detail": "Leases are judged by the database clock, so a scheduler with a skewed clock cannot expire a healthy run early.",
-          "payload": "SELECT run_id, tenant_id, attempt, retry\nFROM runs\nWHERE state = 'RUNNING' AND lease_until < now()\nLIMIT 500\nFOR UPDATE SKIP LOCKED;"
+          "label": "SELECT expired leases + stale ENQUEUED",
+          "detail": "Leases are judged by the database clock, so a scheduler with a skewed clock cannot expire a healthy run early. The same sweep resets runs stuck in ENQUEUED for 10 minutes (a lost or expired message) back to SCHEDULED, which is what makes \"never silently skipped\" hold; a duplicate message is harmless because the claim is conditional.",
+          "payload": "SELECT run_id, tenant_id, state, attempt, retry\nFROM runs\nWHERE (state = 'RUNNING' AND lease_until < now())\n   OR (state = 'ENQUEUED' AND enqueued_at < now() - interval '10 minutes')\nLIMIT 500\nFOR UPDATE SKIP LOCKED;"
         },
         {
           "from": "jobs_db",
@@ -759,14 +811,14 @@
           "phase": "Give up after 5 attempts",
           "label": "attempt 5 failed: SET state = 'DEAD'",
           "detail": "Attempts 2 to 5 travel the normal dispatch path over the next 8 minutes or so, and each one fails because the target keeps returning 500. When the retry pass sees attempt 5 fail it stops retrying, because the job's max_attempts is reached.",
-          "payload": "UPDATE runs SET state = 'DEAD', finished_at = now()\nWHERE run_id = 'r_41a_20261111T0900Z' AND attempt = 5 AND state = 'FAILED';"
+          "payload": "BEGIN;\nUPDATE runs SET state = 'DEAD', finished_at = now()\nWHERE run_id = 'r_41a_20261111T0900Z' AND attempt = 5 AND state = 'FAILED';"
         },
         {
           "from": "jobs_db",
           "to": "scheduler",
           "kind": "res",
           "phase": "Give up after 5 attempts",
-          "label": "1 row updated"
+          "label": "1 row updated, not yet committed"
         },
         {
           "from": "scheduler",
@@ -774,7 +826,7 @@
           "kind": "async",
           "phase": "Give up after 5 attempts",
           "label": "publish dead run",
-          "detail": "The run is parked, not dropped. An alert fires, the tenant sees it as dead in the console, and it can be replayed once the target is fixed. The 10:00 occurrence of this hourly job was already inserted at dispatch, so the schedule carries on.",
+          "detail": "Published while the row is still locked, then the transaction commits, as in dispatch: a crash in between dead-letters the run again, so the queue may hold a duplicate but never misses one. The run is parked, not dropped: an alert fires, the tenant sees it as dead in the console, and it can be replayed once the target is fixed. The 10:00 occurrence of this hourly job was already inserted at dispatch, so the schedule carries on.",
           "payload": "{ \"run_id\": \"r_41a_20261111T0900Z\", \"job_id\": \"j_41a\", \"tenant_id\": \"t_globex\", \"attempts\": 5, \"last_error\": \"HTTP 500 from target\" }"
         }
       ]
@@ -786,11 +838,18 @@
       "steps": [
         {
           "from": "client",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "GET /v1/jobs/j_8c2/runs?limit=20",
           "detail": "The tenant's console asks for the job, its next run and its recent attempts."
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect, then forward"
         },
         {
           "from": "lb",
@@ -839,6 +898,13 @@
         },
         {
           "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 job + runs"
+        },
+        {
+          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -866,7 +932,7 @@
     {
       "target": "jobs_db",
       "kind": "scaling",
-      "text": "Every run causes several writes (dispatch, claim, heartbeats, result): about 20k row writes per second at the top-of-hour peak. Keep the runs table small by deleting finished rows once they are in history, give the due-runs index a partial condition on state, and tune autovacuum for heavy churn. Beyond one primary, shard runs by hash(job_id) and give each scheduler a set of shards."
+      "text": "Every run causes several writes (dispatch, claim, heartbeats, result): about 20k row writes per second at the top-of-hour peak. Keep the runs table small by having the scheduler delete finished rows once they are in history, give the due-runs index a partial condition on state, and tune autovacuum for heavy churn. Beyond one primary, shard runs by hash(job_id) and give each scheduler a set of shards."
     },
     {
       "kind": "scaling",
@@ -875,7 +941,7 @@
     {
       "target": "worker",
       "kind": "security",
-      "text": "Workers call URLs that tenants choose, which is a server-side request forgery risk. Resolve the hostname and refuse private, link-local and metadata addresses, sign every request so tenants can verify it, and send traffic through NAT with fixed egress IPs that tenants can allowlist."
+      "text": "Workers call URLs that tenants choose, which is a server-side request forgery risk. Resolve the hostname and refuse private, link-local and metadata addresses, sign every request with a key held in a secrets manager (Secrets Manager or Secret Manager) and rotated, and send traffic through NAT with fixed egress IPs that tenants can allowlist. Inbound, the WAF in front of the load balancer filters abuse before the API checks the tenant token."
     }
   ],
   "questions": [

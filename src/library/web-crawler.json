@@ -145,7 +145,7 @@
       {
         "id": "fetch-error-burn",
         "severity": "page",
-        "when": "Crawler-side fetch errors burning the error budget 10 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Crawler-side fetch errors burning the error budget 10 times too fast over 1 hour and over 5 minutes (a slow burn, 3 times over 6 hours, opens a ticket)",
         "why": "Our own components are failing fetches, so the crawl is falling behind for every host at once.",
         "target": "fetcher",
         "slo": "fetch-success"
@@ -178,6 +178,20 @@
         "when": "Estimated Bloom filter false positive rate above 2%",
         "why": "Each false positive is a new URL that is silently never crawled. Rebuild the filter larger from the metadata store before coverage drops.",
         "target": "url_seen"
+      },
+      {
+        "id": "parse-dead-letter",
+        "severity": "ticket",
+        "when": "More than 100 events written to the parser dead-letter prefix in an hour",
+        "why": "Pages that crash the parser are skipped, so their links and metadata are missing. Usually a parser bug or a new kind of malformed HTML.",
+        "target": "parser"
+      },
+      {
+        "id": "frontier-lease",
+        "severity": "ticket",
+        "when": "A frontier shard failed to renew its ownership lease, or a shard has had no owner for 5 minutes",
+        "why": "Its hosts are not being crawled at all until a new owner takes over, which freshness will show only hours later.",
+        "target": "frontier"
       }
     ],
     "signals": [
@@ -239,7 +253,7 @@
       "id": "frontier",
       "label": "URL Frontier",
       "kind": "service",
-      "description": "Priority front queues, per-host back queues and a politeness heap; sharded by host hash",
+      "description": "Priority front queues, per-host back queues and a politeness heap; sharded by host hash. Each shard holds an ownership lease in the queue store, and fetchers and parsers address shards directly (no load balancer: the host decides the shard)",
       "replicas": 6,
       "cloud": {
         "aws": "EKS",
@@ -251,7 +265,7 @@
       "label": "Caching DNS Resolver",
       "kind": "dns",
       "tier": "services",
-      "description": "Self-run resolver fleet (for example Unbound) inside the VPC; caches answers for their TTL"
+      "description": "Self-run resolver fleet (for example Unbound) inside the VPC; caches answers for their TTL and recurses to authoritative servers through the NAT gateways"
     },
     {
       "id": "frontier_store",
@@ -277,7 +291,7 @@
       "id": "content_dedup",
       "label": "Content Fingerprints",
       "kind": "nosql_db",
-      "description": "SHA-256 of each body, plus 64-bit SimHash split into four 16-bit block tables",
+      "description": "SHA-256 of each body (global), plus 64-bit SimHash split into four 16-bit block tables keyed by registered domain",
       "cloud": {
         "aws": "DynamoDB",
         "gcp": "Bigtable"
@@ -338,7 +352,7 @@
       "id": "parse_q",
       "label": "Fetched Pages Stream",
       "kind": "stream",
-      "description": "One event per fetch result, partitioned by host",
+      "description": "One event per fetch result, partitioned by host (politeness caps any host at about one event a second, so no partition runs hot)",
       "cloud": {
         "aws": "Kinesis Data Streams",
         "gcp": "Pub/Sub"
@@ -425,8 +439,7 @@
     {
       "from": "parser",
       "to": "frontier",
-      "label": "new URLs",
-      "async": true
+      "label": "new URLs"
     },
     {
       "from": "parser",
@@ -462,7 +475,7 @@
           "kind": "res",
           "phase": "Lease a URL",
           "label": "lease 60 s",
-          "detail": "The host is marked busy until the fetcher reports back or the lease expires, so no other fetcher can open a second connection to it.",
+          "detail": "The host is marked busy until the fetcher reports back or the lease expires, so no other fetcher can open a second connection to it. The fetcher cuts every request timeout to the lease time left, so it has stopped talking to the host before the lease can be re-granted, and the lease id fences /complete: a late report with an old lease id is ignored.",
           "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"host\": \"example.org\", \"lease_id\": \"l_9f3a\", \"expires_in\": 60, \"attempt\": 1 }"
         },
         {
@@ -547,7 +560,7 @@
           "kind": "req",
           "phase": "Fetch page",
           "label": "GET /blog/post-42",
-          "detail": "One connection per host, with a 30 s total timeout and a 10 MB body cap so a slow or endless response cannot tie up a slot.",
+          "detail": "Because robots.txt was just fetched over this connection, the fetcher first waits out the host's delay (the 2 s Crawl-delay here), so the robots request also obeys politeness. One connection per host, with a 30 s total timeout (cut to the lease time left) and a 10 MB body cap so a slow or endless response cannot tie up a slot.",
           "payload": "GET /blog/post-42 HTTP/1.1\nHost: example.org\nUser-Agent: ExampleBot/2.1 (+https://crawler.example.com/bot)\nAccept: text/html\nAccept-Encoding: gzip, br"
         },
         {
@@ -573,8 +586,8 @@
           "kind": "req",
           "phase": "Content dedup",
           "label": "lookup + conditional put",
-          "detail": "Check the exact hash, then the four 16-bit SimHash blocks. Two fingerprints within 3 bits of each other must share at least one block exactly, so four keyed lookups find every near-duplicate candidate without scanning.",
-          "payload": "PutItem sha256=9c1e…b7 url=https://example.org/blog/post-42\nConditionExpression: attribute_not_exists(sha256)"
+          "detail": "Check the exact hash globally, then the four 16-bit SimHash blocks within the same registered domain. Two fingerprints within 3 bits must share at least one block exactly, so four keyed lookups find every near-duplicate candidate. Scoping by domain keeps each bucket small: a 16-bit key over billions of pages globally would return hundreds of thousands of candidates, which is why web-scale near-dup search uses more tables with longer keys. If the exact hash is already recorded for this same URL (an unchanged recrawl, or a retry after a crash before the page was stored), the page is stored again under the same key, which is idempotent, so a crash between these steps cannot lose it.",
+          "payload": "PutItem sha256=9c1e…b7 url=https://example.org/blog/post-42\nConditionExpression: attribute_not_exists(sha256) OR url = :this_url\nQuery simhash_b0  pk='example.org#8f3a' (and b1, b2, b3)"
         },
         {
           "from": "content_dedup",
@@ -607,8 +620,8 @@
           "kind": "async",
           "phase": "Store and hand off",
           "label": "publish page_fetched",
-          "detail": "Parsing is CPU-bound and fetching is network-bound, so they scale separately. The event carries a pointer to the stored page, not the HTML.",
-          "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"status\": 200, \"object\": \"raw/2026/11/10/9c1e…b7.warc.gz\", \"sha256\": \"9c1e…b7\", \"simhash\": \"0x8f3a21c4d09e7b15\", \"etag\": \"5f2a-61c\", \"fetched_at\": 1762790400 }"
+          "detail": "Parsing is CPU-bound and fetching is network-bound, so they scale separately. The event carries a pointer to the stored page, not the HTML, and the trace id from the lease, so one URL can be followed from lease to metadata write.",
+          "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"status\": 200, \"object\": \"raw/2026/11/10/9c1e…b7.warc.gz\", \"sha256\": \"9c1e…b7\", \"simhash\": \"0x8f3a21c4d09e7b15\", \"etag\": \"5f2a-61c\", \"fetched_at\": 1762790400, \"trace_id\": \"5b8e2f0c9a7d41e3b6f1c2d4e8a90b17\" }"
         },
         {
           "from": "fetcher",
@@ -617,7 +630,7 @@
           "phase": "Release host",
           "label": "POST /complete",
           "detail": "Releasing the lease tells the frontier when the host may be contacted again: now plus the larger of the Crawl-delay and 10 times the last fetch time (Mercator's rule).",
-          "payload": "{ \"lease_id\": \"l_9f3a\", \"status\": 200, \"fetch_ms\": 400, \"crawl_delay_s\": 2 }"
+          "payload": "{ \"lease_id\": \"l_9f3a\", \"status\": 200, \"fetch_ms\": 400, \"crawl_delay_s\": 2, \"robots_fetched\": true }"
         },
         {
           "from": "frontier",
@@ -679,9 +692,9 @@
           "to": "url_seen",
           "kind": "req",
           "phase": "URL dedup",
-          "label": "check-and-set 58 URLs",
-          "detail": "About 50 links per page means 20,000 lookups a second, most for URLs already known. A Bloom filter answers in memory at about 9.6 bits per URL; a Lua script checks and sets each URL's 7 bits atomically on the shard chosen by the URL hash.",
-          "payload": "EVALSHA bf_check_set 1 bf:{shard-41} <7 bit positions per URL × 58>"
+          "label": "check 58 URLs (read only)",
+          "detail": "About 50 links per page means 20,000 lookups a second, most for URLs already known. A Bloom filter answers in memory at about 9.6 bits per URL. URLs are grouped by shard (each URL's 7 bits live on the shard chosen by its hash) and checked with one call per shard; nothing is set yet.",
+          "payload": "EVALSHA bf_check 1 bf:{shard-41} <7 bit positions for each of this shard's URLs>"
         },
         {
           "from": "url_seen",
@@ -694,10 +707,10 @@
         {
           "from": "parser",
           "to": "frontier",
-          "kind": "async",
+          "kind": "req",
           "phase": "Enqueue",
           "label": "enqueue 21 URLs",
-          "detail": "Each URL is sent to the frontier shard that owns its host, with a priority from signals such as the linking page's importance, link depth and the host's quality.",
+          "detail": "Each URL is sent to the frontier shard that owns its host, with a priority from signals such as the linking page's importance, link depth and the host's quality. The parser waits for the shard to confirm the URLs are stored.",
           "payload": "{ \"urls\": [ { \"url\": \"https://example.org/blog/post-43\", \"priority\": 2, \"depth\": 3 }, … ] }"
         },
         {
@@ -714,13 +727,37 @@
           "kind": "req",
           "phase": "Enqueue",
           "label": "append to queues",
-          "detail": "Billions of queued URLs do not fit in memory. The frontier keeps only the head and tail of each queue in memory and persists the rest, so a restarted shard loses nothing."
+          "detail": "Billions of queued URLs do not fit in memory. The frontier keeps only the head and tail of each queue in memory and persists the rest, so a restarted shard loses nothing. Each entry's key is derived from the URL, so enqueuing the same URL again overwrites it instead of adding a duplicate.",
+          "payload": "PutItem pk='example.org' sk='p2#<hash of https://example.org/blog/post-43>' depth=3"
         },
         {
           "from": "frontier_store",
           "to": "frontier",
           "kind": "res",
           "phase": "Enqueue",
+          "label": "ok"
+        },
+        {
+          "from": "frontier",
+          "to": "parser",
+          "kind": "res",
+          "phase": "Enqueue",
+          "label": "202 stored"
+        },
+        {
+          "from": "parser",
+          "to": "url_seen",
+          "kind": "req",
+          "phase": "Mark seen",
+          "label": "set bits for 21 URLs",
+          "detail": "Bits are set only after the frontier has stored the URLs. Setting them first would lose the URLs if the parser crashed in between: the replay would find them already seen and drop them. In this order a replay simply enqueues them again, which the URL-derived keys make harmless.",
+          "payload": "EVALSHA bf_set 1 bf:{shard-41} <7 bit positions for each new URL on this shard>"
+        },
+        {
+          "from": "url_seen",
+          "to": "parser",
+          "kind": "res",
+          "phase": "Mark seen",
           "label": "ok"
         },
         {
@@ -745,7 +782,7 @@
           "kind": "local",
           "phase": "Record metadata",
           "label": "commit offset",
-          "detail": "The offset is committed only after every write succeeded. A parser crash before this replays the event, which is safe because each write is idempotent."
+          "detail": "The offset is committed only after every write succeeded. A parser crash before this replays the event, which is safe because each write is idempotent. An event that fails 3 times (a page that crashes the parser) is written to a dead-letter prefix in the Raw Page Store and its offset committed, so one poison page cannot stall its partition."
         }
       ]
     },
@@ -807,7 +844,7 @@
           "kind": "res",
           "phase": "Enqueue recrawls",
           "label": "202 accepted",
-          "detail": "The scheduler moves each row to a pending state so the next run does not enqueue it again."
+          "detail": "The scheduler moves each row to a pending state so the next run does not enqueue it again. Pending rows whose fetch never reported back within a day are picked up again, so a URL dropped by a parked host is retried rather than forgotten."
         },
         {
           "from": "fetcher",
@@ -1013,12 +1050,12 @@
     {
       "target": "frontier",
       "kind": "tradeoff",
-      "text": "Mercator-style frontier: a few priority front queues decide what is important, and back queues (about 3 per fetch slot, one host each) plus a heap of next allowed times enforce politeness. Sharding by host hash keeps all of a host's state on one node, so politeness needs no coordination; the cost is that a shard rebalance must hand hosts over cleanly."
+      "text": "Mercator-style frontier: a few priority front queues decide what is important, and back queues (about 3 per fetch slot, one host each) plus a heap of next allowed times enforce politeness. Sharding by host hash keeps all of a host's state on one node, so politeness needs no per-request coordination. A shard serves its hosts only while it holds an ownership lease in the queue store; on a rebalance the new owner waits until the old lease and the longest fetch lease have run out, so two shards never lease the same host."
     },
     {
       "target": "url_seen",
       "kind": "tradeoff",
-      "text": "A Bloom filter for 10B URLs at 1% false positives takes about 12 GB, against 80 GB or more for exact 8-byte fingerprints. False positives mean some new URLs are never crawled; nothing is crawled twice. The metadata store keeps the exact list, so the filter can be rebuilt larger when it fills."
+      "text": "A Bloom filter for 10B URLs at 1% false positives takes about 12 GB, against 80 GB or more for exact 8-byte fingerprints. False positives mean some new URLs are never crawled; nothing is crawled twice. The metadata store keeps the exact list, so the filter can be rebuilt larger when it fills (an offline job, not drawn). Losing recent bits in a cache failover only causes some URLs to be enqueued twice, which the frontier's URL-derived keys absorb."
     },
     {
       "target": "dns_cache",
@@ -1065,7 +1102,7 @@
     {
       "id": "near-duplicates",
       "q": "Many URLs serve the same or almost the same content. How do you avoid storing and parsing it again?",
-      "a": "Hash the body for exact duplicates and compute a 64-bit SimHash of the visible text for near-duplicates, where pages within about 3 bits are treated as the same. To find matches without scanning, split the SimHash into four 16-bit blocks and index each: two fingerprints within 3 bits must share at least one block exactly. A duplicate is recorded against the original URL but not stored or parsed again.",
+      "a": "Hash the body for exact duplicates and compute a 64-bit SimHash of the visible text for near-duplicates, where pages within about 3 bits are treated as the same. To find matches without scanning, split the SimHash into four 16-bit blocks and index each, here within a registered domain: two fingerprints within 3 bits must share at least one block exactly. Across the whole web a 16-bit key matches far too many pages, so global near-dup detection uses more tables keyed on longer bit groups. A duplicate is recorded against the original URL but not stored or parsed again.",
       "topic": "data",
       "targets": [
         "content_dedup",
@@ -1096,7 +1133,7 @@
     {
       "id": "fetcher-crash",
       "q": "A fetcher crashes in the middle of a fetch. What happens to that URL, and can a page be processed twice?",
-      "a": "The frontier leased the URL with a timeout, so when the lease expires the URL goes back on its host's queue and is fetched again; nothing is lost. Processing is at least once: the same page can be fetched or delivered to a parser twice. That is safe because the content store write is conditional, metadata updates are keyed by URL, and the URL seen filter drops links that were already enqueued.",
+      "a": "The frontier leased the URL with a timeout, so when the lease expires the URL goes back on its host's queue and is fetched again; nothing is lost, and the old fetcher's late report is ignored because its lease id is stale. Processing is at least once: the same page can be fetched or delivered to a parser twice. That is safe because the content store write is conditional (a repeat from the same URL is idempotent), metadata updates are keyed by URL, frontier entries are keyed by URL, and the parser marks URLs seen only after the frontier has stored them.",
       "topic": "reliability",
       "targets": [
         "frontier",

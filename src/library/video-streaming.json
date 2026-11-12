@@ -112,24 +112,31 @@
         "id": "transcode-time",
         "name": "Time to ready",
         "kind": "latency",
-        "sli": "Uploads playable within the threshold, divided by all uploads",
+        "sli": "Uploads that reach READY within the threshold, measured from the upload-complete event to the status change in the Metadata DB, divided by all uploads",
         "target": 95,
         "threshold": "< 15 min"
       }
     ],
     "alerts": [
       {
-        "id": "rebuffer",
+        "id": "startup-burn",
         "severity": "page",
-        "when": "Player rebuffering ratio above 1% for 10 minutes",
-        "why": "Viewers are watching a spinner. Only the player can see this, which is why it is measured on the client.",
+        "when": "Plays starting later than 2 s burning the error budget 14 times too fast over 1 hour and over 5 minutes",
+        "why": "Viewers leave before the first frame. Usually the Playback API, a cold origin or a bad player release.",
         "target": "viewer",
         "slo": "playback-start"
       },
       {
+        "id": "rebuffer",
+        "severity": "page",
+        "when": "Player rebuffering ratio above 1% for 10 minutes",
+        "why": "Viewers are watching a spinner. Only the player can see this, which is why it is measured on the client and reported by player beacons.",
+        "target": "viewer"
+      },
+      {
         "id": "cdn-errors",
         "severity": "page",
-        "when": "CDN error rate above 0.5% for 5 minutes",
+        "when": "Segment errors burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Segments are failing to load, so playback stops.",
         "target": "cdn",
         "slo": "segment-availability"
@@ -144,7 +151,7 @@
       {
         "id": "transcode-age",
         "severity": "ticket",
-        "when": "Oldest transcode job above 10 minutes",
+        "when": "Oldest transcode job above 10 minutes, or uploads ready within 15 min burning the budget 6 times too fast over 6 hours",
         "why": "Creators wait longer to publish, long before anything fails.",
         "target": "transcode_q",
         "slo": "transcode-time"
@@ -155,6 +162,20 @@
         "when": "Transcoder failure rate above 2% for 15 minutes",
         "why": "Some uploads never become playable until retried.",
         "target": "transcoder"
+      },
+      {
+        "id": "transcode-dlq",
+        "severity": "ticket",
+        "when": "Any message in the transcode dead-letter queue",
+        "why": "A chunk failed 3 times, so its video will never become ready on its own. Usually an input format the encoder cannot handle.",
+        "target": "transcode_q"
+      },
+      {
+        "id": "views-lag",
+        "severity": "ticket",
+        "when": "View Events consumer lag above 10 minutes for 15 minutes",
+        "why": "View counts freeze for creators; the stream absorbs the backlog while the aggregator catches up.",
+        "target": "views"
       }
     ],
     "signals": [
@@ -175,6 +196,18 @@
         "name": "Age of the oldest job",
         "metric": "queue_oldest_message_age_seconds",
         "why": "Backlog shows up here before creators complain."
+      },
+      {
+        "target": "transcoder",
+        "name": "Chunks encoded and spot interruptions",
+        "metric": "chunks_encoded_total, spot_interruptions_total",
+        "why": "Interruptions mean redone chunks; a spike explains slow time-to-ready without any failure."
+      },
+      {
+        "target": "counter",
+        "name": "Views counted per minute against plays started",
+        "metric": "views_counted_total",
+        "why": "The business number creators see; a gap against plays started means events are lost or filtered as fraud."
       }
     ],
     "debug": [
@@ -192,6 +225,7 @@
         "steps": [
           "Check the transcode queue age.",
           "Check transcoder failures by input format.",
+          "Check the dead-letter queue: chunks that failed 3 times keep their video in processing for good.",
           "Check storage events: are uploads triggering jobs at all?"
         ]
       }
@@ -199,20 +233,20 @@
   },
   "nodes": [
     {
-      "id": "creator",
-      "label": "Creator",
-      "kind": "web_client"
-    },
-    {
       "id": "viewer",
       "label": "Viewer",
       "kind": "mobile_client"
     },
     {
+      "id": "creator",
+      "label": "Creator",
+      "kind": "web_client"
+    },
+    {
       "id": "dns",
       "label": "DNS",
       "kind": "dns",
-      "description": "Points the site and video hostnames at the CDN",
+      "description": "Points video.example.com (site and API) at the WAF-protected CDN distribution and cdn.example.com at the segment distribution",
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
@@ -222,10 +256,20 @@
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
-      "description": "Caches video segments near viewers",
+      "description": "Two distributions: the site and API (behind the WAF, API responses not cached) and video segments (cached for days, signed playback tokens checked at the edge, an origin shield in front of storage)",
       "cloud": {
         "aws": "CloudFront",
         "gcp": "Cloud CDN"
+      }
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Attached to the site and API distribution: managed rule sets, rate rules on uploads and API calls, bot control. Segment requests do not pass through it",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
       }
     },
     {
@@ -251,7 +295,7 @@
       "id": "meta_svc",
       "label": "Playback API",
       "kind": "service",
-      "description": "Video metadata and manifest URLs",
+      "description": "Video metadata, a signed playback token per viewer and one view event per play. Hot video rows sit in an in-process cache for a few seconds, so the database sees a small share of the ~140,000 plays/s at peak",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
@@ -261,7 +305,7 @@
       "id": "meta_db",
       "label": "Metadata DB",
       "kind": "sql_db",
-      "description": "videos(id, owner, title, status, manifest_url, views)",
+      "description": "videos(id, owner, title, status, manifest_url, views) and chunks_done(video, chunk, rendition); primary-standby across zones",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -294,16 +338,17 @@
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
-      }
+      },
+      "description": "One message per uploaded video, then one per chunk and rendition from the splitter. After 3 failed receives a message moves to a dead-letter queue"
     },
     {
       "id": "transcoder",
       "label": "Transcoders",
       "kind": "worker",
-      "description": "Encode chunks in parallel",
+      "description": "Own ffmpeg encoder fleet on spot capacity: one worker splits a video at keyframes, many workers encode its chunks in parallel",
       "cloud": {
-        "aws": "AWS Elemental MediaConvert",
-        "gcp": "Transcoder API"
+        "aws": "ECS",
+        "gcp": "GKE"
       }
     },
     {
@@ -329,7 +374,15 @@
   "edges": [
     {
       "from": "creator",
-      "to": "lb"
+      "to": "waf"
+    },
+    {
+      "from": "waf",
+      "to": "cdn"
+    },
+    {
+      "from": "creator",
+      "to": "dns"
     },
     {
       "from": "creator",
@@ -337,7 +390,7 @@
     },
     {
       "from": "viewer",
-      "to": "cdn"
+      "to": "dns"
     },
     {
       "from": "cdn",
@@ -370,7 +423,8 @@
     },
     {
       "from": "transcode_q",
-      "to": "transcoder"
+      "to": "transcoder",
+      "label": "jobs; splitter publishes chunk jobs"
     },
     {
       "from": "transcoder",
@@ -402,12 +456,13 @@
       "to": "meta_db"
     },
     {
-      "from": "creator",
-      "to": "dns"
+      "from": "viewer",
+      "to": "cdn",
+      "label": "segments"
     },
     {
       "from": "viewer",
-      "to": "dns"
+      "to": "waf"
     }
   ],
   "flows": [
@@ -422,7 +477,7 @@
           "kind": "req",
           "phase": "DNS",
           "label": "resolve video.example.com",
-          "detail": "The hostname points at the CDN, so viewers fetch the page and every video segment from the nearest edge. Resolvers cache the answer."
+          "detail": "The site and API hostname points at the CDN distribution that has the WAF attached, so creators and viewers reach the nearest edge. Resolvers cache the answer."
         },
         {
           "from": "dns",
@@ -434,11 +489,28 @@
         },
         {
           "from": "creator",
-          "to": "lb",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /uploads",
-          "payload": "POST /uploads HTTP/2\n\n{ \"title\": \"My trip\", \"size_bytes\": 3221225472, \"content_type\": \"video/mp4\" }"
+          "detail": "A trace id starts here and is copied into every job message, so one upload can be followed from this request through transcoding.",
+          "payload": "POST /uploads HTTP/2\nAuthorization: Bearer <creator token>\ntraceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01\n\n{ \"title\": \"My trip\", \"size_bytes\": 3221225472, \"content_type\": \"video/mp4\" }"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect, then forward",
+          "detail": "Managed rule sets, rate rules (per creator for uploads, per IP for the API) and bot control run at the edge, before the request costs the origin anything."
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "not cached: to origin",
+          "detail": "POSTs and API paths are never cached; the CDN only carries them to the origin over its warm connections."
         },
         {
           "from": "lb",
@@ -485,6 +557,20 @@
         },
         {
           "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Create upload",
+          "label": "200 signed part URLs"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Create upload",
+          "label": "200 signed part URLs"
+        },
+        {
+          "from": "waf",
           "to": "creator",
           "kind": "res",
           "phase": "Create upload",
@@ -510,46 +596,110 @@
           "from": "raw",
           "to": "transcode_q",
           "kind": "async",
-          "phase": "Transcode",
-          "label": "ObjectCreated event",
-          "detail": "Storage emits an event when the upload completes; no polling needed."
+          "phase": "Split",
+          "label": "upload complete event",
+          "detail": "Storage emits an event when CompleteMultipartUpload finishes; no polling needed."
         },
         {
           "from": "transcode_q",
           "to": "transcoder",
           "kind": "async",
-          "phase": "Transcode",
-          "label": "job v_123"
+          "phase": "Split",
+          "label": "job v_123",
+          "detail": "The job message carries the video id and the trace id from the upload request."
         },
         {
           "from": "transcoder",
           "to": "raw",
           "kind": "async",
-          "phase": "Transcode",
+          "phase": "Split",
           "label": "GET original"
         },
         {
           "from": "raw",
           "to": "transcoder",
           "kind": "async",
-          "phase": "Transcode",
+          "phase": "Split",
           "label": "bytes"
         },
         {
           "from": "transcoder",
           "to": "transcoder",
           "kind": "local",
-          "phase": "Transcode",
-          "label": "split + encode in parallel",
-          "detail": "Split into ~4 s chunks and encode every chunk × every resolution in parallel. A 1-hour video finishes in minutes instead of hours."
+          "phase": "Split",
+          "label": "cut at keyframes into ~4 s chunks",
+          "detail": "Cutting at keyframes means every chunk decodes on its own and the encoded segments line up across renditions, so the player can switch quality at any segment boundary."
+        },
+        {
+          "from": "transcoder",
+          "to": "raw",
+          "kind": "async",
+          "phase": "Split",
+          "label": "PUT 900 chunks",
+          "detail": "A 1-hour video becomes 900 chunk files next to the original."
+        },
+        {
+          "from": "transcoder",
+          "to": "transcode_q",
+          "kind": "async",
+          "phase": "Split",
+          "label": "5,400 chunk jobs",
+          "detail": "One message per chunk and rendition (900 × 6). Spread over the whole fleet, a 1-hour video finishes in minutes instead of hours.",
+          "payload": "{ \"video\": \"v_123\", \"chunk\": 17, \"rendition\": \"1080p\", \"of\": 5400, \"trace\": \"0af76519…\" }"
+        },
+        {
+          "from": "transcode_q",
+          "to": "transcoder",
+          "kind": "async",
+          "phase": "Encode chunks",
+          "label": "chunk 17, 1080p",
+          "detail": "Any free worker takes one. If it crashes or its spot instance is reclaimed, the message becomes visible again and another worker redoes just that chunk."
+        },
+        {
+          "from": "transcoder",
+          "to": "raw",
+          "kind": "async",
+          "phase": "Encode chunks",
+          "label": "GET chunk 17"
+        },
+        {
+          "from": "raw",
+          "to": "transcoder",
+          "kind": "async",
+          "phase": "Encode chunks",
+          "label": "bytes"
+        },
+        {
+          "from": "transcoder",
+          "to": "transcoder",
+          "kind": "local",
+          "phase": "Encode chunks",
+          "label": "encode chunk 17 at 1080p"
         },
         {
           "from": "transcoder",
           "to": "segments",
           "kind": "async",
           "phase": "Publish",
-          "label": "PUT segments + manifests",
-          "payload": "v_123/master.m3u8\nv_123/240p/seg_0001.ts …\nv_123/1080p/seg_0001.ts …"
+          "label": "PUT 1080p/seg_0017.ts",
+          "detail": "Same key on a retry, so a redone chunk overwrites identical output."
+        },
+        {
+          "from": "transcoder",
+          "to": "meta_db",
+          "kind": "async",
+          "phase": "Publish",
+          "label": "mark chunk 17 / 1080p done",
+          "detail": "One row per chunk and rendition, inserted only if absent, so a redone chunk is not counted twice. The worker whose insert completes the set writes the manifests and marks the video ready; if two finish together, both write the same files, which is harmless.",
+          "payload": "INSERT INTO chunks_done (video, chunk, rendition) VALUES ('v_123', 17, '1080p')\n  ON CONFLICT DO NOTHING;\nSELECT count(*) FROM chunks_done WHERE video = 'v_123';  -- 5400 of 5400"
+        },
+        {
+          "from": "transcoder",
+          "to": "segments",
+          "kind": "async",
+          "phase": "Publish",
+          "label": "PUT manifests",
+          "payload": "v_123/master.m3u8\nv_123/240p/index.m3u8 … v_123/2160p/index.m3u8"
         },
         {
           "from": "transcoder",
@@ -557,7 +707,7 @@
           "kind": "async",
           "phase": "Publish",
           "label": "UPDATE status=READY",
-          "detail": "The video becomes watchable. The creator is notified."
+          "detail": "The video becomes watchable; the creator's dashboard shows it as ready on its next status check."
         }
       ]
     },
@@ -572,7 +722,7 @@
           "kind": "req",
           "phase": "DNS",
           "label": "resolve video.example.com",
-          "detail": "The hostname points at the CDN, so viewers fetch the page and every video segment from the nearest edge. Resolvers cache the answer."
+          "detail": "The site and API hostname points at the WAF-protected CDN distribution. Resolvers cache the answer."
         },
         {
           "from": "dns",
@@ -584,18 +734,26 @@
         },
         {
           "from": "viewer",
-          "to": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Load video page",
           "label": "GET /api/videos/v_123"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Load video page",
+          "label": "inspect, then forward",
+          "detail": "Managed rule sets, rate rules (per creator for uploads, per IP for the API) and bot control run at the edge, before the request costs the origin anything."
         },
         {
           "from": "cdn",
           "to": "lb",
           "kind": "req",
           "phase": "Load video page",
-          "label": "MISS → origin",
-          "detail": "Metadata can be cached for a few seconds; this request misses."
+          "label": "not cached: to origin",
+          "detail": "API responses are not cached at the edge: each carries a playback token signed for this viewer, and each records a view."
         },
         {
           "from": "lb",
@@ -609,7 +767,8 @@
           "to": "meta_db",
           "kind": "req",
           "phase": "Load video page",
-          "label": "SELECT title, manifest_url"
+          "label": "SELECT title, manifest_url",
+          "detail": "Usually answered from the service's in-process cache; this video was not in it."
         },
         {
           "from": "meta_db",
@@ -631,7 +790,7 @@
           "to": "lb",
           "kind": "res",
           "phase": "Load video page",
-          "label": "200 manifest URL"
+          "label": "200 manifest URL + token"
         },
         {
           "from": "lb",
@@ -642,18 +801,26 @@
         },
         {
           "from": "cdn",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Load video page",
+          "label": "200"
+        },
+        {
+          "from": "waf",
           "to": "viewer",
           "kind": "res",
           "phase": "Load video page",
           "label": "200",
-          "payload": "{ \"title\": \"My trip\", \"manifest\": \"https://cdn.example.com/v_123/master.m3u8\" }"
+          "payload": "{ \"title\": \"My trip\", \"manifest\": \"https://cdn.example.com/v_123/master.m3u8?token=eyJ2Ijoidl8xMjMi…\" }"
         },
         {
           "from": "viewer",
           "to": "cdn",
           "kind": "req",
           "phase": "Fetch manifest",
-          "label": "GET master.m3u8"
+          "label": "GET master.m3u8",
+          "detail": "Video comes from a separate hostname and distribution without the WAF: segments are static, signed files, and a WAF priced per request would cost more on hundreds of billions of segment requests a day than it protects."
         },
         {
           "from": "cdn",
@@ -661,7 +828,7 @@
           "kind": "req",
           "phase": "Fetch manifest",
           "label": "MISS → origin fetch",
-          "detail": "First viewer in this region; the edge fetches once and caches."
+          "detail": "First viewer in this region. The request goes through the origin shield, a mid-tier cache, so the misses of hundreds of edges for a newly viral video become one fetch from storage."
         },
         {
           "from": "segments",
@@ -690,8 +857,8 @@
           "to": "cdn",
           "kind": "local",
           "phase": "Stream segments",
-          "label": "HIT",
-          "detail": "Popular videos are fully cached at the edge; hit rates above 95% are normal."
+          "label": "HIT, token valid",
+          "detail": "The edge checks the playback token's signature and expiry, then serves from cache. Popular videos are fully cached at the edge; hit rates above 95% are normal."
         },
         {
           "from": "cdn",
@@ -728,7 +895,7 @@
     {
       "target": "cdn",
       "kind": "scaling",
-      "text": "Popularity follows a long tail: a small fraction of videos gets most views. Edge caches serve those; rarely watched videos come from origin storage."
+      "text": "Popularity follows a long tail: a small fraction of videos gets most views. Edge caches serve those; rarely watched videos come from origin storage through an origin shield, so a video going viral does not send every edge's first miss to storage at once."
     },
     {
       "target": "segments",
@@ -738,7 +905,7 @@
     {
       "target": "transcoder",
       "kind": "failure",
-      "text": "Jobs are idempotent per chunk. A crashed worker's message becomes visible again and another worker redoes only that chunk."
+      "text": "Jobs are idempotent per chunk: a crashed worker's message becomes visible again and another worker redoes only that chunk, writing the same keys. A chunk that fails 3 times lands in the dead-letter queue and the video stays in processing until someone looks."
     },
     {
       "target": "counter",
@@ -749,6 +916,11 @@
       "target": "cdn",
       "kind": "tradeoff",
       "text": "At list prices the estimate calculator puts this design near $1B a month, almost all of it CDN egress for about 0.9 EB a day. Nobody pays list price at this scale: large streamers sign committed CDN contracts at a small fraction of a cent per GB, peer directly with internet providers, and place their own cache servers inside ISP networks (Netflix Open Connect, Google Global Cache), so most bytes never cross a paid link. In an interview, give the list-price number, then say egress is the cost to attack and how."
+    },
+    {
+      "target": "waf",
+      "kind": "security",
+      "text": "The WAF fronts the site and API distribution: managed rule sets, upload and API rate rules, and bot control against scrapers and view-count fraud. Segment requests skip it, because a WAF is priced per request and segments are static; they are protected by playback tokens checked at the edge and a private bucket that only the CDN can read (origin access control). Upload URLs are signed per part and expire."
     }
   ],
   "questions": [
@@ -766,7 +938,7 @@
     {
       "id": "transcode-fail",
       "q": "A transcoder crashes halfway through a long video. What happens?",
-      "a": "The job was never acknowledged, so it reappears on the queue after its visibility timeout and another worker retries it from the raw upload. Splitting a video into chunks that are transcoded in parallel makes retries cheap and finishes long videos faster. After a few failures the job goes to a dead-letter queue for a person to look at.",
+      "a": "The chunk's message was never acknowledged, so it reappears on the queue after its visibility timeout and another worker redoes just that chunk from the chunk file in raw storage. Because each chunk and rendition is its own message, a crash costs seconds of work, not the whole video, and long videos finish faster. After 3 failed receives the message goes to a dead-letter queue for a person to look at.",
       "topic": "reliability",
       "targets": [
         "transcode_q",
@@ -787,7 +959,7 @@
     {
       "id": "views",
       "q": "How do you count views at this scale without a hot row for popular videos?",
-      "a": "Never increment a database row per view. Players send view events to a stream; aggregators count them in time windows and write the totals periodically. The displayed count lags by seconds or minutes, which is acceptable, and you can filter fraud before counting.",
+      "a": "Never increment a database row per view. The Playback API sends one event per play to a stream; aggregators count them in time windows and write the totals periodically. The displayed count lags by seconds or minutes, which is acceptable, and fraud can be filtered before counting.",
       "topic": "consistency",
       "targets": [
         "views",
@@ -809,7 +981,7 @@
     {
       "id": "metadata",
       "q": "The Playback API is read heavily for titles, thumbnails and manifest URLs. How do you scale it?",
-      "a": "Metadata changes rarely, so cache it aggressively: in the CDN for public video pages and in an in-memory cache in front of the database. Use read replicas for the rest. Invalidate on the few writes, such as a title change or a newly finished transcode.",
+      "a": "Metadata changes rarely, so cache it: an in-process cache in the Playback API with a few seconds' TTL absorbs popular videos, and read replicas take the rest. The API response itself is not cached at the CDN because it carries a per-viewer playback token and records a view; thumbnails and the page shell are static and are cached there. Invalidate on the few writes, such as a title change or a newly finished transcode.",
       "topic": "scale",
       "targets": [
         "meta_svc",

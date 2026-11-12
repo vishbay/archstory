@@ -80,17 +80,16 @@
     "subnets": [
       {
         "id": "public",
-        "label": "Public",
+        "label": "Public (NAT gateways)",
         "public": true,
-        "tiers": [
-          "entry"
-        ],
+        "tiers": [],
         "cidr": "10.20.0.0/20"
       },
       {
         "id": "app",
         "label": "App",
         "tiers": [
+          "entry",
           "services",
           "async"
         ],
@@ -124,10 +123,18 @@
         "threshold": "< 10 ms"
       },
       {
+        "id": "put-latency",
+        "name": "Put latency",
+        "kind": "latency",
+        "sli": "Puts acknowledged within the threshold divided by all puts, measured at the routers",
+        "target": 99,
+        "threshold": "< 20 ms"
+      },
+      {
         "id": "durability",
         "name": "Acknowledged writes kept",
         "kind": "durability",
-        "sli": "Sampled acknowledged writes that a later ALL read still returns, divided by all sampled writes (a canary writes and reads back known keys)",
+        "sli": "Sampled acknowledged writes that a later ALL read still returns, divided by all sampled writes (a canary writes and reads back known keys). A canary cannot demonstrate 8 nines; it exists to catch any loss event, and any miss pages.",
         "target": 99.999999
       }
     ],
@@ -135,7 +142,7 @@
       {
         "id": "put-burn",
         "severity": "page",
-        "when": "Put errors or quorum timeouts burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Put errors or quorum timeouts burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Callers are failing writes; with N = 3 this usually means two replicas of some ranges are unreachable.",
         "target": "router",
         "slo": "put-availability"
@@ -143,10 +150,18 @@
       {
         "id": "get-slow",
         "severity": "page",
-        "when": "More than 1% of gets slower than 10 ms for 15 minutes",
+        "when": "Gets slower than 10 ms burning the error budget 14 times too fast over 1 hour and over 5 minutes",
         "why": "Every caller waits on the second-fastest replica, so a sick node or a compaction backlog shows up here first.",
         "target": "router",
         "slo": "get-latency"
+      },
+      {
+        "id": "put-slow",
+        "severity": "page",
+        "when": "Puts slower than 20 ms burning the error budget 14 times too fast over 1 hour and over 5 minutes",
+        "why": "Writes wait on the second replica's fsync, so a slow disk or a zone with high latency shows up here before puts fail.",
+        "target": "router",
+        "slo": "put-latency"
       },
       {
         "id": "canary-lost",
@@ -179,6 +194,20 @@
         "why": "Reads touch more files and get latency rises before users notice.",
         "target": "storage-a",
         "slo": "get-latency"
+      },
+      {
+        "id": "disk-headroom",
+        "severity": "ticket",
+        "when": "Any storage node above 65% disk used for 1 hour",
+        "why": "Compaction needs free space to rewrite SSTables; past this, add nodes before compaction stalls and reads slow down.",
+        "target": "storage-b"
+      },
+      {
+        "id": "cert-expiry",
+        "severity": "ticket",
+        "when": "Any client or node certificate expiring within 14 days",
+        "why": "Rotation should be automatic; an expired node certificate cuts the node off from its peers and looks like a node failure.",
+        "target": "router"
       }
     ],
     "signals": [
@@ -227,7 +256,7 @@
           "On the slow node, check SSTables per read and pending compactions: a backlog means reads open many files.",
           "Check GC pauses and disk latency on that node; a sick disk slows every range it holds.",
           "Check the read repair rate: many repairs mean replicas are drifting and each get does extra work.",
-          "Look for a hot key: one key's token lands on three nodes, which no amount of virtual nodes spreads."
+          "Look for a hot key: one key's token lands on three nodes, which no amount of virtual nodes spreads; cache it in the client or split it into several keys."
         ]
       },
       {
@@ -252,7 +281,7 @@
       "id": "dns",
       "label": "DNS",
       "kind": "dns",
-      "description": "Resolves the store's hostname to the load balancer's static IPs",
+      "description": "Private hosted zone: resolves the store's hostname to the internal load balancer's static private IPs",
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
@@ -262,10 +291,10 @@
       "id": "nlb",
       "label": "Network Load Balancer",
       "kind": "network_load_balancer",
-      "description": "Layer 4: spreads long-lived client connections across routers without parsing the protocol",
+      "description": "Internal, layer 4: spreads long-lived client connections across routers without parsing the protocol. Reached from caller VPCs over PrivateLink or Private Service Connect, never from the internet",
       "cloud": {
         "aws": "NLB",
-        "gcp": "External passthrough Network Load Balancer"
+        "gcp": "Internal passthrough Network Load Balancer"
       }
     },
     {
@@ -273,7 +302,7 @@
       "label": "Request Router",
       "kind": "service",
       "replicas": 12,
-      "description": "Stateless. Holds the ring (learned by gossip), hashes each key and forwards to the first healthy replica",
+      "description": "Stateless. Holds the ring (learned by gossip), hashes each key and forwards to the first healthy replica. Large instances: about 100k requests/s each at the 1.25M/s peak",
       "cloud": {
         "aws": "EKS",
         "gcp": "GKE"
@@ -331,7 +360,7 @@
       "id": "repair",
       "label": "Repair Scheduler",
       "kind": "scheduler",
-      "description": "Walks every token range on a cycle and starts a Merkle tree repair for it, one range at a time",
+      "description": "Walks every token range on a cycle and starts a Merkle tree repair for it, with at most one repair at a time on any node",
       "cloud": {
         "aws": "EKS",
         "gcp": "GKE"
@@ -376,7 +405,7 @@
     {
       "from": "storage-a",
       "to": "storage-c",
-      "label": "replicate"
+      "label": "replicate, repair"
     },
     {
       "from": "storage-a",
@@ -422,7 +451,7 @@
           "kind": "res",
           "phase": "DNS",
           "label": "NLB static IPs",
-          "payload": "kv.example.com.  60  IN A  203.0.113.20"
+          "payload": "kv.example.com.  60  IN A  10.20.16.20"
         },
         {
           "from": "app",
@@ -430,8 +459,8 @@
           "kind": "req",
           "phase": "Route to the key",
           "label": "PUT cart:user-42 (W=2)",
-          "detail": "The put carries the context (vector clock) the app got when it last read this key, which tells the store which version this write replaces.",
-          "payload": "PUT key=cart:user-42\nconsistency=QUORUM (W=2)\ncontext={A:3}\nvalue=<1.2 KB JSON>"
+          "detail": "The put carries the context (vector clock) the app got when it last read this key, which tells the store which version this write replaces, and a trace id that the router and every replica log with the request.",
+          "payload": "PUT key=cart:user-42\nconsistency=QUORUM (W=2)\ncontext={A:3}\ntrace=6e0c63257de34c92bf9efcd03927272e\nvalue=<1.2 KB JSON>"
         },
         {
           "from": "nlb",
@@ -472,7 +501,7 @@
           "kind": "local",
           "phase": "Version and persist",
           "label": "commit log append + memtable",
-          "detail": "The write is appended to the commit log, fsynced with group commit every 2 ms, then inserted into the memtable, a sorted in-memory map. No random disk write happens on the write path, which keeps put latency flat."
+          "detail": "The write is appended to the commit log and inserted into the memtable, a sorted in-memory map. Commit log fsyncs are grouped every 2 ms, and A counts its own copy toward W only after that fsync, so the ack really means durable. No random disk write happens on the write path, which keeps put latency flat."
         },
         {
           "from": "storage-a",
@@ -497,7 +526,7 @@
           "kind": "res",
           "phase": "Quorum",
           "label": "ack (logged)",
-          "detail": "B acks after its own commit log append, so this is a second durable copy in a second zone."
+          "detail": "B acks only after its commit log append is fsynced in its next group commit, so this is a second durable copy in a second zone."
         },
         {
           "from": "storage-a",
@@ -545,6 +574,15 @@
           "phase": "Flush and compact",
           "label": "memtable to SSTable, compact",
           "detail": "When the memtable reaches about 128 MB it is written out as an immutable sorted SSTable and its commit log segment is freed. Compaction later merges SSTables so reads open few files, and drops overwritten versions and expired tombstones."
+        },
+        {
+          "from": "storage-a",
+          "to": "backups",
+          "kind": "async",
+          "phase": "Flush and compact",
+          "label": "upload new SSTable",
+          "detail": "SSTables never change once written, so each new one is uploaded once and every few hours a snapshot just lists the files it needs. Commit log segments are shipped too, which allows point in time restore.",
+          "payload": "PUT s3://kv-backups/node-a/ks_main/nb-48211-big-Data.db"
         }
       ]
     },
@@ -598,7 +636,7 @@
           "kind": "req",
           "phase": "Ask the replicas",
           "label": "read cart:user-42",
-          "detail": "A needs one answer besides its own for R=2. It asks both other replicas so one slow node cannot hold up the read, and so it gets to check every copy."
+          "detail": "A needs one answer besides its own for R=2. It asks both other replicas so one slow node cannot hold up the read, and so it gets to check every copy. A full value from one and a digest (a hash) from the other is the usual way to cut cross-zone bytes; full values are shown here."
         },
         {
           "from": "storage-a",
@@ -833,7 +871,7 @@
           "kind": "async",
           "phase": "Trigger",
           "label": "repair range (t1, t2]",
-          "detail": "The scheduler walks every token range on a 5 day cycle, well inside the 10 day tombstone grace period, one range at a time so repair never takes over the disks."
+          "detail": "The scheduler walks every token range on a 5 day cycle, well inside the 10 day tombstone grace period. Each node takes part in at most one repair at a time and repairs are throttled, so repair never takes over the disks; many ranges on different nodes run in parallel, which is what lets about 19,200 ranges finish in 5 days."
         },
         {
           "from": "storage-a",
@@ -887,7 +925,7 @@
           "kind": "local",
           "phase": "Exchange differences",
           "label": "merge by vector clock",
-          "detail": "Each side keeps the version that descends from the other, and keeps both as siblings when the clocks are concurrent. The same pass runs between A and C and between B and C."
+          "detail": "Each side keeps the version that descends from the other, and keeps both as siblings when the clocks are concurrent. A runs the same comparison with C, getting C's tree and streaming rows both ways, so differences between B and C are also fixed through A."
         }
       ]
     }
@@ -920,7 +958,12 @@
     {
       "target": "nlb",
       "kind": "security",
-      "text": "Clients connect with mutual TLS and the load balancer only admits the callers' network ranges; in practice the store is exposed privately (PrivateLink or Private Service Connect) rather than to the internet. Node-to-node traffic also uses mTLS, data is encrypted at rest on the NVMe drives, and the router checks each client's credentials and per-keyspace permissions."
+      "text": "Clients connect with mutual TLS through an internal load balancer that callers reach over PrivateLink or Private Service Connect; nothing is exposed to the internet, which is why there is no WAF. Node-to-node traffic also uses mTLS, with certificates from a private certificate authority rotated automatically, data is encrypted at rest on the NVMe drives, and the router checks each client's credentials and per-keyspace permissions."
+    },
+    {
+      "target": "storage-a",
+      "kind": "scaling",
+      "text": "One replica per zone means every write crosses zones twice and every quorum read pulls answers across zones: at 250k puts/s and 1M gets/s that is a few GB/s of cross-zone traffic, which clouds bill per GB in each direction and which adds about a millisecond per hop. Digest reads (one full value, hashes from the rest) and routing reads to a coordinator in the caller's zone cut it; the cost is accepted because surviving a zone is a requirement. A hot key lands on the same three nodes however many virtual nodes there are, so very hot keys need caching in the client or splitting into several keys."
     }
   ],
   "questions": [
@@ -969,7 +1012,7 @@
     {
       "id": "merkle",
       "q": "Two replicas each hold about 2 TB. How do they find which keys differ without shipping all the data?",
-      "a": "Each replica builds a Merkle tree per token range: rows hash into leaves and every parent is the hash of its children. They exchange trees of a few MB, compare roots, and descend only into subtrees whose hashes differ, so the work grows with the number of differences rather than the data size. Only rows in mismatched leaves are streamed. Building a tree still reads the whole range, so a scheduler repairs one range at a time and throttles it.",
+      "a": "Each replica builds a Merkle tree per token range: rows hash into leaves and every parent is the hash of its children. They exchange trees of a few MB, compare roots, and descend only into subtrees whose hashes differ, so the work grows with the number of differences rather than the data size. Only rows in mismatched leaves are streamed. Building a tree still reads the whole range, so the scheduler lets each node take part in one repair at a time and throttles it, while ranges on different nodes repair in parallel.",
       "topic": "data",
       "targets": [
         "storage-a",
