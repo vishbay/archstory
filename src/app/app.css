@@ -111,19 +111,33 @@ aside.right { justify-self: end; width: 360px; margin: 10px 10px 10px 0; }
 .stage-body { flex: 1; position: relative; min-height: 0; }
 
 /* ---------- player ---------- */
-.player { display: flex; align-items: center; gap: 10px; padding: 8px var(--pr) 8px var(--pl); background: var(--surface); border-top: 1px solid var(--border); }
-.player-buttons { display: flex; gap: 4px; }
-.scrub-wrap { position: relative; flex: 1; min-width: 80px; height: 26px; }
-.player .scrub { -webkit-appearance: none; appearance: none; position: absolute; inset: 0; width: 100%; height: 26px; margin: 0; background: transparent; cursor: pointer; }
-.player .scrub::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) var(--p), var(--surface-3) var(--p)); }
-.player .scrub::-moz-range-track { height: 4px; border-radius: 2px; background: var(--surface-3); }
-.player .scrub::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
-.player .scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--accent); }
-.player .scrub::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--accent); }
-.tick { position: absolute; top: 4px; width: 4px; height: 8px; margin-left: -2px; padding: 0; border: 0; border-radius: 2px; opacity: .45; cursor: pointer; z-index: 1; }
-.tick.done { opacity: .9; } .tick.cur { opacity: 1; height: 10px; top: 3px; }
-.tick:hover { opacity: 1; transform: scaleY(1.4); }
-.player .count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; min-width: 52px; text-align: center; }
+/* The player is a floating glass dock: big glowing play button, round icon buttons, a rounded track with one dot per step, speed as pills. */
+.player { padding: 6px var(--pr) 14px var(--pl); background: none; border: 0; }
+.dock { display: flex; align-items: center; gap: 10px; max-width: 940px; margin: 0 auto; padding: 6px 10px 6px 8px; border-radius: 999px;
+  background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow); }
+.player-buttons { display: flex; align-items: center; gap: 6px; }
+.dock .player-buttons button.icon { width: 34px; height: 34px; padding: 0; border-color: transparent; background: var(--surface-2); color: var(--text); transition: background .15s, transform .12s, box-shadow .15s; }
+.dock .player-buttons button.icon:hover:not(:disabled) { background: var(--surface-3); transform: translateY(-1px); }
+.dock .player-buttons button.icon:active:not(:disabled) { transform: scale(.94); }
+.dock .player-buttons button.icon.primary { width: 44px; height: 44px; color: var(--on-accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 72%, var(--grad-mid)));
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 #ffffff40; }
+.dock .player-buttons button.icon.primary:hover:not(:disabled) { filter: brightness(1.08); background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 72%, var(--grad-mid))); }
+.scrub-wrap { position: relative; flex: 1; min-width: 80px; height: 30px; }
+.player .scrub { -webkit-appearance: none; appearance: none; position: absolute; inset: 0; width: 100%; height: 30px; margin: 0; background: transparent; cursor: pointer; }
+.player .scrub::-webkit-slider-runnable-track { height: 6px; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--p), var(--surface-3) var(--p)); }
+.player .scrub::-moz-range-track { height: 6px; border-radius: 999px; background: var(--surface-3); }
+.player .scrub::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--accent); }
+.player .scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--accent), 0 2px 8px color-mix(in srgb, var(--accent) 45%, transparent); }
+.player .scrub::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--accent); }
+.tick { position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; padding: 0; border: 2px solid var(--surface); border-radius: 50%; opacity: .55; cursor: pointer; z-index: 1; transition: transform .12s, opacity .12s; }
+.tick.done { opacity: 1; } .tick.cur { visibility: hidden; }
+.tick:hover { opacity: 1; transform: scale(1.5); }
+.dock .count { font: 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--text); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; min-width: 56px; text-align: center; }
+.dock .seg.speed button { padding: 3px 9px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.dock .speed-cycle { display: none; height: 28px; padding: 0 11px; font: 12px var(--mono); font-variant-numeric: tabular-nums; background: var(--surface-2); }
+/* beside two panels there is little room: one button that cycles the speed instead of four pills */
+@media (min-width: 901px) and (max-width: 1300px) { .dock .seg.speed { display: none; } .dock .speed-cycle { display: inline-flex; } }
 
 
 /* ---------- sidebar ---------- */
@@ -215,7 +229,7 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
   .stage { grid-area: stage; }
   aside.left, aside.right { width: auto; margin: 0; justify-self: stretch; border-radius: 0; border-width: 1px 0 0; backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--surface); }
   aside.left { grid-area: left; } aside.right { grid-area: right; }
-  .player { flex-wrap: wrap; }
+  .dock { flex-wrap: wrap; border-radius: 24px; }
 }
 
 /* ---------- provider icons ---------- */
@@ -556,9 +570,22 @@ summary { color: var(--accent-text); }
 .legend-chip .step-glyph { width: 15px; height: 15px; font-size: 9.5px; margin: 0; }
 .legend-toggle { margin-left: auto; font-size: 11.5px; }
 .legend-more { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--border); display: grid; gap: 6px; }
-.swatch { display: inline-block; width: 22px; height: 12px; border-radius: 4px; background: var(--node-bg); border: 1px solid var(--border-strong); }
-.swatch.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); } .swatch.visited { opacity: .92; } .swatch.flow { opacity: .62; } .swatch.off { opacity: .2; }
-.line { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--edge-visited); } .line.dashed { border-top-style: dashed; }
+/* Key swatches are miniature nodes (an icon dot and a name bar), so the states the canvas shows with ring, opacity and grey are visible here too. */
+.swatch { position: relative; display: inline-block; flex-shrink: 0; width: 30px; height: 16px; border-radius: 6px; background: var(--node-bg); border: 1px solid var(--muted); box-shadow: var(--shadow); }
+.swatch::before { content: ""; position: absolute; left: 4px; top: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--k-req); }
+.swatch::after { content: ""; position: absolute; left: 13px; top: 6px; width: 11px; height: 3px; border-radius: 2px; background: var(--text); }
+.swatch.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft); }
+.swatch.visited { opacity: .92; } .swatch.flow { opacity: .62; } .swatch.off { opacity: .2; filter: grayscale(.6); }
+/* the four node states share one line, even in the narrowest panel (about 290px): small swatches and tight spacing */
+.legend-nodes { flex-wrap: nowrap; gap: 0 6px; }
+.legend-nodes b { min-width: 0; font-size: 9.5px; letter-spacing: .04em; }
+.legend-nodes .legend-chip { gap: 3px; font-size: 10.5px; }
+.legend-nodes .swatch { width: 18px; height: 11px; border-radius: 4px; }
+.legend-nodes .swatch::before { left: 2.5px; top: 2.5px; width: 4px; height: 4px; }
+.legend-nodes .swatch::after { left: 9px; top: 4px; width: 6px; height: 2px; }
+@media (min-width: 901px) and (max-width: 1180px) { .legend-nodes { gap: 0 4px; } .legend-nodes .legend-chip { gap: 2px; font-size: 10px; } .legend-nodes .swatch { width: 16px; } .legend-nodes .swatch::after { width: 5px; } }   /* the compact right panel is 290px inside */
+
+.line { display: inline-block; width: 24px; height: 0; border-top: 2px solid var(--muted); } .line.dashed { border-top-style: dashed; }
 .badge-chip { font: normal 700 9px/14px var(--font); min-width: 14px; text-align: center; border-radius: 4px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-strong); }
 
 .card.current-card { position: sticky; top: 0; z-index: 3; max-height: 38vh; overflow-y: auto; background: color-mix(in srgb, var(--accent) 9%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); box-shadow: var(--shadow); }
@@ -852,10 +879,10 @@ button.listening { border-color: var(--hard); color: var(--hard-t); }
   .hero .row .big { flex: 1 1 100%; }
   .hero .row .big:not(.primary) { height: 34px; font-size: 13px; }
   .lib-head .search { width: 100%; }
-  .player { gap: 8px; }
+  .dock { gap: 8px; }
   .player .scn-bar { flex: 1 1 100%; } .player .scn-bar .scn-btn { max-width: none; width: 100%; justify-content: space-between; }
   .player-buttons { gap: 6px; }
-  .player-buttons button.icon { width: 40px; height: 40px; }
+  .dock .player-buttons button.icon { width: 40px; height: 40px; } .dock .player-buttons button.icon.primary { width: 48px; height: 48px; }
   .scrub-wrap { min-width: 120px; height: 34px; } .player .scrub { height: 34px; }
   .next-scenario { max-width: 100%; height: 36px; }
   .phone-note { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; font-size: 12.5px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); }

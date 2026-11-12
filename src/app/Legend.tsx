@@ -16,7 +16,7 @@ export function Legend({ monitoring }: { monitoring: boolean }) {
       </div>
       {open && (
         <div className="legend-more">
-          <div className="legend-row"><b>Nodes</b>
+          <div className="legend-row legend-nodes"><b>Nodes</b>
             <span className="legend-chip"><i className="swatch active" />this step</span>
             <span className="legend-chip"><i className="swatch visited" />used</span>
             <span className="legend-chip"><i className="swatch flow" />later</span>
