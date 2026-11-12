@@ -1021,3 +1021,14 @@ button.listening { border-color: var(--hard); color: var(--hard); }
 .numbers-panel .small-btn { margin-top: 10px; }
 .req-numbers { margin-top: 12px; }
 @media (prefers-reduced-motion: reduce) { .numbers-panel { animation: none; } }
+
+/* ---------- AI settings in the top bar ---------- */
+.ai-top { height: 32px; gap: 7px; padding: 0 12px 0 10px; font-size: 12.5px; background: var(--surface); box-shadow: var(--shadow); }
+.ai-top .ai-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+.ai-top.ready .ai-dot { background: var(--easy); box-shadow: 0 0 0 3px color-mix(in srgb, var(--easy) 22%, transparent); }
+.ai-top-label { font-weight: 600; }
+.ai-top-status { color: var(--muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.ai-top-status::before { content: "· "; }
+.ai-top.ready { border-color: color-mix(in srgb, var(--easy) 45%, var(--border-strong)); }
+@media (max-width: 1180px) { .ai-top-status { display: none; } }
+@media (max-width: 600px) { .ai-top-label { font-size: 0; } .ai-top-label::after { content: "AI"; font-size: 12.5px; } .ai-top { padding: 0 10px 0 9px; } }

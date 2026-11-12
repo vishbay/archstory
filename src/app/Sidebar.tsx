@@ -62,6 +62,19 @@ export function AiSettingsButton() {
   )
 }
 
+/** AI settings in the top bar, on every page: a status dot (green when a key is connected) and where the AI features go. */
+export function AiTopButton() {
+  const ai = useAiConfig()
+  const ready = isConfigured(ai)
+  const status = ready ? providerLabel(ai) : 'copy and paste'
+  return (
+    <button className={`ai-top${ready ? ' ready' : ''}`} onClick={openAiSettings} aria-label={`AI settings: ${ready ? `${status} key connected` : 'no key, copy and paste'}`}
+      title={ready ? `Sending with your ${status} key. Change the provider or models per feature.` : 'Using copy and paste. Connect your own API key to send reviews, designs and interviews straight from here.'}>
+      <i className="ai-dot" aria-hidden /><span className="ai-top-label">AI settings</span><span className="ai-top-status">{status}</span>
+    </button>
+  )
+}
+
 /** Scale and estimates live in the Numbers panel on the canvas; this line points there from the requirements. */
 export function NumbersHint() {
   return <p className="muted small req-numbers">Scale and estimates: <button className="link" onClick={() => openNumbers('scale')}>Numbers</button> on the canvas.</p>

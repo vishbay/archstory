@@ -14,7 +14,7 @@ import { homeRegion } from '../model/regions'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
-import { Sidebar } from './Sidebar'
+import { AiTopButton, Sidebar } from './Sidebar'
 import { ImportDialog } from './ImportDialog'
 import { GenerateDialog } from './GenerateDialog'
 import { AiSettings } from './AiSettings'
@@ -179,6 +179,7 @@ export function App() {
             ))}
           </div>
         )}
+        <AiTopButton />
         <button className="icon ghost" aria-label={`Theme: ${theme.pref}. Click to change`} title={`Theme: ${theme.pref} (click to change)`} onClick={theme.cycle}>{themeIcon}</button>
         {mode !== 'home' && !stacked && (
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the inspector' : 'Show or hide the flow inspector'} aria-expanded={rightOpen}
