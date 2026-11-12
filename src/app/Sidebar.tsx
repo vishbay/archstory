@@ -45,20 +45,8 @@ export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onV
           <button onClick={onExport}>Export</button>
           <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant">Prompt for your AI</button>
         </div>
-        <AiSettingsButton />
       </div>
     </>
-  )
-}
-
-/** The way into AI settings from the canvas pages, at the foot of the left panel, with whether a key is connected. */
-export function AiSettingsButton() {
-  const ai = useAiConfig()
-  const ready = isConfigured(ai)
-  return (
-    <button className="ghost ai-settings-btn" onClick={openAiSettings} title="Connect your own API key, pick models per feature, or stay with copy and paste">
-      <span aria-hidden>⚙</span> AI settings<span className="muted">{ready ? `${providerLabel(ai)} key connected` : 'copy and paste'}</span>
-    </button>
   )
 }
 
