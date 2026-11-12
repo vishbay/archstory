@@ -1,42 +1,140 @@
+<div align="center">
+
+<img src="public/favicon.svg" width="72" height="72" alt="ArchStory logo" />
+
 # ArchStory
 
-**System design, one request at a time.**
+### System design, one request at a time.
 
-Explore real architectures and watch each request travel through them hop by hop. Then build your own answer, check it against a reference, and get it reviewed.
+Watch real architectures handle each request hop by hop, build your own answer,<br />
+get it checked and reviewed, then rehearse it as a timed or AI mock interview.
 
-**[Try the live demo →](https://vishbay.github.io/archstory/)**
+<p>
+  <a href="https://vishbay.github.io/archstory/"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-open%20ArchStory-4f46e5?style=for-the-badge" /></a>
+</p>
+<p>
+  <a href="https://github.com/vishbay/archstory/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/vishbay/archstory?color=4f46e5" /></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-16a34a" /></a>
+  <img alt="22 designs" src="https://img.shields.io/badge/designs-22-0ea5e9" />
+  <img alt="132 follow-up questions" src="https://img.shields.io/badge/follow--up%20questions-132-8b5cf6" />
+  <img alt="No tracking" src="https://img.shields.io/badge/tracking-none-16a34a" />
+  <img alt="React and TypeScript" src="https://img.shields.io/badge/React%20%2B%20TypeScript-3178c6" />
+</p>
 
-![A redirect in the URL shortener design: the response travels back from the read replica, with the step explained in the Flow panel](docs/screenshot.png)
+**Free and open source** · **No account** · **Runs in your browser** · **No tracking**
+
+<br />
+
+<img src="docs/screenshot.png" alt="A redirect in the URL shortener design: the request has reached the API service, the Flow panel explains the hop and shows the real message" width="100%" />
+
+</div>
+
+<br />
+
+## Why ArchStory
+
+System design interviews are not about memorising boxes and arrows. They are about explaining **what happens to a request**, **what breaks first**, and **what you would trade off**. ArchStory makes that concrete:
+
+- 🎬 **See it move.** Every design comes with request flows you play step by step, with the real message (HTTP, SQL, events) and why each hop happens.
+- ✏️ **Build your own.** Draw your answer on the same canvas, record its flows, and get automatic checks against a reference.
+- 🎙️ **Rehearse it.** Timed interviews with a checklist per phase, an AI interviewer you can answer out loud, and follow-up questions that come back until you know them.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/home.png" alt="The landing page" /><br /><sub><b>Home</b>: start from the library or bring your own question</sub></td>
+    <td width="50%"><img src="docs/practice.png" alt="Practice mode, side by side with the reference and the Numbers panel open" /><br /><sub><b>Practice</b>: your answer next to the reference, gaps outlined, numbers to hand</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/regions.png" alt="The multi-region design with us-east-1 failed: what keeps serving, what data is lost and the gaps in the plan" /><br /><sub><b>Fail a region</b>: what keeps serving, what data is lost, how long recovery takes, and the gaps in the plan</sub></td>
+  </tr>
+</table>
+
+## The library
+
+22 designs, each with requirements, 2 to 4 request flows, notes on trade-offs and failure, monitoring, starting numbers for estimates, and 6 follow-up questions with model answers. 🟢 easy · 🟡 medium · 🔴 hard
+
+| Classic interview questions | | Solutions architect scenarios | |
+|---|---|---|---|
+| 🟢 URL Shortener | 🟡 Search Autocomplete | 🔴 Multi-Region Active-Active App | 🔴 Monolith to Cloud Migration |
+| 🟡 News Feed | 🟡 Distributed Rate Limiter | 🟡 RAG Knowledge Assistant | 🟡 Data Platform: Lake and Warehouse |
+| 🟡 Video Streaming | 🟡 Notification System | 🟡 IoT Telemetry Platform | 🟡 Enterprise Integration Backbone |
+| 🟡 Multi-tenant SaaS | 🟡 Distributed Job Scheduler | | |
+| 🔴 Chat Messaging | 🔴 Ride Hailing | | |
+| 🔴 E-commerce Checkout | 🔴 Ticket Booking | | |
+| 🔴 File Storage and Sync | 🔴 Web Crawler | | |
+| 🔴 Distributed Key-Value Store | 🔴 Payment Ledger | | |
+
+**Not limited to these.** Import any other question as JSON, or press *Prompt for your AI* and have ChatGPT, Claude, Gemini or any assistant write one. An imported design gets everything the built-in ones do.
 
 ## Features
 
-- **Explore** 22 built-in designs with step-by-step request flows: URL shortener, news feed, ride hailing, chat, video streaming, checkout, ticket booking, file storage and sync, multi-tenant SaaS, autocomplete, rate limiter, notifications, web crawler, distributed key-value store, payment ledger and job scheduler, plus solutions architect scenarios: multi-region active-active app, monolith to cloud migration, RAG knowledge assistant, data platform, IoT telemetry and enterprise integration.
-- **Any cloud**: switch between cloud-neutral names, AWS and GCP, with official icons.
-- **Network and zones**: VPCs, subnets and availability-zone failure drills.
-- **Regions and disaster recovery**: for designs with a `regions` section, a Regions view and a region failure drill with RTO, RPO, cross-region replication and the gaps in the plan.
-- **Monitoring**: SLOs with error budgets, alerts (page or ticket), what to watch on each component and how to debug it, plus a telemetry layer you can switch on.
-- **Practice**: draw your own design (type `/` to add components, start from a skeleton), record its flows and get automatic checks against a reference. Save attempts and track your progress.
-- **Timed interviews**: the usual phases on a 30, 45 or 60 minute clock, with a checklist for each.
-- **Estimate calculator**: requests per second, storage, bandwidth and cache size, with the arithmetic shown, plus a rough monthly cloud cost with editable prices and the usual ways to cut it.
-- **Follow-up questions**: 132 questions interviewers ask next, with model answers and a daily spaced-repetition drill.
-- **AI interviewer** (optional, your own API key): a mock interview that asks one question at a time about your design, by text or voice.
-- **Review with your own AI**: ArchStory writes the prompt and its findings appear on your design. Paste it into any assistant, or optionally connect your own API key (Anthropic, OpenAI, Gemini, DeepSeek, or a local server such as Ollama) to send it from the app.
-- **Any question, not just the built-in ones**: import any other system design question as JSON, or have your own AI write one. An imported design gets everything the built-in ones do: Explore, Practice with automatic checks, timed interviews, AI review and the follow-up drill. No AI or server of its own, no account. An API key stays in your browser and goes only to the provider you pick.
+<table>
+<tr><td valign="top" width="50%">
+
+**Explore**
+- Request flows, step by step, with the camera following each hop
+- Cloud-neutral names, or AWS and GCP with official icons
+- Network layer: VPCs, subnets, availability-zone failure drills
+- Regions and disaster recovery: RTO, RPO, replication, region failure drill
+- Hybrid designs with an on-premises box and a hybrid link
+- Monitoring: SLOs, error budgets, alerts, what to watch and how to debug
+- Export the canvas as a PNG
+
+</td><td valign="top" width="50%">
+
+**Practice**
+- Draw your answer: palette, `/` quick add, skeletons to start from
+- Record flows and run automatic checks against the reference
+- Three hints before the full answer, side by side to compare
+- Written reasoning, including security and key decisions
+- Timed interviews (30, 45 or 60 minutes) with a checklist per phase
+- AI interviewer by text or voice, and AI review with scores on your design
+- Saved attempts with progress over time, backup and restore
+
+</td></tr>
+<tr><td valign="top">
+
+**Numbers**
+- Each design opens with its own starting estimates
+- Requests per second, storage, bandwidth, cache and instances, arithmetic shown
+- A rough monthly bill, the usual ways to cut it, named for your cloud
+- *Often missed* costs: cross-zone and cross-region traffic, load balancers, NAT gateways, logs
+
+</td><td valign="top">
+
+**Drill**
+- 132 follow-up questions interviewers ask next, with model answers
+- A daily spaced-repetition drill: the ones you miss come back sooner
+- Imported designs' questions join the drill too
+
+</td></tr>
+</table>
 
 ## Quick start
 
+Use it in the browser: **[vishbay.github.io/archstory](https://vishbay.github.io/archstory/)**. Or run it yourself:
+
 ```bash
+git clone https://github.com/vishbay/archstory.git
+cd archstory
 npm install
 npm run dev     # http://localhost:5173
 npm test
 ```
 
-## What AI costs
+## AI, your way
 
-Everything except the AI features is free and runs in your browser. For the AI features you have two options:
+ArchStory has no AI of its own and no server. For reviews, making designs and the AI interviewer, pick one:
 
-- **Copy and paste** (the default): ArchStory writes the prompt and you paste it into ChatGPT, Claude, Gemini or any assistant. It costs nothing beyond the subscription you already have.
-- **Your own API key** (optional): ArchStory sends the prompt for you and you pay the provider per token. A local model through Ollama or LM Studio costs nothing.
+- **Copy and paste** (the default): ArchStory writes the prompt, you paste it into ChatGPT, Claude, Gemini or any assistant and paste the reply back. Nothing beyond the subscription you already have.
+- **Your own API key** (optional): Anthropic, OpenAI, Google Gemini, DeepSeek, or a local OpenAI-compatible server such as Ollama or LM Studio. ArchStory sends the prompt for you and you pay the provider per token, usually a few dollars a month. You can set a model per feature, for example a strong one for reviews and a cheap, fast one for the interviewer.
+
+Your key stays in your browser (for the tab only, unless you choose to remember it) and goes only to the provider you pick.
+
+<details>
+<summary><b>What the AI features cost, per provider and model</b></summary>
+
+<br />
 
 Estimated cost per action and per month, in US dollars, at list prices on 10 November 2026:
 
@@ -66,15 +164,26 @@ How these are worked out:
 
 For interview practice, a mid-range model (Claude Sonnet 5.5, GPT-6.1 Sol or Gemini 3.8 Flash) gives good reviews and probing questions for a few dollars a month. The smallest models are close to free and fine for quick drills; the largest ones rarely improve a design review enough to justify the cost. You can also set a model per feature in the AI settings, for example a strong model for reviews and making designs and a faster, cheaper one for the AI interviewer.
 
+</details>
+
+## Privacy
+
+- No analytics, no trackers, no account, no ArchStory server.
+- Your answers, attempts, reviews and settings live in your browser's local storage. *Back up* in Practice exports them as a JSON file, which is also how you move them to another device.
+- The only requests that leave your browser are the ones you start: AI calls to the provider you connect, and loading the author card from GitHub.
+
 ## Add a design
 
-The built-in designs are a starting set. You can add any other question, in the app or in the repo.
+**In the app** (nothing to install): use *Import* in the left panel or on the home page, or *Prompt for your AI*. Imported designs are saved in your browser under *My designs* and work exactly like the library.
 
-**In the app** (nothing to install): use Import in the left panel or on the home page, or Prompt for your AI to have an assistant write one. Imported designs are saved in your browser under My designs, and you can practise them exactly like the library.
+**In the repo**, to contribute one to the library: designs are JSON files in the [`archstory/v1`](public/schema/archstory-v1.json) format, with components, connections, request flows and optional monitoring, regions and estimate numbers. Layout is automatic. Add a file to `src/library/` and run `npm test` to validate it.
 
-**In the repo**, to contribute one to the library: Designs are JSON files in the [`archstory/v1`](public/schema/archstory-v1.json) format: components, connections and request flows. Layout is automatic. Add a file to `src/library/` and run `npm test` to validate it.
+<details>
+<summary><b>Format notes: multi-region, hybrid and on-premises designs</b></summary>
 
-### Multi-region designs
+<br />
+
+#### Multi-region designs
 
 Add a top-level `regions` section only when the question is about more than one region (disaster recovery, global users). It lists the regions and how the design survives losing one:
 
@@ -100,7 +209,7 @@ Two optional fields on components say where they run. `regions` is `all` (a copy
 ]
 ```
 
-### Hybrid and on-premises designs
+#### Hybrid and on-premises designs
 
 For migration or hybrid questions, give a component that runs in the customer's own data centre `"site": "onprem"` (the default is `cloud`). It is drawn in an On-premises box outside the VPC, the zones and the regions, and failing a cloud zone or region does not touch it; the Resilience panel still warns that the data centre is a single site. An on-prem component takes no cloud `subnet`, `regions` or `replication`. Connect it to the cloud through a `hybrid_link` node (Direct Connect, Cloud Interconnect or a site-to-site VPN), and hops across it are described with their latency and per-GB cost.
 
@@ -111,6 +220,10 @@ For migration or hybrid questions, give a component that runs in the customer's 
 
 Other kinds for these questions: `mqtt_broker` (IoT devices), `vector_db` (embeddings for retrieval), `llm` (a model endpoint such as Amazon Bedrock or Vertex AI), `schema_registry` and `data_catalog`. Any other kind still works and draws as a generic component.
 
+</details>
+
 ## License
 
 [MIT](LICENSE). AWS and Google Cloud icons are downloaded from the providers on first run and are not part of this repository; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). ArchStory is not affiliated with Amazon or Google.
+
+<div align="center"><sub>Made by <a href="https://github.com/vishbay">@vishbay</a>. Psst: click the logo in the app five times.</sub></div>
