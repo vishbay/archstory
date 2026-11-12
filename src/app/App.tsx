@@ -71,8 +71,8 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null)
   const [tab, setTab] = useState<InspectorTab>('step')
   // On a compact window the left panel starts closed so the diagram keeps its room; a saved choice always wins.
-  const [leftOpen, setLeftOpen] = useState(() => store.get('archstory.left', window.innerWidth > COMPACT_BELOW))
-  const [rightOpen, setRightOpen] = useState(() => store.get('archstory.right', true))
+  const [leftPref, setLeftOpen] = useState(() => store.get('archstory.left', window.innerWidth > COMPACT_BELOW))
+  const [rightPref, setRightOpen] = useState(() => store.get('archstory.right', true))
   const [importing, setImporting] = useState(false)
   const [importText, setImportText] = useState('')
   const [aiOpen, setAiOpen] = useState(false)
@@ -82,6 +82,9 @@ export function App() {
   useEffect(() => onOpenAiSettings(() => setAiOpen(true)), [])
   const player = usePlayer(flow?.steps.length ?? 0, `${design.id}/${flow?.id}`)
   const viewport = useViewportWidth()
+  // The stacked small-screen layout puts both panels under the canvas and always shows them, so there is nothing to toggle.
+  const stacked = viewport <= 900
+  const leftOpen = leftPref || stacked, rightOpen = rightPref || stacked
   const bar = useBars(viewport)
   const insets = { ...panelInsets(viewport, leftOpen, rightOpen), top: bar.bars }
   const net = network && !!design.network
@@ -126,8 +129,8 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [mode])
   useEffect(() => { store.set('archstory.cloud', cloud) }, [cloud])
-  useEffect(() => { store.set('archstory.left', leftOpen) }, [leftOpen])
-  useEffect(() => { store.set('archstory.right', rightOpen) }, [rightOpen])
+  useEffect(() => { store.set('archstory.left', leftPref) }, [leftPref])
+  useEffect(() => { store.set('archstory.right', rightPref) }, [rightPref])
 
   const open = (id: string) => { setDesignId(id); setFlowId(''); setSelected(null); setTab('step') }
   const select = (id: string | null) => { setSelected(id); if (id) { setTab(t => (t === 'monitoring' || t === 'questions' ? t : 'component')); setRightOpen(true) } }
@@ -147,7 +150,7 @@ export function App() {
   return (
     <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
       <header className="topbar">
-        {mode === 'home' ? <span className="icon-slot" aria-hidden /> : (   // keeps the logo in the same place on every page
+        {mode === 'home' || stacked ? <span className="icon-slot" aria-hidden /> : (   // keeps the logo in the same place on every page
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the requirements and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
             title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'requirements and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
         )}
@@ -175,7 +178,7 @@ export function App() {
           </div>
         )}
         <button className="icon ghost" aria-label={`Theme: ${theme.pref}. Click to change`} title={`Theme: ${theme.pref} (click to change)`} onClick={theme.cycle}>{themeIcon}</button>
-        {mode !== 'home' && (
+        {mode !== 'home' && !stacked && (
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the inspector' : 'Show or hide the flow inspector'} aria-expanded={rightOpen}
             title={`${rightOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'inspector' : 'flow, component and notes panel'}`} onClick={() => setRightOpen(o => !o)}>◫</button>
         )}
