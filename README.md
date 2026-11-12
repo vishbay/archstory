@@ -64,7 +64,7 @@ System design interviews are not about memorising boxes and arrows. They are abo
 | 🔴 File Storage and Sync | 🔴 Web Crawler | | |
 | 🔴 Distributed Key-Value Store | 🔴 Payment Ledger | | |
 
-**Not limited to these.** Import any other question as JSON, or press *Prompt for your AI* and have ChatGPT, Claude, Gemini or any assistant write one. An imported design gets everything the built-in ones do.
+**Not limited to these.** Import any other question as JSON, or press *Make a design with AI* and have ChatGPT, Claude, Gemini or any assistant write one. An imported design gets everything the built-in ones do.
 
 ## Features
 
@@ -79,6 +79,7 @@ System design interviews are not about memorising boxes and arrows. They are abo
 - Hybrid designs with an on-premises box and a hybrid link
 - Monitoring: SLOs, error budgets, alerts, what to watch and how to debug
 - Export the canvas as a PNG
+- *Ask AI about this design*: copies the design you are studying as a prompt for any assistant, so you can ask your own questions about it
 
 </td><td valign="top" width="50%">
 
@@ -174,7 +175,7 @@ For interview practice, a mid-range model (Claude Sonnet 5.5, GPT-6.1 Sol or Gem
 
 ## Add a design
 
-**In the app** (nothing to install): use *Import* in the left panel or on the home page, or *Prompt for your AI*. Imported designs are saved in your browser under *My designs* and work exactly like the library.
+**In the app** (nothing to install): use *Import* in the left panel or on the home page, or *Make a design with AI*. Imported designs are saved in your browser under *My designs* and work exactly like the library.
 
 **In the repo**, to contribute one to the library: designs are JSON files in the [`archstory/v1`](public/schema/archstory-v1.json) format, with components, connections, request flows and optional monitoring, regions and estimate numbers. Layout is automatic. Add a file to `src/library/` and run `npm test` to validate it.
 

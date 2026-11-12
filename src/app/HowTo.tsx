@@ -45,7 +45,7 @@ function Walkthrough({ id, title, intro, steps, actions }: { id: string; title: 
 }
 
 const PRACTICE_STEPS: Step[] = [
-  { title: 'Describe the question', body: 'Prompt for your AI writes a prompt with the format and rules. Paste it into ChatGPT, Claude or Gemini, or send it with your own key.', Mock: Describe },
+  { title: 'Describe the question', body: 'Make a design with AI writes a prompt with the format and rules. Paste it into ChatGPT, Claude or Gemini, or send it with your own key.', Mock: Describe },
   { title: 'Paste the JSON into Import', body: 'Paste the whole answer or drop a .json file. It is checked as you type, and a fix request is one click away if something is off.', Mock: Paste },
   { title: 'Explore it', body: 'It opens like any built-in design: press play and follow each request hop by hop.', Mock: Explore },
   { title: 'Build and check your answer', body: 'In Practice, build your own answer, record its flows, and run the checks against the design. Hints and side by side help when you are stuck.', Mock: Build },
@@ -56,7 +56,7 @@ const PRACTICE_STEPS: Step[] = [
 export function HowToImport({ onImport, onGenerate }: { onImport: () => void; onGenerate: () => void }) {
   return <Walkthrough id="howto-practise" title="Practise any question" intro="The library is a start. Any other system design question works the same way:"
     steps={PRACTICE_STEPS} actions={<>
-      <button className="primary" onClick={onGenerate}>Prompt for your AI</button>
+      <button className="primary" onClick={onGenerate}>Make a design with AI</button>
       <button onClick={onImport}>Import a design</button>
     </>} />
 }

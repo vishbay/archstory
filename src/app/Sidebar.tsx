@@ -21,9 +21,9 @@ export function Section({ id, title, count, forceOpen, children }: { id: string;
 }
 
 /** The Explore sidebar: the requirements stay in view; designs are chosen from the picker (⌘K). */
-export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onViewJson }: {
+export function Sidebar({ current, onBrowse, onAsk, onImport, onExport, onGenerate, onViewJson }: {
   current: Design
-  onBrowse: () => void; onImport: () => void; onExport: () => void; onGenerate: () => void; onViewJson: () => void
+  onBrowse: () => void; onAsk: () => void; onImport: () => void; onExport: () => void; onGenerate: () => void; onViewJson: () => void
 }) {
   const r = current.requirements
   const has = !!current.meta.summary || r.functional.length + r.nonFunctional.length + r.scale.length > 0
@@ -39,11 +39,12 @@ export function Sidebar({ current, onBrowse, onImport, onExport, onGenerate, onV
       </div>
       <div className="panel-foot side-actions">
         <button className="browse" onClick={onBrowse} title="Search all designs (⌘K / Ctrl+K)">Browse designs<kbd>⌘K</kbd></button>
+        <button className="primary ask-ai" onClick={onAsk} title="Copy this design as a prompt for ChatGPT, Claude, Gemini or any assistant, then ask your questions about it">✦ Ask AI about this design</button>
         <div className="row wrap">
           <button onClick={onImport} title="Add any other system design question as a JSON design, then explore and practise it">Import</button>
           <button onClick={onViewJson} title="See the JSON behind the design you are viewing">View JSON</button>
           <button onClick={onExport}>Export</button>
-          <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant">Prompt for your AI</button>
+          <button onClick={onGenerate} title="ArchStory has no built-in AI: this writes a prompt for ChatGPT, Claude, Gemini or any assistant to make a new design">Make a design with AI</button>
         </div>
       </div>
     </>

@@ -31,6 +31,7 @@ import { EXPLORE_TOUR, PRACTICE_TOUR } from './tourSteps'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Numbers, NUMBERS_H } from './Numbers'
 import { ProfileCard } from './ProfileCard'
+import { DiscussDialog } from './DiscussDialog'
 
 type View = 'canvas' | 'timeline'
 const MINE_KEY = 'archstory.myDesigns'
@@ -80,6 +81,7 @@ export function App() {
   const [importText, setImportText] = useState('')
   const [aiOpen, setAiOpen] = useState(false)
   const [estimating, setEstimating] = useState(false)
+  const [asking, setAsking] = useState(false)
   const [drill, setDrill] = useState<{ id: string | null } | null>(null)
   useEffect(() => onOpenDrill(id => setDrill({ id })), [])
   useEffect(() => onOpenAiSettings(() => setAiOpen(true)), [])
@@ -212,7 +214,7 @@ export function App() {
       ) : (<>
       {leftOpen && (
         <aside className="left">
-          <Sidebar current={design} onBrowse={() => setPicking(true)}
+          <Sidebar current={design} onBrowse={() => setPicking(true)} onAsk={() => setAsking(true)}
             onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} />
         </aside>
       )}
@@ -266,6 +268,7 @@ export function App() {
       {jsonOf && <JsonDialog design={jsonOf} onClose={() => setJsonOf(null)} onDownload={() => exportDesign(jsonOf)} />}
       {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
+      {asking && <DiscussDialog design={design} flowId={flow?.id} onClose={() => setAsking(false)} />}
       <ConfirmDialog />
       {profile && <ProfileCard onClose={() => setProfile(false)} />}
       {estimating && <EstimateDialog problem={design} cloud={cloud} onClose={() => setEstimating(false)} />}

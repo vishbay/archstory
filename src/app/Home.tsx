@@ -183,7 +183,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
           <p>Start with a classic, or bring the question you are worried about.</p>
           <div className="row wrap">
             <button className="primary big" onClick={() => onPractice(first.id)}>Start practising</button>
-            <button className="big" onClick={onGenerate}>Prompt for your AI</button>
+            <button className="big" onClick={onGenerate}>Make a design with AI</button>
             <button className="big" onClick={onImport}>Import a design</button>
           </div>
         </section>
