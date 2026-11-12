@@ -100,7 +100,7 @@ export function Home({ library, mine, onExplore, onPractice, onImport, onGenerat
               <button className="big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
               <button className="link" onClick={onTour}>Take the 1-minute tour</button>
             </div>
-            <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span></p>
+            <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span><span title="No analytics or trackers. Your work stays in this browser; AI calls go only to the provider you connect.">✓ No tracking, nothing collected</span></p>
           </div>
           <HeroPreview />
         </section>
