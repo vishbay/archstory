@@ -13,7 +13,7 @@ import { crossing, placement } from '../model/network'
 import { haOf, impactOf, ON_PREM_TEXT, placementsOf, resilience, zoneName, type Impact } from '../model/availability'
 import { footprintOf, homeRegion, regionDrill, regionImpactOf, replicationOf, STRATEGY_TEXT } from '../model/regions'
 import type { ZoneState } from './BandCanvas'
-import { KIND_TEXT, KIND_VAR } from './stepKinds'
+import { KIND_INK, KIND_TEXT, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 import { useTabStrip } from './hooks'
 
@@ -123,13 +123,13 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
               <div className="card current-card">
                 <div className="card-meta">
                   <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}{at !== null ? ` · at ${fmtRtt(at)}` : ''}</span>
-                  <span className="pill" style={{ color: KIND_VAR[cur.kind], borderColor: KIND_VAR[cur.kind] }}>{KIND_TEXT[cur.kind]}</span>
+                  <span className="pill" style={{ color: KIND_INK[cur.kind], borderColor: KIND_VAR[cur.kind] }}>{KIND_TEXT[cur.kind]}</span>
                 </div>
                 <div className="card-hop">
                   <NodeIcon node={byId[cur.from]} cloud={cloud} size={18} /> {name(cur.from)}{hop && instLabel(hop.from)}
                   {cur.from !== cur.to && <> <span className="muted">→</span> <NodeIcon node={byId[cur.to]} cloud={cloud} size={18} /> {name(cur.to)}{hop && instLabel(hop.to)}</>}
                 </div>
-                <div className="mono" style={{ color: KIND_VAR[cur.kind] }}>{cur.label}</div>
+                <div className="mono" style={{ color: KIND_INK[cur.kind] }}>{cur.label}</div>
                 {cur.detail && <p>{cur.detail}</p>}
                 {network && crossing(design, cur, cloud) && <p className="net-note">🔒 {crossing(design, cur, cloud)}</p>}
                 {hop?.cross && (byRegion

@@ -8,7 +8,7 @@ import { cloudIconUrl } from '../model/cloudIcons'
 import { layoutBands } from '../layout/bands'
 import { fmtRtt, phaseBudget, phaseOfStep, rttTimes, stateAt, stateChanges } from '../model/protocol'
 import { Packet } from './Packet'
-import { KIND_VAR } from './stepKinds'
+import { KIND_INK, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 
 const ROW = 46
@@ -129,14 +129,14 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
           const side = left ? -1 : 1
           const path = local ? `M${x1},${y - 8} h${34 * side} v16 h${-34 * side}` : `M${x1},${y} L${x2},${y}`
           return (
-            <g key={i} opacity={i < step ? 0.8 : i === step ? 1 : 0.22} onClick={() => jump(i)} style={{ cursor: 'pointer' }}>
+            <g key={i} opacity={i <= step ? 1 : 0.22} onClick={() => jump(i)} style={{ cursor: 'pointer' }}>
               <rect x={0} y={y - ROW / 2} width={W} height={ROW} className={i === step ? 'tl-row cur' : 'tl-row'} />
               <text x={10} y={proto ? y - 2 : y + 4} className="tl-num">{i + 1}</text>
               {proto && <text x={10} y={y + 12} className="tl-time">{fmtRtt(times[i])}</text>}
-              <path d={path} fill="none" style={{ stroke: c }} strokeWidth={i === step ? 2.5 : 1.6}
+              <path d={path} fill="none" style={{ stroke: c }} strokeOpacity={i < step ? 0.75 : 1} strokeWidth={i === step ? 2.5 : 1.6}
                 strokeDasharray={dash[s.kind]} markerEnd={`url(#arr-${s.kind})`} />
               <text x={local ? x1 + 40 * side : (x1 + x2) / 2} y={local ? y + 4 : y - 7} textAnchor={local ? (left ? 'end' : 'start') : 'middle'}
-                className="tl-label" style={{ fill: c }}>{s.label}</text>
+                className="tl-label" style={{ fill: KIND_INK[s.kind] }}>{s.label}</text>
               {Object.entries(changes[i]).map(([id, v]) => {
                 if (cx[id] === undefined) return null
                 // State text goes on the side away from a local step's loop.

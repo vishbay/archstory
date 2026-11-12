@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { store } from './hooks'
-import { KIND_GLYPH, KIND_LEGEND, KIND_SHORT, KIND_VAR } from './stepKinds'
+import { KIND_GLYPH, KIND_INK, KIND_LEGEND, KIND_SHORT } from './stepKinds'
 
 /** What the markers on the canvas and in the step list mean. Pinned under the Flow tab. */
 export function Legend({ monitoring }: { monitoring: boolean }) {
@@ -10,7 +10,7 @@ export function Legend({ monitoring }: { monitoring: boolean }) {
     <div className="panel-foot" aria-label="Legend">
       <div className="legend-row">
         {(['req', 'res', 'async', 'local'] as const).map(k => (
-          <span key={k} className="legend-chip" title={KIND_LEGEND[k]}><i className="step-glyph" style={{ color: KIND_VAR[k] }} aria-hidden>{KIND_GLYPH[k]}</i>{KIND_SHORT[k]}</span>
+          <span key={k} className="legend-chip" title={KIND_LEGEND[k]}><i className="step-glyph" style={{ color: KIND_INK[k] }} aria-hidden>{KIND_GLYPH[k]}</i>{KIND_SHORT[k]}</span>
         ))}
         <button className="link legend-toggle" aria-expanded={open} onClick={toggle}>{open ? 'Hide key ▴' : 'Show key ▾'}</button>
       </div>

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Flow, Step } from '../model/schema'
 import { phaseGroups } from '../model/phases'
-import { KIND_GLYPH, KIND_TEXT, KIND_VAR } from './stepKinds'
+import { KIND_GLYPH, KIND_INK, KIND_TEXT } from './stepKinds'
 import { reducedMotion } from './hooks'
 
 export function StepList({ flow, step, jump, name }: { flow: Flow; step: number; jump: (i: number) => void; name: (id: string) => string }) {
@@ -31,7 +31,7 @@ export function StepList({ flow, step, jump, name }: { flow: Flow; step: number;
       role="button" tabIndex={0} aria-current={i === step ? 'step' : undefined}
       aria-label={`Step ${i + 1}, ${KIND_TEXT[s.kind]}: ${name(s.from)}${s.from !== s.to ? ` to ${name(s.to)}` : ''}, ${s.label}`}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(i) } }}>
-      <span className="step-glyph" style={{ color: KIND_VAR[s.kind] }} title={KIND_TEXT[s.kind]} aria-hidden>{KIND_GLYPH[s.kind]}</span>
+      <span className="step-glyph" style={{ color: KIND_INK[s.kind] }} title={KIND_TEXT[s.kind]} aria-hidden>{KIND_GLYPH[s.kind]}</span>
       <span className="step-hop"><span className="step-no">{i + 1}</span>{name(s.from)}{s.from !== s.to && ` → ${name(s.to)}`}</span>
       <span className="mono muted step-label">{s.label}</span>
     </li>
