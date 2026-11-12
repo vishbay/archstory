@@ -18,6 +18,7 @@ describe('AI answers', () => {
     expect(p).toContain('Do NOT add telemetry components')
     expect(p).toContain('"phase"')
     expect(p).toContain('Set "meta.difficulty" to "easy", "medium" or "hard"')
+    expect(p).toContain('"requirements.estimate"')
     expect(p).toContain('Include a "regions" section only when the task asks for multi-region, disaster recovery or global users')
     expect(p).toContain('"replication"')
     expect(p).toContain('15. Do not use em dashes')

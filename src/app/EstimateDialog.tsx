@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Cloud } from '../model/kinds'
 import type { Design } from '../model/schema'
-import { cleanCost, cost, costText, money, type CostInputs } from '../practice/cost'
-import { bytes, cleanInputs, count, estimate, estimateText, parseAmount, type EstimateInputs } from '../practice/estimate'
+import { cleanCost, cost, costText, DEFAULT_COST, designShape, money, type CostInputs } from '../practice/cost'
+import { bytes, cleanInputs, count, DEFAULT_INPUTS, estimate, estimateText, parseAmount, type EstimateInputs } from '../practice/estimate'
 import { store } from './hooks'
 import { copyText } from './prompts'
 
@@ -30,6 +31,17 @@ const COST_PRICES: Field[] = [
   { key: 'cdnPrice', label: 'CDN egress $/GB', kind: 'count' },
   { key: 'tierPrice', label: 'Infrequent access $/GB-month', kind: 'count' },
 ]
+const COST_MISSED: Field[] = [
+  { key: 'crossZonePrice', label: 'Cross-zone $/GB', kind: 'count', hint: 'about $0.01 each way' },
+  { key: 'crossRegionPrice', label: 'Cross-region $/GB', kind: 'count' },
+  { key: 'lbHourPrice', label: 'Load balancer $/hour', kind: 'count' },
+  { key: 'lbGbPrice', label: 'Load balancer $/GB processed', kind: 'count' },
+  { key: 'natGb', label: 'Outbound GB through NAT per month', kind: 'count', hint: 'calls to third parties; a rough guess, 5% of egress when the design has any' },
+  { key: 'natHourPrice', label: 'NAT gateway $/hour', kind: 'count' },
+  { key: 'natGbPrice', label: 'NAT $/GB', kind: 'count' },
+  { key: 'logBytes', label: 'Logged per request', kind: 'bytes' },
+  { key: 'logPrice', label: 'Logs $/GB ingested', kind: 'count' },
+]
 const COST_CHOICES: Field[] = [
   { key: 'objectPercent', label: 'Data in object storage (%)', kind: 'count', hint: 'bulk blobs, not rows' },
   { key: 'cdnPercent', label: 'Egress served by a CDN (%)', kind: 'count' },
@@ -42,22 +54,39 @@ const COST_CHOICES: Field[] = [
 const show = (f: Field, v: number) => (f.kind === 'bytes' ? bytes(v).replace(' ', '') : count(v))
 
 /** Back-of-the-envelope numbers with the arithmetic shown. In Practice the working can go straight into your notes. */
-export function EstimateDialog({ problem, onClose, onAddToNotes }: { problem: Design; onClose: () => void; onAddToNotes?: (text: string) => void }) {
+// Cost choices that describe a design's shape (how much is object storage, how much a CDN could serve), not prices.
+const COST_SHAPE = ['objectPercent', 'cdnPercent', 'cdnPotential', 'spotPercent'] as const
+const pick = (o: Record<string, unknown>, keys: readonly string[]) => Object.fromEntries(keys.filter(k => o[k] !== undefined).map(k => [k, o[k]]))
+const same = (a: object, b: object) => JSON.stringify(a) === JSON.stringify(b)
+/** The saved value, unless nothing was saved or it is just the old generic defaults; then this design's own numbers. */
+function savedOr<T extends object>(saved: unknown, clean: (raw: unknown) => T, generic: T, design: () => T): T {
+  if (!saved) return design()
+  const v = clean(saved)
+  return same(v, generic) ? design() : v
+}
+
+export function EstimateDialog({ problem, cloud = 'neutral', onClose, onAddToNotes }: { problem: Design; cloud?: Cloud; onClose: () => void; onAddToNotes?: (text: string) => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const key = `archstory.estimate.${problem.id}`
-  const [inputs, setInputs] = useState<EstimateInputs>(() => cleanInputs(store.get(key, null)))
+  // Start from this design's own numbers; a saved edit wins, but an untouched copy of the old generic defaults does not.
+  const own = problem.requirements.estimate ?? {}
+  const designInputs = () => cleanInputs({ ...DEFAULT_INPUTS, ...own })
+  const designCost = (base: CostInputs = DEFAULT_COST) => cleanCost({ ...base, ...pick(own, COST_SHAPE) })
+  const [inputs, setInputs] = useState<EstimateInputs>(() => savedOr(store.get(key, null), cleanInputs, DEFAULT_INPUTS, designInputs))
   const costKey = `archstory.cost.${problem.id}`
-  const [prices, setPrices] = useState<CostInputs>(() => cleanCost(store.get(costKey, null)))
+  const [prices, setPrices] = useState<CostInputs>(() => savedOr(store.get(costKey, null), cleanCost, DEFAULT_COST, () => designCost()))
+  const resetToDesign = () => { setInputs(designInputs()); setPrices(p => designCost({ ...p, natGb: undefined })); setRaw({}); setDone('') }
   const [raw, setRaw] = useState<Partial<Record<string, string>>>({})
   const [done, setDone] = useState('')
   useEffect(() => { dialog.current?.showModal() }, [])
   useEffect(() => { store.set(key, inputs) }, [key, inputs])
   useEffect(() => { store.set(costKey, prices) }, [costKey, prices])
   const lines = useMemo(() => estimate(inputs), [inputs])
-  const bill = useMemo(() => cost(inputs, prices), [inputs, prices])
+  const shape = useMemo(() => designShape(problem), [problem])
+  const bill = useMemo(() => cost(inputs, prices, cloud, shape), [inputs, prices, cloud, shape])
 
   const fieldOf = (f: Field, isCost: boolean) => {
-    const current = (isCost ? prices : inputs) as unknown as Record<string, number>
+    const current = (isCost ? { ...prices, natGb: bill.natGb } : inputs) as unknown as Record<string, number>
     const text = raw[f.key] ?? show(f, current[f.key])
     const bad = raw[f.key] !== undefined && parseAmount(raw[f.key]!, f.kind) === null
     return (
@@ -84,6 +113,7 @@ export function EstimateDialog({ problem, onClose, onAddToNotes }: { problem: De
       {problem.requirements.scale.length > 0 && (
         <div className="est-given"><b>Given for {problem.meta.title}:</b> {problem.requirements.scale.map(s => `${s.label}: ${s.value}`).join(' · ')}</div>
       )}
+      <p className="muted small est-start">Starting numbers come from this design's requirements. Change any of them{problem.requirements.estimate ? <>, or <button className="link" onClick={resetToDesign}>go back to this design's numbers</button></> : null}.</p>
       <div className="est-grid">
         <div>
           <div className="seg" role="group" aria-label="Traffic from">
@@ -109,17 +139,25 @@ export function EstimateDialog({ problem, onClose, onAddToNotes }: { problem: De
         </table>
       </div>
       <details className="est-cost">
-        <summary>Monthly cost: about {money(bill.total)}</summary>
+        <summary>Monthly cost: about {money(bill.total)}, {money(bill.grand)} with often-missed items</summary>
         <p className="muted small">Approximate on-demand list prices, US regions, late 2026. Check your provider's pricing page. Every price is editable.</p>
         <div className="est-grid">
           <div>
             <div className="est-fields">{COST_PRICES.map(costField)}</div>
             <div className="est-fields">{COST_CHOICES.map(costField)}</div>
+            <div className="est-fields">{COST_MISSED.map(costField)}</div>
           </div>
           <div>
             <table className="est-results">
               <tbody>
                 {bill.lines.map(l => <tr key={l.id}><th>{l.label}</th><td><b>{l.value}</b><span>{l.formula}</span></td></tr>)}
+              </tbody>
+            </table>
+            <h4>Often missed</h4>
+            <table className="est-results">
+              <tbody>
+                {bill.missed.map(l => <tr key={l.id}><th>{l.label}</th><td><b>{l.value}</b><span>{l.formula}</span></td></tr>)}
+                <tr><th>Subtotal</th><td><b>{money(bill.missedTotal)}</b><span>not in the monthly total above; with these: {money(bill.grand)}</span></td></tr>
               </tbody>
             </table>
             <h4>Ways to cut it</h4>

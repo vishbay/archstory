@@ -49,7 +49,26 @@
         "label": "Retention",
         "value": "7 years ≈ 65 TB of entries, partitioned by month"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 10000000,
+      "writesPerUser": 8.64,
+      "volume": 1000,
+      "volumeUnit": "second",
+      "readsPerWrite": 5,
+      "peakFactor": 5,
+      "writeBytes": 300,
+      "readBytes": 500,
+      "years": 7,
+      "replicas": 3,
+      "cachePercent": 10,
+      "perInstance": 500,
+      "objectPercent": 20,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 10
+    }
   },
   "network": {
     "cidr": "10.14.0.0/16",

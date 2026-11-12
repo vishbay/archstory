@@ -55,7 +55,26 @@
         "label": "Tokens per question",
         "value": "About 800 to rewrite on a small model, 5k in and 400 out on the main model: about 2.3 cents"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 15000,
+      "writesPerUser": 4,
+      "volume": 60000,
+      "volumeUnit": "day",
+      "readsPerWrite": 2,
+      "peakFactor": 20,
+      "writeBytes": 20000,
+      "readBytes": 50000,
+      "years": 1,
+      "replicas": 3,
+      "cachePercent": 20,
+      "perInstance": 10,
+      "objectPercent": 70,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 30
+    }
   },
   "nodes": [
     {

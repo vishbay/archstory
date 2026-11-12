@@ -50,7 +50,26 @@
         "label": "Run history",
         "value": "30 days kept: about 1B attempt records, 500 GB"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 5000000,
+      "writesPerUser": 6,
+      "volume": 30000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 2,
+      "peakFactor": 10,
+      "writeBytes": 500,
+      "readBytes": 500,
+      "years": 0.08,
+      "replicas": 3,
+      "cachePercent": 10,
+      "perInstance": 1000,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 50
+    }
   },
   "network": {
     "cidr": "10.12.0.0/16",

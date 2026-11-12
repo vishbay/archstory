@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cleanCost, cost, costText, DEFAULT_COST, money } from './cost'
+import { cleanCost, cost, costText, DEFAULT_COST, designShape, money, NO_SHAPE, type DesignShape } from './cost'
+import type { Cloud } from '../model/kinds'
 import { DEFAULT_INPUTS } from './estimate'
 
 const run = (e = {}, c = {}) => cost({ ...DEFAULT_INPUTS, ...e }, { ...DEFAULT_COST, ...c })
@@ -77,5 +78,105 @@ describe('formatting', () => {
   it('keeps only sane stored values', () => {
     const c = cleanCost({ computePrice: 0.1, dbPrice: -1, cachePrice: 'x' })
     expect(c.computePrice).toBe(0.1); expect(c.dbPrice).toBe(DEFAULT_COST.dbPrice); expect(c.cachePrice).toBe(DEFAULT_COST.cachePrice)
+  })
+})
+
+const wording = (cloud: Cloud) => run0(cloud).levers
+const run0 = (cloud: Cloud, shape: Partial<DesignShape> = {}, c = {}, e = {}) =>
+  cost({ ...DEFAULT_INPUTS, ...e }, { ...DEFAULT_COST, ...c }, cloud, { ...NO_SHAPE, ...shape })
+const label = (cloud: Cloud, id: string) => wording(cloud).find(l => l.id === id)!.label
+
+describe('lever names per cloud', () => {
+  it('uses neutral wording by default and for other clouds', () => {
+    expect(label('neutral', 'commit')).toBe('Commit to the steady baseline')
+    expect(label('neutral', 'spot')).toBe('Spot or preemptible capacity for workers')
+    expect(label('azure', 'spot')).toBe(label('neutral', 'spot'))
+    expect(run().levers.map(l => l.label)).toEqual(wording('neutral').map(l => l.label))
+  })
+  it('names AWS products', () => {
+    expect(label('aws', 'commit')).toBe('Savings Plans or Reserved Instances for the baseline')
+    expect(label('aws', 'spot')).toBe('Spot Instances for workers')
+    expect(label('aws', 'tier')).toBe('S3 Intelligent-Tiering or Standard-IA after 90 days')
+    expect(label('aws', 'cdn')).toContain('CloudFront')
+    expect(label('aws', 'replica')).toBe('One fewer Aurora or RDS read replica')
+    expect(wording('aws').find(l => l.id === 'rightsize')!.why).toContain('EC2 Auto Scaling')
+  })
+  it('names GCP products', () => {
+    expect(label('gcp', 'commit')).toBe('Committed use discounts for the baseline')
+    expect(label('gcp', 'spot')).toBe('Spot VMs for workers')
+    expect(label('gcp', 'tier')).toBe('Autoclass or Nearline after 90 days')
+    expect(label('gcp', 'cdn')).toContain('Cloud CDN')
+    expect(label('gcp', 'replica')).toBe('One fewer Cloud SQL read replica')
+    expect(wording('gcp').find(l => l.id === 'rightsize')!.why).toContain('Cloud Run')
+  })
+  it('keeps the numbers the same across clouds', () => {
+    expect(wording('aws').map(l => l.saving)).toEqual(wording('neutral').map(l => l.saving))
+  })
+})
+
+// Defaults: 10M writes a day x 500 B = 5 GB a day, 150 GB a month, 1,500 GB egress, 110M requests a day.
+describe('often missed', () => {
+  const missed = (id: string, shape: Partial<DesignShape> = {}, c = {}, e = {}) => run0('neutral', shape, c, e).missed.find(l => l.id === id)
+  it('prices cross-zone copies of every write, only when there are replicas', () => {
+    expect(missed('cross-zone')!.value).toBe('$6')              // 5 GB x 2 x 30 x 0.02
+    expect(run0('neutral').missed.find(l => l.id === 'cross-zone')!.formula).toBe('5 GB a day of new data × 2 extra copies × 30 days × $0.02/GB')
+    expect(missed('cross-zone', {}, {}, { replicas: 1 })).toBeUndefined()
+  })
+  it('prices cross-region replication only with a regions section', () => {
+    expect(missed('cross-region')).toBeUndefined()
+    const l = missed('cross-region', { regions: 3 })!
+    expect(l.value).toBe('$6')                                  // 150 GB x 2 x 0.02
+  })
+  it('counts load balancers, at least one when there is traffic', () => {
+    const a = run0('neutral', { balancers: 2 }), b = run0('neutral')
+    expect(b.missed.find(l => l.id === 'lb')!.formula).toBe('1 × 730 h × $0.025/h + 1.7K GB in and out × $0.008/GB')
+    expect(a.missed.find(l => l.id === 'lb')!.formula).toMatch(/^2 × 730 h/)
+    expect(run0('neutral', { balancers: 0 }, {}, { dau: 0 }).missed.find(l => l.id === 'lb')!.formula).toMatch(/^0 × 730 h/)
+  })
+  it('defaults NAT traffic to zero, or 5% of egress with third parties', () => {
+    expect(run0('neutral').natGb).toBe(0)
+    expect(run0('neutral', { thirdParty: true }).natGb).toBeCloseTo(1500 * 0.05, 6)
+    expect(run0('neutral', { thirdParty: true }, { natGb: 10 }).natGb).toBe(10)
+  })
+  it('prices a NAT gateway per zone plus the GB through it', () => {
+    const r = run0('neutral', { zones: 3, thirdParty: true })
+    expect(r.missed.find(l => l.id === 'nat')!.formula).toBe('3 × 730 h × $0.045/h + 75 GB × $0.045/GB')
+    expect(run0('neutral').missed.find(l => l.id === 'nat')!.value).toBe('$33')   // 730 x 0.045 = 32.85
+  })
+  it('prices logs from requests, bytes per request and the ingest price', () => {
+    const l = missed('logs')!                                  // 110M requests a day x 500 B x 30 = 1,650 GB x 0.5 = 825
+    expect(l.value).toBe('$830')
+    expect(l.formula).toBe('110M requests a day × 500 B × 30 days = 1.7K GB × $0.5/GB ingested')
+  })
+  it('sums them into a grand total next to the existing total', () => {
+    const r = run0('neutral', { regions: 2, balancers: 1 })
+    expect(r.grand).toBeCloseTo(r.total + r.missedTotal, 6)
+    expect(r.total).toBeCloseTo(run().total, 6)
+    const t = costText(r); expect(t).toContain('Often missed'); expect(t).toContain('Logs:'); expect(t).not.toMatch(/[—–]/)
+  })
+  it('reads the shape from a design', () => {
+    const s = designShape({ nodes: [{ kind: 'api_gateway' }, { kind: 'load_balancer' }, { kind: 'llm' }, { kind: 'service' }], network: { zones: 2 }, regions: { regions: [1, 2, 3] } })
+    expect(s).toEqual({ regions: 3, zones: 2, balancers: 2, thirdParty: true })
+    expect(designShape({ nodes: [{ kind: 'service' }] })).toEqual(NO_SHAPE)
+  })
+})
+
+describe('older stored prices', () => {
+  it('fills the new keys with defaults', () => {
+    const old = { computePrice: 0.1, dbPrice: 0.4, tierDays: 30 }
+    const c = cleanCost(old)
+    expect(c.computePrice).toBe(0.1); expect(c.logPrice).toBe(0.5); expect(c.natGbPrice).toBe(0.045); expect(c.natGb).toBeUndefined()
+    expect(cleanCost({ ...DEFAULT_COST, crossZonePrice: undefined }).crossZonePrice).toBe(0.02)
+    expect(cleanCost({ natGb: 12 }).natGb).toBe(12); expect(cleanCost({ natGb: -1 }).natGb).toBeUndefined()
+  })
+})
+
+describe('load balancer traffic', () => {
+  it('leaves out what the CDN serves, since it never reaches the load balancer', () => {
+    const lb = (cdnPercent: number) => cost(DEFAULT_INPUTS, { ...DEFAULT_COST, cdnPercent }).missed.find(l => l.id === 'lb')!
+    const none = lb(0), most = lb(90)
+    expect(most.formula).toContain('not the 90% the CDN serves')
+    expect(none.formula).not.toContain('CDN')
+    expect(parseFloat(most.value.replace(/[^0-9.]/g, ''))).toBeLessThan(parseFloat(none.value.replace(/[^0-9.]/g, '')))
   })
 })

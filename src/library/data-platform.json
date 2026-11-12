@@ -57,7 +57,26 @@
         "label": "Late events",
         "value": "About 2% arrive more than 1 hour late, almost all within 3 days"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 20000000,
+      "writesPerUser": 100,
+      "volume": 2000000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 0.00002,
+      "peakFactor": 3.5,
+      "writeBytes": 250,
+      "readBytes": 100000,
+      "years": 2,
+      "replicas": 3,
+      "cachePercent": 20,
+      "perInstance": 5000,
+      "objectPercent": 90,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 60
+    }
   },
   "network": {
     "cidr": "10.20.0.0/16",

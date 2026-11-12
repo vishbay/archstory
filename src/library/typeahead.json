@@ -35,7 +35,26 @@
         "label": "Distinct queries kept",
         "value": "Top ~100M"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 1000000000,
+      "writesPerUser": 10,
+      "volume": 10000000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 5,
+      "peakFactor": 2,
+      "writeBytes": 100,
+      "readBytes": 500,
+      "years": 0.08,
+      "replicas": 3,
+      "cachePercent": 1,
+      "perInstance": 20000,
+      "objectPercent": 95,
+      "cdnPercent": 60,
+      "cdnPotential": 80,
+      "spotPercent": 20
+    }
   },
   "network": {
     "cidr": "10.7.0.0/16",

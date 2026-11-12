@@ -37,7 +37,26 @@
         "label": "Renditions",
         "value": "~6 per video (240p to 4K)"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 1000000,
+      "writesPerUser": 4.32,
+      "volume": 4320000,
+      "volumeUnit": "day",
+      "readsPerWrite": 1389,
+      "peakFactor": 2,
+      "writeBytes": 500000000,
+      "readBytes": 150000000,
+      "years": 5,
+      "replicas": 3,
+      "cachePercent": 0,
+      "perInstance": 2000,
+      "objectPercent": 100,
+      "cdnPercent": 95,
+      "cdnPotential": 98,
+      "spotPercent": 60
+    }
   },
   "network": {
     "cidr": "10.4.0.0/16",

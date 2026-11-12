@@ -39,7 +39,26 @@
         "label": "Followers",
         "value": "~200 on average, 50M+ for celebrities"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 200000000,
+      "writesPerUser": 2.5,
+      "volume": 500000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 100,
+      "peakFactor": 3.5,
+      "writeBytes": 1000,
+      "readBytes": 5000,
+      "years": 5,
+      "replicas": 3,
+      "cachePercent": 0.5,
+      "perInstance": 2000,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 20,
+      "spotPercent": 20
+    }
   },
   "network": {
     "cidr": "10.1.0.0/16",

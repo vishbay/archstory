@@ -31,7 +31,26 @@
         "label": "API keys",
         "value": "5M"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 50000000,
+      "writesPerUser": 864,
+      "volume": 500000,
+      "volumeUnit": "second",
+      "readsPerWrite": 0,
+      "peakFactor": 2,
+      "writeBytes": 0,
+      "readBytes": 0,
+      "years": 1,
+      "replicas": 3,
+      "cachePercent": 0,
+      "perInstance": 20000,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 0
+    }
   },
   "network": {
     "cidr": "10.8.0.0/16",

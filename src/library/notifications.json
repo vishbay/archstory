@@ -33,7 +33,26 @@
         "label": "Campaign bursts",
         "value": "Several million in minutes"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 200000000,
+      "writesPerUser": 5,
+      "volume": 1000000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 1,
+      "peakFactor": 5,
+      "writeBytes": 1000,
+      "readBytes": 1000,
+      "years": 0.25,
+      "replicas": 3,
+      "cachePercent": 5,
+      "perInstance": 1000,
+      "objectPercent": 30,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 40
+    }
   },
   "network": {
     "cidr": "10.9.0.0/16",

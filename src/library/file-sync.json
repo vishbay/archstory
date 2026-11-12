@@ -41,7 +41,26 @@
         "label": "Commits",
         "value": "~50,000 file changes/s at peak"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 20000000,
+      "writesPerUser": 50,
+      "volume": 1000000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 2,
+      "peakFactor": 4,
+      "writeBytes": 500000,
+      "readBytes": 500000,
+      "years": 3,
+      "replicas": 3,
+      "cachePercent": 0.1,
+      "perInstance": 2000,
+      "objectPercent": 100,
+      "cdnPercent": 0,
+      "cdnPotential": 10,
+      "spotPercent": 10
+    }
   },
   "nodes": [
     {

@@ -56,7 +56,26 @@
         "label": "Programme",
         "value": "18 months: catalog migrated, orders in canary; cart, checkout, customers and payments still on-premises"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 2000000,
+      "writesPerUser": 0.075,
+      "volume": 150000,
+      "volumeUnit": "day",
+      "readsPerWrite": 2300,
+      "peakFactor": 3.75,
+      "writeBytes": 10000,
+      "readBytes": 60000,
+      "years": 7,
+      "replicas": 2,
+      "cachePercent": 1,
+      "perInstance": 300,
+      "objectPercent": 10,
+      "cdnPercent": 60,
+      "cdnPotential": 75,
+      "spotPercent": 5
+    }
   },
   "network": {
     "cidr": "10.64.0.0/16",

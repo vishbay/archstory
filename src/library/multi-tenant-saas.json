@@ -32,7 +32,26 @@
         "label": "Load skew",
         "value": "Top 20 tenants generate ~50% of traffic"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 2000000,
+      "writesPerUser": 50,
+      "volume": 100000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 10,
+      "peakFactor": 4,
+      "writeBytes": 500,
+      "readBytes": 5000,
+      "years": 3,
+      "replicas": 3,
+      "cachePercent": 5,
+      "perInstance": 500,
+      "objectPercent": 30,
+      "cdnPercent": 0,
+      "cdnPotential": 10,
+      "spotPercent": 20
+    }
   },
   "network": {
     "cidr": "10.6.0.0/16",

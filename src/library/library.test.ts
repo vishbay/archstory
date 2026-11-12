@@ -7,6 +7,7 @@ import { crossesNode, routeEdges, routePoints, type Rect } from '../layout/route
 import { ZNODE_W } from '../layout/zones'
 import { tierOf } from '../model/kinds'
 import { phaseGroups } from '../model/phases'
+import { capacity, cleanInputs, DEFAULT_INPUTS } from '../practice/estimate'
 
 describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
   const zones = d.network?.zones ?? 1
@@ -45,6 +46,17 @@ describe.each(LIBRARY.map(d => [d.id, d] as const))('%s', (_, d) => {
       for (const p of ps) for (const q of ps)
         if (p !== q && p.y === q.y) expect(Math.abs(p.x - q.x)).toBeGreaterThanOrEqual(NODE_W)
     }
+  })
+
+  it('has its own starting numbers for the estimate calculator', () => {
+    const e = d.requirements.estimate
+    expect(e, 'no requirements.estimate').toBeDefined()
+    expect(e!.source).toBeDefined()
+    expect(e!.years).toBeGreaterThan(0)
+    expect(e!.replicas).toBeGreaterThanOrEqual(1)
+    expect(e!.perInstance).toBeGreaterThan(0)
+    expect(e!.peakFactor).toBeGreaterThanOrEqual(1)
+    expect(capacity(cleanInputs({ ...DEFAULT_INPUTS, ...e })).wQps).toBeGreaterThan(0)
   })
 
   it.runIf(zones > 1)('every flow routes through concrete instances in every entry zone and zone failure', () => {

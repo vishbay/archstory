@@ -56,7 +56,26 @@
         "label": "Salesforce API budget",
         "value": "100,000 calls per 24 h plus 1,000 per user licence; integration may use 60% of it"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 20000,
+      "writesPerUser": 20,
+      "volume": 400000,
+      "volumeUnit": "day",
+      "readsPerWrite": 5,
+      "peakFactor": 40,
+      "writeBytes": 2000,
+      "readBytes": 2000,
+      "years": 7,
+      "replicas": 3,
+      "cachePercent": 20,
+      "perInstance": 200,
+      "objectPercent": 20,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 20
+    }
   },
   "network": {
     "cidr": "10.20.0.0/16",

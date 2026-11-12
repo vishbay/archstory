@@ -35,7 +35,26 @@
         "label": "Storage",
         "value": "~6B links over 5 years × ~500 B ≈ 3 TB"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 10000000,
+      "writesPerUser": 0.33,
+      "volume": 100000000,
+      "volumeUnit": "month",
+      "readsPerWrite": 100,
+      "peakFactor": 3,
+      "writeBytes": 500,
+      "readBytes": 500,
+      "years": 5,
+      "replicas": 3,
+      "cachePercent": 20,
+      "perInstance": 2000,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 50,
+      "spotPercent": 5
+    }
   },
   "network": {
     "cidr": "10.0.0.0/16",

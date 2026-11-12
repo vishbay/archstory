@@ -42,7 +42,26 @@
         "label": "Media",
         "value": "~10% of messages carry a file (~4B/day, mostly < 1 MB)"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 500000000,
+      "writesPerUser": 80,
+      "volume": 40000000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 2,
+      "peakFactor": 2,
+      "writeBytes": 200,
+      "readBytes": 200,
+      "years": 1,
+      "replicas": 3,
+      "cachePercent": 1,
+      "perInstance": 10000,
+      "objectPercent": 10,
+      "cdnPercent": 0,
+      "cdnPotential": 10,
+      "spotPercent": 10
+    }
   },
   "network": {
     "cidr": "10.3.0.0/16",

@@ -37,7 +37,26 @@
         "label": "Trips",
         "value": "20M / day (~1k/s peak requests)"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 400000,
+      "writesPerUser": 21600,
+      "volume": 100000,
+      "volumeUnit": "second",
+      "readsPerWrite": 0.5,
+      "peakFactor": 2.5,
+      "writeBytes": 100,
+      "readBytes": 200,
+      "years": 1,
+      "replicas": 3,
+      "cachePercent": 1,
+      "perInstance": 10000,
+      "objectPercent": 90,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 10
+    }
   },
   "network": {
     "cidr": "10.2.0.0/16",

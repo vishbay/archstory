@@ -52,7 +52,26 @@
         "label": "Limits",
         "value": "Keys up to 256 B, values up to 1 MB"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 100000000,
+      "writesPerUser": 108,
+      "volume": 125000,
+      "volumeUnit": "second",
+      "readsPerWrite": 4,
+      "peakFactor": 2,
+      "writeBytes": 25,
+      "readBytes": 1000,
+      "years": 1,
+      "replicas": 3,
+      "cachePercent": 1,
+      "perInstance": 8000,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 0
+    }
   },
   "network": {
     "cidr": "10.20.0.0/16",

@@ -86,6 +86,99 @@
               "value"
             ]
           }
+        },
+        "estimate": {
+          "description": "Starting numbers for the estimate calculator, matching the scale above",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "Work out daily writes from users (dau x writesPerUser) or from a stated volume",
+              "type": "string",
+              "enum": [
+                "users",
+                "volume"
+              ]
+            },
+            "dau": {
+              "type": "number",
+              "minimum": 0
+            },
+            "writesPerUser": {
+              "type": "number",
+              "minimum": 0
+            },
+            "volume": {
+              "type": "number",
+              "minimum": 0
+            },
+            "volumeUnit": {
+              "type": "string",
+              "enum": [
+                "second",
+                "day",
+                "month"
+              ]
+            },
+            "readsPerWrite": {
+              "description": "Reads for every write; use 0 for write-only systems",
+              "type": "number",
+              "minimum": 0
+            },
+            "peakFactor": {
+              "description": "Peak traffic as a multiple of the average",
+              "type": "number",
+              "minimum": 0
+            },
+            "writeBytes": {
+              "description": "Bytes stored per write",
+              "type": "number",
+              "minimum": 0
+            },
+            "readBytes": {
+              "description": "Bytes sent per read",
+              "type": "number",
+              "minimum": 0
+            },
+            "years": {
+              "type": "number",
+              "minimum": 0
+            },
+            "replicas": {
+              "description": "Copies of the data kept",
+              "type": "number",
+              "minimum": 0
+            },
+            "cachePercent": {
+              "description": "Percent of a day's reads worth caching",
+              "type": "number",
+              "minimum": 0
+            },
+            "perInstance": {
+              "description": "Requests per second one service instance handles",
+              "type": "number",
+              "minimum": 0
+            },
+            "objectPercent": {
+              "description": "Percent of stored data in object storage rather than a database (cost estimate)",
+              "type": "number",
+              "minimum": 0
+            },
+            "cdnPercent": {
+              "description": "Percent of egress already served by a CDN",
+              "type": "number",
+              "minimum": 0
+            },
+            "cdnPotential": {
+              "description": "Percent of egress a CDN could serve",
+              "type": "number",
+              "minimum": 0
+            },
+            "spotPercent": {
+              "description": "Percent of compute that is interruptible background work",
+              "type": "number",
+              "minimum": 0
+            }
+          }
         }
       }
     },

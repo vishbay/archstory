@@ -32,7 +32,26 @@
       { "label": "Hot store", "value": "Raw points 7 days (about 1 TB compressed), 5-minute rollups 90 days (about 3 TB), hourly rollups 2 years (about 2 TB)" },
       { "label": "Archive", "value": "Raw Parquet kept 7 years: about 44 TB per year, moved to an archive storage class after 90 days" },
       { "label": "Commands and firmware", "value": "About 100k commands per day; a full firmware rollout is 2M x 2 MB = 4 TB of downloads" }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 2000000,
+      "writesPerUser": 2900,
+      "volume": 5800000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 0.001,
+      "peakFactor": 3,
+      "writeBytes": 21,
+      "readBytes": 20000,
+      "years": 7,
+      "replicas": 3,
+      "cachePercent": 20,
+      "perInstance": 10000,
+      "objectPercent": 95,
+      "cdnPercent": 0,
+      "cdnPotential": 5,
+      "spotPercent": 30
+    }
   },
   "nodes": [
     {

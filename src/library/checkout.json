@@ -33,7 +33,26 @@
         "label": "Catalog",
         "value": "50M SKUs"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 10000000,
+      "writesPerUser": 2,
+      "volume": 20000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 5,
+      "peakFactor": 20,
+      "writeBytes": 2000,
+      "readBytes": 2000,
+      "years": 7,
+      "replicas": 3,
+      "cachePercent": 10,
+      "perInstance": 200,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 5,
+      "spotPercent": 15
+    }
   },
   "network": {
     "cidr": "10.5.0.0/16",

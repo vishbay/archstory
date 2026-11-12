@@ -55,7 +55,26 @@
         "label": "Capacity",
         "value": "each region sized for 60,000 reads/s and 4,000 writes/s, so normally at about half load"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "users",
+      "dau": 10000000,
+      "writesPerUser": 12,
+      "volume": 120000000,
+      "volumeUnit": "day",
+      "readsPerWrite": 15,
+      "peakFactor": 3,
+      "writeBytes": 25,
+      "readBytes": 2000,
+      "years": 5,
+      "replicas": 2,
+      "cachePercent": 3,
+      "perInstance": 1000,
+      "objectPercent": 0,
+      "cdnPercent": 0,
+      "cdnPotential": 10,
+      "spotPercent": 10
+    }
   },
   "regions": {
     "regions": [

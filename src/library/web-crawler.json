@@ -56,7 +56,26 @@
         "label": "Hosts in flight",
         "value": "1,000 pages/s with each host fetched at most every ~2 s needs ≥ 2,000 hosts ready at once"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 33000000,
+      "writesPerUser": 1,
+      "volume": 1000000000,
+      "volumeUnit": "month",
+      "readsPerWrite": 50,
+      "peakFactor": 2.5,
+      "writeBytes": 25000,
+      "readBytes": 8,
+      "years": 1,
+      "replicas": 3,
+      "cachePercent": 100,
+      "perInstance": 1000,
+      "objectPercent": 99,
+      "cdnPercent": 0,
+      "cdnPotential": 0,
+      "spotPercent": 70
+    }
   },
   "network": {
     "cidr": "10.20.0.0/16",

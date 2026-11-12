@@ -253,7 +253,7 @@ export function App() {
       {importing && <ImportDialog initialText={importText} onClose={() => { setImporting(false); setImportText('') }} onImport={importDesign} />}
       {aiOpen && <AiSettings onClose={() => setAiOpen(false)} />}
       <ConfirmDialog />
-      {estimating && <EstimateDialog problem={design} onClose={() => setEstimating(false)} />}
+      {estimating && <EstimateDialog problem={design} cloud={cloud} onClose={() => setEstimating(false)} />}
       {drill && <DrillDialog designs={[...LIBRARY, ...mine]} onlyId={drill.id} onClose={() => setDrill(null)} />}
       {picking && <DesignPicker library={LIBRARY} mine={mine} currentId={mode === 'practice' ? problemId : design.id} onClose={() => setPicking(false)}
         onOpen={id => { if (mode === 'practice') setProblemId(id); else { open(id); setMode('explore') } }}

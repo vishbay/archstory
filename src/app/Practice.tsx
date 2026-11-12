@@ -396,7 +396,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
 
       {quickAdd && <QuickAdd connectFrom={selected ? attempt.nodes.find(n => n.id === selected)?.label ?? null : null} onPick={quickPick} onClose={() => setQuickAdd(false)} />}
       {showKeys && <Shortcuts onClose={() => setShowKeys(false)} />}
-      {estimating && <EstimateDialog problem={ref} onClose={() => setEstimating(false)}
+      {estimating && <EstimateDialog problem={ref} cloud={cloud} onClose={() => setEstimating(false)}
         onAddToNotes={text => {
           const cur = attempt.reasoning?.estimates?.trim()
           setAttempt({ ...attempt, reasoning: { ...attempt.reasoning, estimates: cur ? `${cur}\n\n${text}` : text } })

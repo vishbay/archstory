@@ -41,7 +41,26 @@
         "label": "Bookings",
         "value": "~50M a year"
       }
-    ]
+    ],
+    "estimate": {
+      "source": "volume",
+      "dau": 140000,
+      "writesPerUser": 1,
+      "volume": 4200000,
+      "volumeUnit": "month",
+      "readsPerWrite": 60,
+      "peakFactor": 1000,
+      "writeBytes": 2000,
+      "readBytes": 100000,
+      "years": 7,
+      "replicas": 3,
+      "cachePercent": 5,
+      "perInstance": 1000,
+      "objectPercent": 10,
+      "cdnPercent": 90,
+      "cdnPotential": 95,
+      "spotPercent": 10
+    }
   },
   "nodes": [
     {
