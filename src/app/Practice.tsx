@@ -13,7 +13,8 @@ import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
-import { AiSettingsButton, Section } from './Sidebar'
+import { AiSettingsButton, NumbersHint, Section } from './Sidebar'
+import { Numbers } from './Numbers'
 import { panelInsets, useBars, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
@@ -264,9 +265,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
               {ref.meta.summary && <p className="small">{ref.meta.summary}</p>}
               {r.functional.length > 0 && <details open><summary>Functional</summary><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></details>}
               {r.nonFunctional.length > 0 && <details open><summary>Non-functional</summary><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></details>}
-              {r.scale.length > 0 && <details open><summary>Scale</summary>
-                <table className="kv"><tbody>{r.scale.map(s => <tr key={s.label}><th>{s.label}</th><td>{s.value}</td></tr>)}</tbody></table></details>}
-              <button className="small-btn" onClick={() => setEstimating(true)} title="Requests per second, storage, bandwidth and cache size, with the arithmetic">Estimate calculator</button>
+              <NumbersHint />
             </Section>
             <Section id="p-attempts" title="Attempts" count={snaps.length}>
               <Attempts snaps={snaps} canSave={attempt.nodes.length > 0} suggested={nextName(snaps)} message={attemptMsg}
@@ -351,6 +350,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
           onDragOver={e => { if (!showRef && e.dataTransfer.types.includes('application/x-kind')) { e.preventDefault(); setDropping(true) } }}
           onDragLeave={() => setDropping(false)}
           onDrop={e => { setDropping(false); const k = e.dataTransfer.getData('application/x-kind'); if (k) { e.preventDefault(); add(k) } }}>
+          <Numbers design={ref} cloud={cloud} onCalculator={() => setEstimating(true)} />
           {view === 'timeline' && flow?.steps.length
             ? <Timeline design={shown} flow={flow} player={player} cloud={cloud} onSelect={onNode} />
             : gaps

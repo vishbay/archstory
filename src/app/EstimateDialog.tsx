@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Cloud } from '../model/kinds'
 import type { Design } from '../model/schema'
-import { cleanCost, cost, costText, DEFAULT_COST, designShape, money, type CostInputs } from '../practice/cost'
-import { bytes, cleanInputs, count, DEFAULT_INPUTS, estimate, estimateText, parseAmount, type EstimateInputs } from '../practice/estimate'
+import { cost, costText, designShape, money, type CostInputs } from '../practice/cost'
+import { bytes, count, estimate, estimateText, parseAmount, type EstimateInputs } from '../practice/estimate'
+import { costKey, designCost, designInputs, estimateKey, loadCost, loadInputs } from './estimateState'
 import { store } from './hooks'
 import { copyText } from './prompts'
 
@@ -54,33 +55,18 @@ const COST_CHOICES: Field[] = [
 const show = (f: Field, v: number) => (f.kind === 'bytes' ? bytes(v).replace(' ', '') : count(v))
 
 /** Back-of-the-envelope numbers with the arithmetic shown. In Practice the working can go straight into your notes. */
-// Cost choices that describe a design's shape (how much is object storage, how much a CDN could serve), not prices.
-const COST_SHAPE = ['objectPercent', 'cdnPercent', 'cdnPotential', 'spotPercent'] as const
-const pick = (o: Record<string, unknown>, keys: readonly string[]) => Object.fromEntries(keys.filter(k => o[k] !== undefined).map(k => [k, o[k]]))
-const same = (a: object, b: object) => JSON.stringify(a) === JSON.stringify(b)
-/** The saved value, unless nothing was saved or it is just the old generic defaults; then this design's own numbers. */
-function savedOr<T extends object>(saved: unknown, clean: (raw: unknown) => T, generic: T, design: () => T): T {
-  if (!saved) return design()
-  const v = clean(saved)
-  return same(v, generic) ? design() : v
-}
-
 export function EstimateDialog({ problem, cloud = 'neutral', onClose, onAddToNotes }: { problem: Design; cloud?: Cloud; onClose: () => void; onAddToNotes?: (text: string) => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  const key = `archstory.estimate.${problem.id}`
-  // Start from this design's own numbers; a saved edit wins, but an untouched copy of the old generic defaults does not.
-  const own = problem.requirements.estimate ?? {}
-  const designInputs = () => cleanInputs({ ...DEFAULT_INPUTS, ...own })
-  const designCost = (base: CostInputs = DEFAULT_COST) => cleanCost({ ...base, ...pick(own, COST_SHAPE) })
-  const [inputs, setInputs] = useState<EstimateInputs>(() => savedOr(store.get(key, null), cleanInputs, DEFAULT_INPUTS, designInputs))
-  const costKey = `archstory.cost.${problem.id}`
-  const [prices, setPrices] = useState<CostInputs>(() => savedOr(store.get(costKey, null), cleanCost, DEFAULT_COST, () => designCost()))
-  const resetToDesign = () => { setInputs(designInputs()); setPrices(p => designCost({ ...p, natGb: undefined })); setRaw({}); setDone('') }
+  // Start from this design's own numbers (see estimateState.ts)
+  const key = estimateKey(problem), pricesKey = costKey(problem)
+  const [inputs, setInputs] = useState<EstimateInputs>(() => loadInputs(problem))
+  const [prices, setPrices] = useState<CostInputs>(() => loadCost(problem))
+  const resetToDesign = () => { setInputs(designInputs(problem)); setPrices(p => designCost(problem, { ...p, natGb: undefined })); setRaw({}); setDone('') }
   const [raw, setRaw] = useState<Partial<Record<string, string>>>({})
   const [done, setDone] = useState('')
   useEffect(() => { dialog.current?.showModal() }, [])
   useEffect(() => { store.set(key, inputs) }, [key, inputs])
-  useEffect(() => { store.set(costKey, prices) }, [costKey, prices])
+  useEffect(() => { store.set(pricesKey, prices) }, [pricesKey, prices])
   const lines = useMemo(() => estimate(inputs), [inputs])
   const shape = useMemo(() => designShape(problem), [problem])
   const bill = useMemo(() => cost(inputs, prices, cloud, shape), [inputs, prices, cloud, shape])

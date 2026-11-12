@@ -29,6 +29,7 @@ import { Home } from './Home'
 import { Tour } from './Tour'
 import { EXPLORE_TOUR, PRACTICE_TOUR } from './tourSteps'
 import { ConfirmDialog } from './ConfirmDialog'
+import { Numbers } from './Numbers'
 
 type View = 'canvas' | 'timeline'
 const MINE_KEY = 'archstory.myDesigns'
@@ -200,7 +201,7 @@ export function App() {
       {leftOpen && (
         <aside className="left">
           <Sidebar current={design} onBrowse={() => setPicking(true)}
-            onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} onEstimate={() => setEstimating(true)} />
+            onImport={() => setImporting(true)} onExport={() => exportDesign()} onGenerate={() => setGenerating(true)} onViewJson={() => setJsonOf(design)} />
         </aside>
       )}
 
@@ -231,6 +232,7 @@ export function App() {
           <ExportImageButton title={design.meta.title} disabled={view !== 'canvas'} />
         </Toolbar>
         <div className="stage-body">
+          <Numbers design={design} cloud={cloud} onCalculator={() => setEstimating(true)} />
           {view === 'timeline' && flow
             ? <Timeline design={design} flow={flow} player={player} cloud={cloud} onSelect={select} />
             : <BandCanvas design={design} flow={flow} player={player} cloud={cloud} network={network} monitoring={monitoring} selected={selected}
