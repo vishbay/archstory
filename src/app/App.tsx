@@ -147,7 +147,7 @@ export function App() {
   return (
     <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
       <header className="topbar">
-        {mode !== 'home' && (
+        {mode === 'home' ? <span className="icon-slot" aria-hidden /> : (   // keeps the logo in the same place on every page
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the requirements and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
             title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'requirements and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
         )}

@@ -13,7 +13,7 @@ import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
 import { PracticeInspector, type PracticeTab } from './PracticeInspector'
-import { Section } from './Sidebar'
+import { AiSettingsButton, Section } from './Sidebar'
 import { panelInsets, useBars, store, storeKv, useNow, usePlayer, useViewportWidth } from './hooks'
 import { TimerBanner, type TimedControls } from './TimedPanel'
 import { EstimateDialog } from './EstimateDialog'
@@ -294,6 +294,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
               </div>
             </Section>
           </div>
+          <div className="panel-foot side-actions"><AiSettingsButton /></div>
         </aside>
       )}
 
