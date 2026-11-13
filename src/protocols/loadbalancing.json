@@ -700,7 +700,7 @@
     {
       "target": "lb",
       "kind": "scaling",
-      "text": "Round robin assumes every request costs the same. When some are slow, least outstanding requests sends new work to the backend with the fewest requests in flight, which keeps a slow backend from piling up a queue. A new backend can get slow start: its share ramps up over a minute or so while its caches and JIT warm up."
+      "text": "Round robin assumes every request costs the same. When some are slow, least outstanding requests sends new work to the backend with the fewest requests in flight, which keeps a slow backend from piling up a queue. A new backend can get slow start: its share ramps up over a configured period while its caches and JIT warm up."
     },
     {
       "target": "lb",

@@ -607,7 +607,7 @@
           "to": "client",
           "kind": "res",
           "label": "[NewSessionTicket]",
-          "detail": "After the client's Finished, the server sends a ticket for the next connection. The PSK it stands for is derived from the resumption secret, whose transcript includes the client's Finished, which is why the RFC lets the server send it only after that (or once it can compute that transcript itself). The early_data extension says the next connection may use 0-RTT. A server may send several, for example so a browser can open parallel connections later; each should be used once.",
+          "detail": "After the client's Finished, the server sends a ticket for the next connection. The PSK it stands for is derived from the resumption secret, whose transcript includes the client's Finished, which is why the RFC lets the server send it only after it has received the client's Finished (section 4.6.1). The early_data extension says the next connection may use 0-RTT. A server may send several, for example so a browser can open parallel connections later; each should be used once.",
           "fields": [
             {
               "name": "message",

@@ -478,6 +478,11 @@
               "note": "iat + 900: the token's 15 minutes"
             },
             {
+              "name": "jti",
+              "value": "<unique token id>",
+              "note": "RFC 9068 requires a unique identifier for the JWT"
+            },
+            {
               "name": "scope",
               "value": "openid profile photos.read"
             },

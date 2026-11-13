@@ -150,7 +150,7 @@
             {
               "name": "Origin",
               "value": "https://example.com",
-              "note": "Sent by browsers; the server must check it (see the security note)"
+              "note": "Sent by browsers; a server that serves only certain sites should check it (RFC 6455 section 10.2; see the security note)"
             },
             {
               "name": "Sec-WebSocket-Protocol",

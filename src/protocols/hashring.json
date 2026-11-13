@@ -32,7 +32,7 @@
     "scale": [
       {
         "label": "Ring in this example",
-        "value": "positions 0 to 99 (illustrative; real rings use 2^64 to 2^160 positions)"
+        "value": "positions 0 to 99 (illustrative; a real ring is huge: Dynamo's MD5 gives 2^128 positions)"
       },
       {
         "label": "Keys moved when a machine joins",

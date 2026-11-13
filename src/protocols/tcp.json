@@ -1016,7 +1016,7 @@
           "to": "server",
           "kind": "local",
           "label": "Recovery over: cwnd = 4 MSS",
-          "detail": "This ACK acknowledges new data, so fast recovery ends and cwnd drops back from the inflated 10,220 to ssthresh (RFC 5681 step 6). The sender now grows by about one segment per round trip (congestion avoidance). Compared with its 10-segment start the window is more than halved, and the loss cost about one round trip of waiting. Everything that follows assumes this smaller window.",
+          "detail": "This ACK acknowledges new data, so fast recovery ends and cwnd drops back from the inflated 16,060 (10,220 after the third duplicate ACK, plus 1,460 for each of the four that followed) to ssthresh (RFC 5681 step 6). The sender now grows by about one segment per round trip (congestion avoidance). Compared with its 10-segment start the window is more than halved, and the loss cost about one round trip of waiting. Everything that follows assumes this smaller window.",
           "delay": 0,
           "fields": [
             {
@@ -1175,13 +1175,13 @@
           "kind": "local",
           "phase": "Timeout wait",
           "label": "Silence: waiting 1 s for the RTO",
-          "detail": "With no duplicate ACKs, the only signal left is silence. The retransmission timer (RTO) started when the last ACK arrived and runs for 1 second. RFC 6298 rounds the RTO up to at least 1 second whatever the measured round trip, so on this 50 ms path the sender waits 20 round trips (many systems use a smaller minimum; Linux uses 200 ms). The readout counts this wait in round trips, so it scales with the Distance setting even though a real timeout does not.",
+          "detail": "With no duplicate ACKs, the only signal left is silence. The retransmission timer (RTO) started when the last ACK arrived and runs for 1 second. RFC 6298 recommends rounding the RTO up to 1 second whatever the measured round trip (rule 2.4), so on this 50 ms path the sender waits 20 round trips (many systems use a smaller minimum; Linux uses 200 ms). The readout counts this wait in round trips, so it scales with the Distance setting even though a real timeout does not.",
           "wait": 1000,
           "fields": [
             {
               "name": "RTO",
               "value": "1 s",
-              "note": "RFC 6298: the initial RTO is 1 second and later values are never below 1 second"
+              "note": "RFC 6298 rule 2.4: the computed RTO is rounded up to 1 second if it is smaller (a SHOULD)"
             },
             {
               "name": "duplicate ACKs",

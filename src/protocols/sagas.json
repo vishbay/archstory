@@ -995,7 +995,7 @@
     {
       "target": "inventory",
       "kind": "failure",
-      "text": "A saga has the A, C and D of ACID but not I: other transactions can see intermediate results and act on them. Countermeasures include a semantic lock (a flag such as PENDING on the record, as the stock and the order show), commutative updates (such as debit and credit, which can be applied in any order), rereading a value before changing it, and versioning (so that out-of-order actions can be detected). Which one fits depends on what a dirty read would cost the business."
+      "text": "A saga gives up isolation, the I in ACID: it either completes or is compensated, but other transactions can see the effects of a partial saga and act on them, and nobody is told when a step is later compensated. Countermeasures include a semantic lock (a flag such as PENDING on the record, as the stock and the order show), commutative updates (such as debit and credit, which can be applied in any order), rereading a value before changing it, and a version file (a record of the operations on an item, so that operations arriving out of order can be reordered). Which one fits depends on what a dirty read would cost the business."
     },
     {
       "target": "orchestrator",
@@ -1056,7 +1056,7 @@
         "orchestrator"
       ],
       "q": "What does lack of isolation mean here, and how do you deal with it?",
-      "a": "While the saga runs, other transactions can see its intermediate results, such as stock held for an order that may be cancelled. Mark such records as pending (a semantic lock), use updates that commute, reread values before acting, or add versions to detect conflicts. Which fits depends on what a stale or dirty read costs the business."
+      "a": "While the saga runs, other transactions can see its intermediate results, such as stock held for an order that may be cancelled. Mark such records as pending (a semantic lock), use updates that commute, reread values before acting, or keep a version file of the operations so they can be reordered. Which fits depends on what a stale or dirty read costs the business."
     },
     {
       "id": "idempotency-key",

@@ -155,7 +155,7 @@
           "kind": "req",
           "phase": "Phase 1: prepare",
           "label": "PREPARE tx 42",
-          "detail": "Phase 1 asks every participant: can you commit this? The coordinator first writes its start record, naming the participants, then sends PREPARE and waits for votes (state Waiting). On arrival A force-writes a prepare record to its log, which means it can now commit even after a crash, and keeps its lock. From this moment A has promised not to abort on its own, and its state is Prepared, also called in doubt.",
+          "detail": "Phase 1 asks every participant: can you commit this? The coordinator first writes a start record naming the participants (some implementations skip it and put the names in the commit record instead), then sends PREPARE and waits for votes (state Waiting). On arrival A force-writes a prepare record to its log, which means it can now commit even after a crash, and keeps its lock. From this moment A has promised not to abort on its own, and its state is Prepared, also called in doubt.",
           "state": {
             "coordinator": "Waiting",
             "pa": "Prepared (in doubt)"
@@ -537,7 +537,7 @@
           "kind": "local",
           "phase": "Phase 2: decide",
           "label": "decide ABORT tx 43",
-          "detail": "The coordinator records ABORT in its log. This is the decision, and it does not have to wait for any more votes. No participant has been told to commit, so nothing can disagree with it.",
+          "detail": "The coordinator records ABORT in its log (the plain protocol forces this record; presumed abort does not need to). This is the decision, and it does not have to wait for any more votes. No participant has been told to commit, so nothing can disagree with it.",
           "state": {
             "coordinator": "Aborted"
           },
@@ -957,7 +957,7 @@
     {
       "target": "coordinator",
       "kind": "scaling",
-      "text": "Variants fix part of this. Three-phase commit adds a step so participants can finish without the coordinator, but it assumes bounded message delays and no network partitions, so it is rarely used. Paxos Commit stores the decision on a group of acceptors so that it survives the loss of the coordinator. Spanner runs 2PC between groups that are each replicated by Paxos, so a single machine failure does not leave participants stuck. Percolator-style systems keep the commit point in the data store itself so other transactions can finish or roll back a crashed client's work. The details of each are beyond this module."
+      "text": "Variants fix part of this. Three-phase commit adds a step so participants can finish without the coordinator, but it relies on strong assumptions about timing and failures that real networks do not guarantee, so it is rarely used. Paxos Commit (Gray and Lamport) runs a Paxos consensus on each participant's prepared or aborted vote across a group of acceptors, so the outcome survives the loss of the coordinator. Spanner runs 2PC between groups that are each replicated by Paxos, so a single machine failure does not leave participants stuck. Percolator-style systems keep the commit point in the data store itself so other transactions can finish or roll back a crashed client's work. The details of each are beyond this module."
     },
     {
       "target": "pa",

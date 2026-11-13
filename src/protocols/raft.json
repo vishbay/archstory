@@ -21,7 +21,7 @@
       "Elects one leader per term: a server needs votes from a majority, and each server votes at most once per term",
       "The leader accepts client commands, replicates them with AppendEntries, and treats an entry as committed once it is stored on a majority",
       "Repairs a Follower whose log is missing or disagrees with the leader's, by walking back until the logs match and then overwriting the rest",
-      "Out of scope here: membership changes (adding or removing servers, joint consensus or single-server changes), which the paper covers separately"
+      "Out of scope here: membership changes (adding or removing servers), which the paper covers separately in section 6 with joint consensus"
     ],
     "nonFunctional": [
       "Safety never depends on timing: at most one leader per term, committed entries are never lost, and servers never apply different commands at the same index",
@@ -1249,7 +1249,7 @@
           "kind": "res",
           "phase": "Log repair",
           "label": "success = true",
-          "detail": "S3 accepts. The leader sets matchIndex for S3 to 2 and nextIndex to 3. S2's and S3's logs are now identical, entries 1 and 2. A new leader commonly also appends a no-op entry of its own term; once that is on a majority it commits, and entry 2 is committed with it.",
+          "detail": "S3 accepts. The leader sets matchIndex for S3 to 2 and nextIndex to 3. S2's and S3's logs are now identical, entries 1 and 2. The paper has each leader commit a blank no-op entry of its own term at the start of the term (section 8); once that is on a majority it commits, and entry 2 is committed with it.",
           "fields": [
             {
               "name": "term",
@@ -1288,7 +1288,7 @@
     {
       "target": "s1",
       "kind": "tradeoff",
-      "text": "A leader never commits an entry from an earlier term by counting replicas (section 5.4.2, the Figure 8 scenario). An old-term entry can sit on a majority and still be overwritten by a later leader that was elected without it. The leader instead commits an entry of its own term by counting; the Log Matching property then commits every earlier entry too. This is why a new leader usually appends a no-op entry as soon as it is elected."
+      "text": "A leader never commits an entry from an earlier term by counting replicas (section 5.4.2, the Figure 8 scenario). An old-term entry can sit on a majority and still be overwritten by a later leader that was elected without it. The leader instead commits an entry of its own term by counting; the Log Matching property then commits every earlier entry too. This is why each leader commits a blank no-op entry as soon as it is elected (section 8 of the paper)."
     },
     {
       "kind": "scaling",
@@ -1297,7 +1297,7 @@
     {
       "target": "client",
       "kind": "tradeoff",
-      "text": "Linearizable reads need care: a leader that has been deposed may not know it yet and could serve stale data. Two common fixes are ReadIndex (the leader confirms with a round of heartbeats that it is still leader, then reads once it has applied up to its commit index) and lease-based reads (the leader trusts a time lease and avoids the round trip, but relies on bounded clock drift). Reads served by Followers can be stale."
+      "text": "Linearizable reads need care: a leader that has been deposed may not know it yet and could serve stale data. The paper adds two precautions: the leader must have committed an entry of its own term (the no-op), so it knows what is committed, and it must exchange heartbeats with a majority before answering, to prove it has not been deposed. Alternatively the heartbeats can act as a lease, which avoids the round trip but relies on bounded clock skew. Reads served by Followers can be stale."
     },
     {
       "target": "s3",
@@ -1349,7 +1349,7 @@
         "s1"
       ],
       "q": "Why may a leader not commit an entry from an older term just because it is on a majority?",
-      "a": "Such an entry can still be overwritten. A later leader can be elected by a majority that lacks the entry, because its last entry has a higher term, and it then replaces the entry on the servers that had it. So a leader commits only entries of its own term by counting replicas, and the Log Matching property commits all earlier ones with them. That is why new leaders append a no-op."
+      "a": "Such an entry can still be overwritten. A later leader can be elected by a majority that lacks the entry, because its last entry has a higher term, and it then replaces the entry on the servers that had it. So a leader commits only entries of its own term by counting replicas, and the Log Matching property commits all earlier ones with them. That is why each new leader commits a blank no-op entry at the start of its term."
     },
     {
       "id": "reply-early",
