@@ -5,7 +5,8 @@ import { moduleRtt } from '../model/protocol'
 import type { Design } from '../model/schema'
 import { store } from './hooks'
 
-const KEY = 'archstory.hood.rtt'
+export const RTT_KEY = 'archstory.hood.rtt'
+const KEY = RTT_KEY
 const listeners = new Set<() => void>()
 
 /** The saved choice in ms, or null (storage may be unavailable, and an old or hand-edited value may be junk). */
@@ -17,16 +18,20 @@ export function savedRtt(): number | null {
 let current = savedRtt()
 const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
 
+/** Save a choice and tell every component using the control. */
+export function chooseRtt(ms: number) { current = ms; store.set(KEY, ms); listeners.forEach(f => f()) }
+
+/** What the readouts use for a module drawn for `own` ms when the reader chose `chosen` (null: no choice yet). */
+export const resolveRtt = (own: number, chosen: number | null) => ({
+  /** The round trip time every readout uses. */
+  ms: chosen ?? own,
+  /** The module's own reference round trip. */
+  own,
+  /** The choice differs from the module's own reference: say so next to the numbers. */
+  custom: chosen !== null && chosen !== own,
+})
+
 export function useRtt(design: Pick<Design, 'meta'>) {
   const chosen = useSyncExternalStore(subscribe, () => current, () => null)
-  const own = moduleRtt(design)
-  return {
-    /** The round trip time every readout uses. */
-    ms: chosen ?? own,
-    /** The module's own reference round trip. */
-    own,
-    /** The choice differs from the module's own reference: say so next to the numbers. */
-    custom: chosen !== null && chosen !== own,
-    choose(ms: number) { current = ms; store.set(KEY, ms); listeners.forEach(f => f()) },
-  }
+  return { ...resolveRtt(moduleRtt(design), chosen), choose: chooseRtt }
 }

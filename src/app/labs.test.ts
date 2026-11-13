@@ -38,4 +38,21 @@ describe('labs flags', () => {
     setLab('underhood', false)
     expect([a, b]).toEqual([1, 1])
   })
+
+  it('also tell subscribers when another tab changes the flag (storage event)', () => {
+    const win = (globalThis as { window: EventTarget }).window
+    let n = 0
+    const off = onLabs(() => n++)
+    win.dispatchEvent(new Event('storage'))
+    expect(n).toBe(1)
+    off()
+    win.dispatchEvent(new Event('storage'))
+    expect(n).toBe(1)
+  })
+
+  it('store the flag as JSON true, so it survives a reload', () => {
+    setLab('underhood', true)
+    expect(JSON.parse(mem.get(labKey('underhood'))!)).toBe(true)
+    expect(getLab('underhood')).toBe(true)
+  })
 })

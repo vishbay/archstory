@@ -1,6 +1,7 @@
 import { isOnPrem, isProtocol, type Design, type Flow, type WireField } from '../model/schema'
-import { fmtMs, fmtRtt, rttTimes, rttToMs, type DataView } from '../model/protocol'
+import { rttTimes, type DataView } from '../model/protocol'
 import { useRtt } from './useRtt'
+import { stepMetaText } from './stepMeta'
 import { ScenarioPicker } from './ScenarioPicker'
 import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
@@ -150,7 +151,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             {cur ? (
               <div className="card current-card">
                 <div className="card-meta">
-                  <span>Step {step + 1} of {flow.steps.length}{resolvePhases(flow.steps)[step] ? ` · ${resolvePhases(flow.steps)[step]}` : ''}{at !== null ? (cur.lost ? ' · lost in the network' : ` · at ${fmtRtt(at)}, ${fmtMs(rttToMs(at, rtt.ms))}`) : ''}{at !== null && rtt.custom ? ` (at ${Number(rtt.ms.toFixed(1))} ms round trip)` : ''}</span>
+                  <span>{stepMetaText({ step, total: flow.steps.length, phase: resolvePhases(flow.steps)[step], at, lost: cur.lost, rttMs: rtt.ms, custom: rtt.custom })}</span>
                   <span className="pill" style={{ color: KIND_INK[cur.kind], borderColor: KIND_VAR[cur.kind] }}>{KIND_TEXT[cur.kind]}</span>
                 </div>
                 <div className="card-hop">

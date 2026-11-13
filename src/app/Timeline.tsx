@@ -9,6 +9,7 @@ import { layoutBands } from '../layout/bands'
 import { dataAt, dataChanges, dataLines, fmtMs, fmtRtt, phaseBudget, phaseOfStep, rttTimes, rttOptions, rttToMs, stateAt, stateChanges, usesData } from '../model/protocol'
 import { LOST_STOP, Packet } from './Packet'
 import { useRtt } from './useRtt'
+import { customRttNote } from './stepMeta'
 import { KIND_INK, KIND_VAR } from './stepKinds'
 import type { Player } from './hooks'
 
@@ -78,7 +79,7 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
           <div className="tl-clock" role="status" aria-live="polite" title="Elapsed time, counting every message as one one-way trip (half a round trip)">
             <span className="muted">Time so far</span> <b>{fmtRtt(step >= 0 ? times[step] : 0)}</b> <b className="tl-ms">{ms(step >= 0 ? times[step] : 0)}</b>
             <span className="muted"> of {fmtRtt(total)}, {ms(total)}</span>
-            {rtt.custom && <span className="tl-at"> at {Number(rtt.ms.toFixed(1))} ms round trip</span>}
+            {rtt.custom && <span className="tl-at"> at {customRttNote(rtt.ms)}</span>}
           </div>
           <div className="tl-dist" role="group" aria-label="Distance: round trip time to the far end">
             <span className="muted">Distance</span>
