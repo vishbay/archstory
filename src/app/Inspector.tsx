@@ -281,7 +281,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
             ))
         )}
       </div>
-      {shown === 'step' && flow && <Legend monitoring={monitoring && !!design.observability} />}
+      {shown === 'step' && flow && <Legend monitoring={monitoring && !!design.observability} counts={design.nodes.some(n => !!n.replicas)} />}
     </>
   )
 }

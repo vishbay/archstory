@@ -3,7 +3,7 @@ import { store } from './hooks'
 import { KIND_GLYPH, KIND_INK, KIND_LEGEND, KIND_SHORT } from './stepKinds'
 
 /** What the markers on the canvas and in the step list mean. Pinned under the Flow tab. */
-export function Legend({ monitoring }: { monitoring: boolean }) {
+export function Legend({ monitoring, counts = false }: { monitoring: boolean; counts?: boolean }) {
   const [open, setOpen] = useState(() => store.get('archstory.legend', true))
   const toggle = () => setOpen(o => { store.set('archstory.legend', !o); return !o })
   return (
@@ -26,6 +26,11 @@ export function Legend({ monitoring }: { monitoring: boolean }) {
             <span className="legend-chip"><i className="line solid" />request / response</span>
             <span className="legend-chip"><i className="line dashed" />async</span>
           </div>
+          {counts && (
+            <div className="legend-row"><b>Count</b>
+              <span className="legend-chip"><i className="node-rep" aria-hidden>×3</i>instances of a component</span>
+            </div>
+          )}
           {monitoring && (
             <div className="legend-row"><b>Badges</b>
               <span className="legend-chip"><i className="badge-chip">M</i>emits metrics</span>

@@ -90,7 +90,7 @@ function ComponentNode({ data }: NodeProps) {
         <div className="node-name">{name}</div>
         <div className="node-sub">{name !== n.label ? n.label : kindInfo(n.kind).label}</div>
       </div>
-      {n.replicas && <span className="node-rep">×{n.replicas}</span>}
+      {n.replicas && <span className="node-rep" title={`${n.replicas} instances of this component`} aria-label={`${n.replicas} instances`}>×{n.replicas}</span>}
       {signals && (signals.metrics || signals.logs || signals.traces) && (
         <span className="node-signals" role="group" aria-label="Telemetry this component emits">
           {signals.metrics && <i title="Emits metrics" aria-label="emits metrics">M</i>}
