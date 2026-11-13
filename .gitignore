@@ -29,3 +29,6 @@ public/icons/
 
 # local before/after screenshots from the UI pass
 ux-pass/
+
+# Claude Code local files (agent worktrees, local settings)
+.claude/
