@@ -826,7 +826,7 @@
     {
       "target": "db",
       "kind": "failure",
-      "text": "Each seat is one row that flips from free to sold once, inside the confirming transaction. That is the last line of defence against double booking, whatever happens upstream in Redis. Aurora keeps commits in three zones, so losing a zone costs a failover of about a minute but no confirmed sale."
+      "text": "Each seat is one row that flips from free to sold once, inside the confirming transaction. That is the last line of defence against double booking, whatever happens upstream in Redis. Aurora keeps commits in three zones, so losing a zone costs a failover that typically takes under a minute but no confirmed sale."
     },
     {
       "target": "waf",

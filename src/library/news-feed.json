@@ -561,7 +561,7 @@
           "kind": "local",
           "phase": "Upload media",
           "label": "sign upload URL",
-          "detail": "Signing is local (no call to storage): the URL allows one PUT of that size and type to one key, for 15 minutes."
+          "detail": "Signing is local (no call to storage): the URL allows one PUT to one key for 15 minutes, with the content type signed into it. A presigned PUT cannot cap the size, so the Post Service checks the stored object's size before a post may reference it (a presigned POST policy with content-length-range can cap it up front)."
         },
         {
           "from": "post_svc",
@@ -647,7 +647,7 @@
           "kind": "req",
           "phase": "Request in",
           "label": "HEAD m_81f2",
-          "detail": "Checks the upload finished and belongs to this author before the post may reference it."
+          "detail": "Checks the upload finished, belongs to this author and is within the size limit before the post may reference it."
         },
         {
           "from": "media",
@@ -846,7 +846,7 @@
           "kind": "req",
           "phase": "Merge celebrity posts",
           "label": "MGET posts + celeb recent ids",
-          "detail": "Hydrate the 50 ids into post bodies and read each followed celebrity's recent post ids, from the same cache cluster under different keys. At ~2M timeline reads/s, 50 posts each, hydrating from the posts store would mean ~100M item reads/s; the cache takes almost all of it. A celebrity's recent list is read by millions, so each Timeline Service instance also keeps those lists in memory for a few seconds, so one hot key cannot overload one shard.",
+          "detail": "Hydrate the 50 ids into post bodies and read each followed celebrity's recent post ids, from the same cache cluster under different keys. Multi-key commands such as MGET work only for keys in one hash slot, so the service groups ids by shard and sends one MGET per shard (or pipelines single GETs). At ~2M timeline reads/s, 50 posts each, hydrating from the posts store would mean ~100M item reads/s; the cache takes almost all of it. A celebrity's recent list is read by millions, so each Timeline Service instance also keeps those lists in memory for a few seconds, so one hot key cannot overload one shard.",
           "payload": "MGET post:1857261298011340800 post:1857260911846723584 …\nLRANGE recent:nasa 0 19"
         },
         {

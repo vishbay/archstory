@@ -213,7 +213,7 @@
       {
         "id": "credentials",
         "severity": "ticket",
-        "when": "APNs key, FCM credentials or email sending identity expiring within 14 days",
+        "when": "APNs certificate, FCM service account key or email sending identity expiring within 14 days",
         "why": "An expired credential silently stops a whole channel.",
         "target": "push_worker"
       }

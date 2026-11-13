@@ -500,7 +500,7 @@
           "kind": "res",
           "phase": "Generate key",
           "label": "1,000 codes, first \"aZ3k9Q\"",
-          "detail": "To fill the batch, KGS claimed it from a key_batches table in the primary database with one atomic UPDATE ... FOR UPDATE SKIP LOCKED, so two KGS instances never hand out the same batch and KGS itself keeps no state. 6 base62 chars give 62^6, about 56.8B random codes, enough for the ~6B links of five years, and they cannot be enumerated like a counter.",
+          "detail": "To fill the batch, KGS claimed it from a key_batches table in the primary database with one atomic UPDATE whose subquery picks the next free batch with FOR UPDATE SKIP LOCKED, so two KGS instances never hand out the same batch and KGS itself keeps no state. 6 base62 chars give 62^6, about 56.8B random codes, enough for the ~6B links of five years, and they cannot be enumerated like a counter.",
           "payload": "{ \"batch\": 48213, \"codes\": [\"aZ3k9Q\", \"Lr0x2b\", …] }"
         },
         {
@@ -615,7 +615,7 @@
           "kind": "req",
           "phase": "Request in",
           "label": "route → api-2",
-          "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
+          "detail": "Least-outstanding-requests routing (an ALB option; round robin is the default). API servers are stateless, so any healthy instance can serve any request.",
           "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
@@ -722,7 +722,7 @@
           "kind": "req",
           "phase": "Request in",
           "label": "route → api-2",
-          "detail": "Least-outstanding-requests routing. API servers are stateless, so any healthy instance can serve any request.",
+          "detail": "Least-outstanding-requests routing (an ALB option; round robin is the default). API servers are stateless, so any healthy instance can serve any request.",
           "payload": "GET /aZ3k9Q\nX-Forwarded-For: 203.0.113.7\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {

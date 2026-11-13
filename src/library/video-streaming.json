@@ -280,7 +280,7 @@
         "aws": "SQS",
         "gcp": "Pub/Sub"
       },
-      "description": "One message per uploaded video, then one per chunk and rendition from the splitter. After 3 failed receives a message moves to a dead-letter queue"
+      "description": "One message per uploaded video, then one per chunk and rendition from the splitter. After 3 failed receives a message moves to a dead-letter queue (an SQS setting; Pub/Sub allows 5 at the least)"
     },
     {
       "id": "dns",
@@ -858,7 +858,7 @@
           "kind": "local",
           "phase": "Stream segments",
           "label": "HIT, token valid",
-          "detail": "The edge checks the playback token's signature and expiry, then serves from cache. Popular videos are fully cached at the edge; hit rates above 95% are normal."
+          "detail": "The edge checks the playback token's signature and expiry (CloudFront signed URLs or cookies, or a token validated by an edge function), then serves from cache. Popular videos are fully cached at the edge; hit rates above 95% are normal."
         },
         {
           "from": "cdn",
@@ -915,7 +915,7 @@
     {
       "target": "cdn",
       "kind": "tradeoff",
-      "text": "At list prices the estimate calculator puts this design near $1B a month, almost all of it CDN egress for about 0.9 EB a day. Nobody pays list price at this scale: large streamers sign committed CDN contracts at a small fraction of a cent per GB, peer directly with internet providers, and place their own cache servers inside ISP networks (Netflix Open Connect, Google Global Cache), so most bytes never cross a paid link. In an interview, give the list-price number, then say egress is the cost to attack and how."
+      "text": "At the calculator's flat assumed rates (0.03 USD per GB through the CDN, 0.09 direct; real list prices are tiered and lower at this volume) the estimate puts this design near $1B a month, almost all of it CDN egress for about 0.9 EB a day. Nobody pays list price at this scale: large streamers sign committed CDN contracts at a small fraction of a cent per GB, peer directly with internet providers, and place their own cache servers inside ISP networks (Netflix Open Connect, Google Global Cache), so most bytes never cross a paid link. In an interview, give the list-price number, then say egress is the cost to attack and how."
     },
     {
       "target": "waf",

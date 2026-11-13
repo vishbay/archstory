@@ -323,7 +323,7 @@
       "id": "gw",
       "label": "API Gateway",
       "kind": "api_gateway",
-      "description": "TLS, user auth, rate limits; also the public endpoint for provider webhooks; reaches the service through a private integration",
+      "description": "TLS, user auth, rate limits; also the public endpoint for provider webhooks; reaches the service through a private integration (on AWS a REST API, the API Gateway type a web ACL can attach to)",
       "cloud": {
         "aws": "API Gateway",
         "gcp": "API Gateway"
@@ -630,7 +630,7 @@
           "phase": "Risk check",
           "label": "INCRBY daily total",
           "detail": "Velocity counters are approximate and expire on their own, which suits fraud signals. Hard limits that must be exact are checked against the ledger itself.",
-          "payload": "MULTI\nINCRBY spend:u_alice:2026-11-10 2500\nEXPIRE spend:u_alice:2026-11-10 172800\nINCR tx:u_alice:minute:1731240060\nEXEC"
+          "payload": "MULTI\nINCRBY spend:u_alice:2026-11-10 2500\nEXPIRE spend:u_alice:2026-11-10 172800\nINCR tx:u_alice:minute:1731240060\nEXPIRE tx:u_alice:minute:1731240060 120\nEXEC"
         },
         {
           "from": "limits_cache",
@@ -1259,7 +1259,7 @@
     {
       "target": "ledger_db",
       "kind": "tradeoff",
-      "text": "One relational primary with row locks gives the simplest strong guarantees: no overdraft, no lost update, atomic multi-row postings. The cost is a single write leader, which at 5,000 transfers/s peak (about 10 statements each) is the ceiling to watch; sharding is the next step (see the scaling question). Aurora keeps every commit in three zones, so a zone failure costs a failover of about a minute but no posted money. Locking the touched accounts in id order is cheaper than SERIALIZABLE isolation, which also works but aborts and retries more under contention."
+      "text": "One relational primary with row locks gives the simplest strong guarantees: no overdraft, no lost update, atomic multi-row postings. The cost is a single write leader, which at 5,000 transfers/s peak (about 10 statements each) is the ceiling to watch; sharding is the next step (see the scaling question). Aurora keeps every commit in three zones, so a zone failure costs a failover that typically takes under a minute but no posted money. Locking the touched accounts in id order is cheaper than SERIALIZABLE isolation, which also works but aborts and retries more under contention."
     },
     {
       "target": "ledger_db",
@@ -1274,7 +1274,7 @@
     {
       "target": "psp",
       "kind": "failure",
-      "text": "A provider timeout leaves the payout outcome unknown. Retry with the same idempotency key, then park the payout as UNKNOWN with the funds still in clearing. Only a definite answer (a webhook, a status query, or the settlement report) may release the funds back to the wallet or move them out."
+      "text": "A provider timeout leaves the payout outcome unknown. Retry with the same idempotency key (providers keep keys for a limited time, at least 24 hours for Stripe, so after that look the payout up by its reference instead of retrying), then park the payout as UNKNOWN with the funds still in clearing. Only a definite answer (a webhook, a status query, or the settlement report) may release the funds back to the wallet or move them out."
     },
     {
       "target": "events",

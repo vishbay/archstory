@@ -546,7 +546,7 @@
           "phase": "Count queries",
           "label": "upsert decayed scores",
           "detail": "Counts are summed per query over the window first, so a viral query is one write per window, not millions. Each row stores its score and the hour it was updated; decay is applied when the row is next written or read (score × decay^hours since), so idle queries fade without rewriting every row each hour.",
-          "payload": "UpdateItem q='system design'\nSET score = <old score × 0.9^3> + 1840, updated_hour = '2026-11-10T14'"
+          "payload": "UpdateItem q='system design'\nSET score = :s, updated_hour = '2026-11-10T14'\n-- :s = old score × 0.9^3 + 1840, computed by the aggregator (an update expression cannot multiply)"
         },
         {
           "from": "builder",

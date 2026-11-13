@@ -45,7 +45,7 @@
       },
       {
         "label": "Chunks and vectors",
-        "value": "40M chunks of about 400 tokens; 1024-dim float32 vectors are 160 GB (40M x 1024 x 4 bytes), about 250 GB with the HNSW graph (a rough allowance: graph overhead depends on the M setting, so measure it)"
+        "value": "40M chunks of about 400 tokens; 1024-dim float32 vectors are about 160 GB (40M x 1024 x 4 bytes), about 190 GB with the HNSW graph by the OpenSearch estimate of 1.1 x (4 x 1024 + 8 x M) bytes per vector at M = 16 (measure it: M and quantization change it)"
       },
       {
         "label": "Change rate",
@@ -137,7 +137,7 @@
       "id": "vector_index",
       "label": "Vector + Keyword Index",
       "kind": "vector_db",
-      "description": "One record per chunk: text, 1024-dim embedding, BM25 terms, doc id, version, source link and the principals allowed to read it. Serves k-NN and keyword search with the permission filter applied inside the query. Sharded across data nodes in three zones with one replica of each shard, so the HNSW graphs need about twice the 250 GB in memory; reached through the VPC",
+      "description": "One record per chunk: text, 1024-dim embedding, BM25 terms, doc id, version, source link and the principals allowed to read it. Serves k-NN and keyword search with the permission filter applied inside the query. Sharded across data nodes in three zones with one replica of each shard, so the HNSW graphs need about twice the 190 GB in memory; reached through the VPC",
       "cloud": {
         "aws": "Amazon OpenSearch Service",
         "gcp": "Vector Search"
@@ -366,7 +366,7 @@
           "phase": "Auth and limits",
           "label": "token bucket, groups, history",
           "detail": "One pipelined round trip takes a token from the user's bucket (20 questions a minute, 300k tokens a day), reads the user's flattened group list and the last 4 turns of the conversation. On a group-list miss the orchestrator reads the memberships the connectors synced into the registry and caches them for 5 minutes, which keeps revocations inside the 15-minute budget.",
-          "payload": "EVALSHA take_token  ratelimit:u_jdoe  20 60\nGET  principals:u_jdoe\nLRANGE conv:c_71f -8 -1"
+          "payload": "EVALSHA take_token 1 ratelimit:u_jdoe 20 60\nGET  principals:u_jdoe\nLRANGE conv:c_71f -8 -1"
         },
         {
           "from": "cache",
@@ -479,7 +479,7 @@
           "kind": "res",
           "phase": "Generate",
           "label": "token stream (first token about 700 ms)",
-          "payload": "{\"type\": \"content_block_delta\", \"delta\": {\"text\": \"No. Contractors engaged through\"}}"
+          "payload": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"No. Contractors engaged through\"}}"
         },
         {
           "from": "chat_api",
@@ -565,7 +565,7 @@
           "phase": "Detect change",
           "label": "list changes since cursor",
           "detail": "Each source has a delta API (Confluence by last modified time, Drive changes feed, SharePoint delta query, Jira updated since). Polling with a saved cursor survives missed webhooks and restarts.",
-          "payload": "GET /wiki/rest/api/content/search?cql=lastmodified>\"2026-11-10 09:40\"&expand=version,restrictions\nAuthorization: Bearer <service account token>"
+          "payload": "GET /wiki/rest/api/content/search?cql=lastmodified>\"2026-11-10 09:40\"&expand=version,restrictions.read.restrictions.group\nAuthorization: Bearer <service account token>"
         },
         {
           "from": "sources",
@@ -573,7 +573,7 @@
           "kind": "res",
           "phase": "Detect change",
           "label": "page HR-4411 v43, restrictions changed too",
-          "payload": "{ \"results\": [ { \"id\": \"4411\", \"title\": \"Parental Leave Policy (US)\", \"version\": { \"number\": 43 },\n    \"restrictions\": { \"read\": { \"group\": [\"all-employees\"] } } } ] }"
+          "payload": "{ \"results\": [ { \"id\": \"4411\", \"title\": \"Parental Leave Policy (US)\", \"version\": { \"number\": 43 },\n    \"restrictions\": { \"read\": { \"restrictions\": { \"group\": { \"results\": [ { \"name\": \"all-employees\" } ] } } } } } ] }"
         },
         {
           "from": "connectors",
@@ -953,7 +953,7 @@
     {
       "target": "vector_index",
       "kind": "security",
-      "text": "Permissions are enforced at retrieval time by filtering on each chunk's allowed principals inside the search. Filtering after generation is too late: the model has already read the restricted text and can leak it in paraphrase. Deletions and permission revocations take the same 15-minute path as edits, a weekly full listing catches missed deletes, and very selective filters need enough candidates (k) so that a user with narrow access still gets results."
+      "text": "Permissions are enforced at retrieval time by filtering on each chunk's allowed principals inside the search. Filtering after generation is too late: the model has already read the restricted text and can leak it in paraphrase. Deletions and permission revocations take the same 15-minute path as edits, a weekly full listing catches missed deletes, and with efficient filtering (the filter inside the k-NN clause, supported by the Lucene and Faiss engines) a very selective filter still returns k matching chunks but can fall back to exact search, which is slower, so watch latency for users with narrow access."
     },
     {
       "target": "chat_api",
@@ -963,12 +963,12 @@
     {
       "target": "cache",
       "kind": "tradeoff",
-      "text": "An answer cache is only safe when scoped to a permission set: the key includes a hash of the user's group list, so two users with different access never share an answer. Exact match on the normalized rewritten question is safe and gives 10 to 20% hits on internal help questions; a semantic cache (embedding similarity above about 0.97) adds hits but can return an answer to a subtly different question, so use it only for high-traffic FAQ-style questions and drop entries when a cited document changes."
+      "text": "An answer cache is only safe when scoped to a permission set: the key includes a hash of the user's group list, so two users with different access never share an answer. Exact match on the normalized rewritten question is safe and gives an assumed 10 to 20% hits on internal help questions; a semantic cache (embedding similarity above about 0.97) adds hits but can return an answer to a subtly different question, so use it only for high-traffic FAQ-style questions and drop entries when a cited document changes."
     },
     {
       "target": "llm",
       "kind": "scaling",
-      "text": "At about 5k input and 400 output tokens, a question costs about 2.3 cents at mid-tier list prices, roughly 1,500 USD a day at 60k questions, and almost all of it is the retrieved chunks in the main model's prompt. Token budgets per request, per-user daily limits and a global tokens-per-minute budget below the provider quota keep cost and throttling under control; provisioned throughput becomes cheaper than on-demand only once traffic is steady all day."
+      "text": "At about 5k input and 400 output tokens, a question costs about 2.3 cents at assumed mid-tier list prices (about 3 USD per million input tokens and 15 per million output tokens), roughly 1,400 USD a day at 60k questions, and almost all of it is the retrieved chunks in the main model's prompt. Token budgets per request, per-user daily limits and a global tokens-per-minute budget below the provider quota keep cost and throttling under control; provisioned throughput becomes cheaper than on-demand only once traffic is steady all day."
     },
     {
       "target": "llm",
@@ -1136,7 +1136,7 @@
         "target": "vector_index",
         "name": "Hits returned under k after the permission filter",
         "metric": "search_filtered_short_total",
-        "why": "Users with narrow access can get too few candidates from the approximate search; raise k or use exact search for them."
+        "why": "Users with narrow access can get fewer than k hits, or the slower exact search that OpenSearch falls back to when a filter is very selective; raise k or check the fallback threshold."
       },
       {
         "target": "cache",
@@ -1226,7 +1226,7 @@
       "id": "cost",
       "topic": "performance",
       "q": "What does one question cost, and how would you cut that roughly in half?",
-      "a": "About 5k input and 400 output tokens on the main model is roughly 2 cents, plus a fraction of a cent for rewriting, embedding and reranking, so about 1,500 USD a day at 60k questions; input tokens from retrieved chunks dominate. The biggest levers are sending fewer, better chunks after reranking (8 down to 5), routing simple questions to the small model, an answer cache scoped by permission set for repeated questions, and capping output length. Prompt caching helps only with the static instructions here, since the retrieved sources differ on every question.",
+      "a": "About 5k input and 400 output tokens on the main model is roughly 2 cents, plus a fraction of a cent for rewriting, embedding and reranking, so about 1,400 USD a day at 60k questions; input tokens from retrieved chunks dominate. The biggest levers are sending fewer, better chunks after reranking (8 down to 5), routing simple questions to the small model, an answer cache scoped by permission set for repeated questions, and capping output length. Prompt caching helps only with the static instructions here, since the retrieved sources differ on every question.",
       "targets": [
         "llm",
         "cache",

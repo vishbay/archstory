@@ -493,7 +493,7 @@
           "phase": "Resolve host",
           "label": "cache hit",
           "detail": "Answered from cache for the record's TTL. The frontier can also prefetch DNS for hosts about to become ready, so lookups rarely sit on the fetch path.",
-          "payload": "example.org.  2817  IN A  93.184.215.14"
+          "payload": "example.org.  2817  IN A  198.51.100.23"
         },
         {
           "from": "fetcher",

@@ -282,7 +282,7 @@
       "id": "dns",
       "label": "DNS",
       "kind": "dns",
-      "description": "Geo routed: sends each app to its city's region",
+      "description": "Geo routed: sends each app to the region that serves its area (Route 53 geolocation resolves to a country or US state, so a finer city split needs a regional hostname chosen by the app)",
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
@@ -636,7 +636,7 @@
           "kind": "req",
           "phase": "DNS",
           "label": "resolve api.rides.example.com",
-          "detail": "Geo routing sends each app to its city's region, so the rider, the driver and the matching service for that city share a region. A short TTL lets traffic move if a region fails."
+          "detail": "Geo routing (by country or US state in Route 53) or a regional hostname chosen by the app sends each app to its city's region, so the rider, the driver and the matching service for that city share a region. A short TTL lets traffic move if a region fails."
         },
         {
           "from": "dns",
@@ -960,7 +960,7 @@
           "kind": "req",
           "phase": "Finish trip",
           "label": "UPDATE COMPLETED, fare",
-          "detail": "If the provider is down, the trip is still marked COMPLETED with payment pending, and a background job in the Trip Service retries the charge with the same key."
+          "detail": "If the provider is down, the trip is still marked COMPLETED with payment pending, and a background job in the Trip Service retries the charge with the same key (Stripe keeps keys for at least 24 hours, so a retry after that first looks the charge up by trip id)."
         },
         {
           "from": "trips_db",
