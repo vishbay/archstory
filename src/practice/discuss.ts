@@ -59,7 +59,7 @@ How to answer:
     section('Who talks to whom', list(d.edges.map(e => `${name(e.from)} <-> ${name(e.to)}${e.label ? `: ${e.label}` : ''}${e.protocol ? ` [${e.protocol}]` : ''}`)))
     for (const f of d.flows) {
       const here = f.id === o.flowId ? '  <- the scenario I am watching right now' : ''
-      const times = rttTimes(f.steps)
+      const times = rttTimes(f.steps, moduleRtt(d))
       const when = (i: number) => (f.steps[i].lost ? 'lost: never arrives' : `at ${fmtRtt(times[i])}, ${fmtMs(rttToMs(times[i], moduleRtt(d)))}`)
       const steps: string[] = []
       let phase = ''

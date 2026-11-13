@@ -3,14 +3,16 @@
 import type { Design, Flow, Step } from './schema'
 import { resolvePhases } from './phases'
 
-/** One-way delay of a step in one-way trips: the step's own `delay`, else 1 between two nodes and 0 inside one.
+/** One-way delay of a step in one-way trips: a fixed `wait` in milliseconds converted at the round trip `rttMs`, else the step's own `delay`,
+ *  else 1 between two nodes and 0 inside one.
  *  A lost step never arrives, so the clock does not advance for it: 0 unless it has a `delay` of its own. */
-export const stepDelay = (s: Pick<Step, 'from' | 'to' | 'delay' | 'lost'>) => s.delay ?? (s.lost || s.from === s.to ? 0 : 1)
+export const stepDelay = (s: Pick<Step, 'from' | 'to' | 'delay' | 'lost'> & { wait?: number }, rttMs = DEFAULT_RTT_MS) =>
+  s.wait !== undefined ? (2 * s.wait) / rttMs : s.delay ?? (s.lost || s.from === s.to ? 0 : 1)
 
 /** Elapsed time in round trips when each step has arrived: cumulative one-way delays divided by 2. */
-export function rttTimes(steps: Pick<Step, 'from' | 'to' | 'delay' | 'lost'>[]): number[] {
+export function rttTimes(steps: Pick<Step, 'from' | 'to' | 'delay' | 'lost'>[], rttMs = DEFAULT_RTT_MS): number[] {
   let oneWay = 0
-  return steps.map(s => (oneWay += stepDelay(s)) / 2)
+  return steps.map(s => (oneWay += stepDelay(s, rttMs)) / 2)
 }
 
 /** "0 RTT", "0.5 RTT", "1 RTT", "1.25 RTT". */
@@ -21,12 +23,12 @@ export interface PhaseBudget { name: string; rtt: number }
 /** Round trips spent in each phase, in order of first appearance: the one-way delays of the phase's steps divided by 2.
  *  A step with no phase continues the previous one (as in the step list); steps before the first phase count as "Start".
  *  Phases that repeat later in the flow are added into their first entry, so the totals always sum to the flow's time. */
-export function phaseBudget(steps: Pick<Step, 'from' | 'to' | 'delay' | 'lost' | 'phase'>[]): PhaseBudget[] {
+export function phaseBudget(steps: Pick<Step, 'from' | 'to' | 'delay' | 'lost' | 'phase'>[], rttMs = DEFAULT_RTT_MS): PhaseBudget[] {
   const out: PhaseBudget[] = []
   resolvePhases(steps).forEach((p, i) => {
     const name = p ?? 'Start'
     const row = out.find(b => b.name === name) ?? (out[out.length] = { name, rtt: 0 })
-    row.rtt += stepDelay(steps[i]) / 2
+    row.rtt += stepDelay(steps[i], rttMs) / 2
   })
   return out
 }

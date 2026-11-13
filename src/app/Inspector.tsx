@@ -127,7 +127,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const res = zones ? resilience(design, zoneFailed ?? 0, cloud) : null
   const proto = isProtocol(design)
   const rtt = useRtt(design)
-  const at = proto && flow && cur ? rttTimes(flow.steps)[step] : null
+  const at = proto && flow && cur ? rttTimes(flow.steps, rtt.ms)[step] : null
   const drill = regions ? regionDrill(design, regionFailed ?? homeRegion(design)) : null
 
   return (

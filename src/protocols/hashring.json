@@ -950,12 +950,12 @@
           "to": "client",
           "kind": "local",
           "label": "timeout: skip D's tokens, next is 35 (C)",
-          "detail": "The client gives up after its timeout (100 ms here, two round trips at 50 ms) and marks D down. It skips every token D owns and goes on clockwise from 18: 22 is D, so the next token is 35, which belongs to C.",
-          "delay": 4,
+          "detail": "The client gives up after its timeout (100 ms here, a fixed time) and marks D down. It skips every token D owns and goes on clockwise from 18: 22 is D, so the next token is 35, which belongs to C.",
+          "wait": 100,
           "fields": [
             {
               "name": "timeout",
-              "value": "100 ms = 2 RTT at 50 ms",
+              "value": "100 ms, a fixed time",
               "note": "illustrative"
             },
             {

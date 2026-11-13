@@ -95,6 +95,8 @@ export const StepSchema = z.object({
     value: z.string().describe('Its value in this message, e.g. "SYN, ACK" or "5000"'),
     note: z.string().optional().describe('Why it has this value'),
   })).optional().describe('Protocol designs: the anatomy of the message on the wire (flags, sequence numbers, header bits, sections)'),
+  wait: z.number().positive().optional()
+    .describe('Protocol designs: a fixed wait in milliseconds that does not change with the distance (a retransmission timeout, a client timeout). Overrides delay'),
   delay: z.number().nonnegative().optional()
     .describe('One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes, 0 for a local step and 0 for a lost step; use 0 for a message sent right behind the previous one. A local step with a delay is a wait, such as a retransmission timeout'),
   lost: z.boolean().optional()

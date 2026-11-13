@@ -173,3 +173,25 @@ describe('distance: round trip time in milliseconds', () => {
     expect(rttOptions(80, 12)).toEqual([10, 12, 30, 70, 80, 150])
   })
 })
+
+describe('fixed waits in milliseconds', () => {
+  const steps = [
+    { from: 'a', to: 'b', kind: 'req' as const, label: 'x' },
+    { from: 'a', to: 'a', kind: 'local' as const, label: 'timeout', wait: 1000 },
+  ]
+  it('keeps the same milliseconds at every distance', () => {
+    for (const ms of [10, 50, 150]) {
+      const t = rttTimes(steps, ms)
+      expect(rttToMs(t[1] - t[0], ms)).toBeCloseTo(1000, 6)
+    }
+  })
+  it('is 20 round trips at 50 ms and 100 at 10 ms, and counts in the phase budget', () => {
+    expect(rttTimes(steps, 50)[1]).toBeCloseTo(0.5 + 20, 6)
+    expect(rttTimes(steps, 10)[1]).toBeCloseTo(0.5 + 100, 6)
+    expect(phaseBudget(steps, 10)[0].rtt).toBeCloseTo(100.5, 6)
+  })
+  it('wait overrides delay, and plain steps do not depend on the distance', () => {
+    expect(stepDelay({ from: 'a', to: 'a', delay: 3, wait: 100 }, 50)).toBe(4)
+    expect(rttTimes([steps[0]], 10)).toEqual(rttTimes([steps[0]], 150))
+  })
+})

@@ -39,9 +39,9 @@ export function Timeline({ design, flow, player, cloud, onSelect }: {
     return design.nodes.filter(n => used.has(n.id))
       .sort((a, b) => band[tierOf(a)] - band[tierOf(b)] || L.pos[a.id].x - L.pos[b.id].x)
   }, [design, flow])
-  const times = useMemo(() => rttTimes(flow.steps), [flow])
+  const times = useMemo(() => rttTimes(flow.steps, rtt.ms), [flow, rtt.ms])
   const changes = useMemo(() => stateChanges(flow), [flow])
-  const budget = useMemo(() => (proto ? phaseBudget(flow.steps) : []), [proto, flow])
+  const budget = useMemo(() => (proto ? phaseBudget(flow.steps, rtt.ms) : []), [proto, flow, rtt.ms])
   const curPhase = phaseOfStep(flow.steps, step)
   // The bar and its labels show the phases that cost time; the ones that cost none (local cache checks, rendering) are named in the tooltip.
   const paid = budget.filter(b => b.rtt > 0), free = budget.filter(b => b.rtt <= 0).map(b => b.name)

@@ -1176,7 +1176,7 @@
           "phase": "Timeout wait",
           "label": "Silence: waiting 1 s for the RTO",
           "detail": "With no duplicate ACKs, the only signal left is silence. The retransmission timer (RTO) started when the last ACK arrived and runs for 1 second. RFC 6298 rounds the RTO up to at least 1 second whatever the measured round trip, so on this 50 ms path the sender waits 20 round trips (many systems use a smaller minimum; Linux uses 200 ms). The readout counts this wait in round trips, so it scales with the Distance setting even though a real timeout does not.",
-          "delay": 40,
+          "wait": 1000,
           "fields": [
             {
               "name": "RTO",
@@ -1190,7 +1190,7 @@
             },
             {
               "name": "wait",
-              "value": "1 s = 20 RTT at 50 ms",
+              "value": "1 s, a fixed time that does not change with distance",
               "note": "The numbers on this page assume a 50 ms round trip"
             }
           ]
@@ -1264,7 +1264,7 @@
           "phase": "Second timeout",
           "label": "Silence again: waiting 2 s",
           "detail": "Each timeout doubles the wait: 1 s, then 2 s, then 4 s, and so on (RFC 6298 allows an upper bound of at least 60 seconds). Backing off keeps a sender from hammering a network that is already dropping its packets.",
-          "delay": 80,
+          "wait": 2000,
           "fields": [
             {
               "name": "RTO",
@@ -1273,7 +1273,7 @@
             },
             {
               "name": "wait",
-              "value": "2 s = 40 RTT at 50 ms"
+              "value": "2 s, doubled from 1 s"
             }
           ]
         },

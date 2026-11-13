@@ -518,6 +518,11 @@
                     ]
                   }
                 },
+                "wait": {
+                  "description": "Protocol designs: a fixed wait in milliseconds that does not change with the distance (a retransmission timeout, a client timeout). Overrides delay",
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
                 "delay": {
                   "description": "One-way network delay of this step, in one-way trips (half a round trip). Defaults to 1 for a step between two nodes, 0 for a local step and 0 for a lost step; use 0 for a message sent right behind the previous one. A local step with a delay is a wait, such as a retransmission timeout",
                   "type": "number",
