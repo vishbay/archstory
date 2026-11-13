@@ -25,7 +25,7 @@
     "nonFunctional": [
       "Reads p99 < 150 ms measured at the regional load balancer",
       "99.99% availability for reads, 99.95% for order placement",
-      "Survive the loss of a whole region: RTO 1 min, RPO 5 s for profile and order data",
+      "Survive the loss of a whole region: RTO 90 s, RPO 5 s for profile and order data",
       "Each region can carry 100% of global peak on its own",
       "A request retried after a failover never creates a second order or a second charge",
       "EU users' personal data may be stored in both regions under the company's transfer safeguards; strict EU residency is out of scope here (see the security note for the change it would need)"
@@ -90,10 +90,10 @@
       }
     ],
     "strategy": "active-active",
-    "rto": "1 min",
+    "rto": "90 s",
     "rpo": "5 s",
-    "failover": "Latency-based DNS records with health checks on each region's load balancer (every 10 s from several checker locations, unhealthy after 3 failures). A failed region's record is withdrawn and resolvers move users to the other region once the 30 s TTL expires; nothing has to be promoted because both regions already take writes.",
-    "dnsTtl": 30
+    "failover": "Latency-based DNS records with health checks on each region's load balancer (every 10 s from several checker locations, unhealthy after 3 failures). A failed region's record is withdrawn and resolvers move users to the other region once the 60 s TTL expires; nothing has to be promoted because both regions already take writes.",
+    "dnsTtl": 60
   },
   "network": {
     "cidr": "10.20.0.0/16",
@@ -467,7 +467,7 @@
           "to": "client",
           "kind": "res",
           "phase": "DNS",
-          "label": "eu-west-1 load balancer, TTL 30 s",
+          "label": "eu-west-1 load balancer, TTL 60 s",
           "detail": "The short TTL is what lets a failover reach users within the RTO; a long TTL would keep them on a dead region.",
           "payload": "api.shop.example.  30  IN  A  34.250.17.40   ; eu-west-1 load balancer (latency record, healthy)"
         },
@@ -795,7 +795,7 @@
           "kind": "req",
           "phase": "Reroute",
           "label": "resolve api.shop.example",
-          "detail": "Once the cached answer's 30 s TTL expires, the resolver asks again. Some resolvers and clients hold answers longer than the TTL, which is why a few users take longer to move."
+          "detail": "Once the cached answer's 60 s TTL expires, the resolver asks again. Some resolvers and clients hold answers longer than the TTL, which is why a few users take longer to move."
         },
         {
           "from": "dns",
@@ -929,7 +929,7 @@
     {
       "target": "dns",
       "kind": "tradeoff",
-      "text": "DNS failover is cheap and simple but bounded by caching: detection (about 30 s) plus the TTL (30 s) sets the RTO, and some resolvers ignore low TTLs. Route 53 alias records to a load balancer cannot carry a custom TTL (the load balancer's own 60 s applies, which makes the RTO about 90 s), so a true 30 s TTL needs non-alias records that point at the load balancer addresses, which change. An anycast global load balancer (AWS Global Accelerator, Google's global external load balancer) gives users fixed IPs and shifts traffic in seconds with no DNS change, at the cost of another managed layer in front of every request."
+      "text": "DNS failover is cheap and simple but bounded by caching: detection (about 30 s) plus the TTL (60 s) sets the RTO of about 90 s, and some resolvers ignore low TTLs. Route 53 alias records to a load balancer cannot carry a custom TTL: the load balancer's own 60 s applies, which is the figure used here. A shorter TTL needs non-alias records that point at the load balancer addresses, which change. An anycast global load balancer (AWS Global Accelerator, Google's global external load balancer) gives users fixed IPs and shifts traffic in seconds with no DNS change, at the cost of another managed layer in front of every request."
     },
     {
       "target": "db",

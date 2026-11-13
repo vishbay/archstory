@@ -641,7 +641,7 @@
           "phase": "Respond & record click",
           "label": "publish click",
           "detail": "Fire-and-forget: the API publishes and does not wait. A slow analytics pipeline can never slow down a redirect.",
-          "payload": "{ \"id\": \"evt_01HZX3\", \"code\": \"aZ3k9Q\", \"ts\": 1762600000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
+          "payload": "{ \"id\": \"evt_01HZX3\", \"code\": \"aZ3k9Q\", \"ts\": 1794136000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
         },
         {
           "from": "api",

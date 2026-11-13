@@ -630,7 +630,7 @@
           "phase": "Risk check",
           "label": "INCRBY daily total",
           "detail": "Velocity counters are approximate and expire on their own, which suits fraud signals. Hard limits that must be exact are checked against the ledger itself.",
-          "payload": "MULTI\nINCRBY spend:u_alice:2026-11-10 2500\nEXPIRE spend:u_alice:2026-11-10 172800\nINCR tx:u_alice:minute:1731240060\nEXPIRE tx:u_alice:minute:1731240060 120\nEXEC"
+          "payload": "MULTI\nINCRBY spend:u_alice:2026-11-10 2500\nEXPIRE spend:u_alice:2026-11-10 172800\nINCR tx:u_alice:minute:1794312060\nEXPIRE tx:u_alice:minute:1794312060 120\nEXEC"
         },
         {
           "from": "limits_cache",
@@ -991,7 +991,7 @@
           "phase": "Webhook",
           "label": "POST /webhooks/provider payout.paid",
           "detail": "Hours later the bank confirms, and the provider calls us. Providers deliver webhooks at least once and retry until they get a 2xx, so duplicates are normal.",
-          "payload": "POST /webhooks/provider HTTP/1.1\nProvider-Signature: t=1731262000,v1=5f2a9c...\n\n{ \"id\": \"evt_31aa\", \"type\": \"payout.paid\", \"data\": { \"id\": \"tr_5Kq9\", \"amount\": 10000, \"metadata\": { \"payout_id\": \"po_77\" } } }"
+          "payload": "POST /webhooks/provider HTTP/1.1\nProvider-Signature: t=1794334000,v1=5f2a9c...\n\n{ \"id\": \"evt_31aa\", \"type\": \"payout.paid\", \"data\": { \"id\": \"tr_5Kq9\", \"amount\": 10000, \"metadata\": { \"payout_id\": \"po_77\" } } }"
         },
         {
           "from": "waf",

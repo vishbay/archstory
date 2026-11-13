@@ -621,7 +621,7 @@
           "phase": "Store and hand off",
           "label": "publish page_fetched",
           "detail": "Parsing is CPU-bound and fetching is network-bound, so they scale separately. The event carries a pointer to the stored page, not the HTML, and the trace id from the lease, so one URL can be followed from lease to metadata write.",
-          "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"status\": 200, \"object\": \"raw/2026/11/10/9c1e…b7.warc.gz\", \"sha256\": \"9c1e…b7\", \"simhash\": \"0x8f3a21c4d09e7b15\", \"etag\": \"5f2a-61c\", \"fetched_at\": 1762790400, \"trace_id\": \"5b8e2f0c9a7d41e3b6f1c2d4e8a90b17\" }"
+          "payload": "{ \"url\": \"https://example.org/blog/post-42\", \"status\": 200, \"object\": \"raw/2026/11/10/9c1e…b7.warc.gz\", \"sha256\": \"9c1e…b7\", \"simhash\": \"0x8f3a21c4d09e7b15\", \"etag\": \"5f2a-61c\", \"fetched_at\": 1794326400, \"trace_id\": \"5b8e2f0c9a7d41e3b6f1c2d4e8a90b17\" }"
         },
         {
           "from": "fetcher",
@@ -767,7 +767,7 @@
           "phase": "Record metadata",
           "label": "UpdateItem page row",
           "detail": "The metadata row is the source of truth for what the crawler knows about a URL. The update is keyed by URL and overwrites fields, so a redelivered event writes the same values again.",
-          "payload": "UpdateItem url=https://example.org/blog/post-42\nSET status=200, sha256='9c1e…b7', etag='5f2a-61c', last_fetch=1762790400, next_crawl_at=1763395200"
+          "payload": "UpdateItem url=https://example.org/blog/post-42\nSET status=200, sha256='9c1e…b7', etag='5f2a-61c', last_fetch=1794326400, next_crawl_at=1794931200"
         },
         {
           "from": "meta_db",
@@ -901,7 +901,7 @@
           "phase": "Reschedule",
           "label": "publish not_modified",
           "detail": "The same stream carries every fetch outcome, so metadata is always written in one place.",
-          "payload": "{ \"url\": \"https://example.org/about\", \"status\": 304, \"fetched_at\": 1762790400 }"
+          "payload": "{ \"url\": \"https://example.org/about\", \"status\": 304, \"fetched_at\": 1794326400 }"
         },
         {
           "from": "parse_q",
@@ -924,7 +924,7 @@
           "kind": "req",
           "phase": "Reschedule",
           "label": "UpdateItem next_crawl_at",
-          "payload": "UpdateItem url=https://example.org/about\nSET last_fetch=1762790400, interval_h=192, next_crawl_at=1763481600"
+          "payload": "UpdateItem url=https://example.org/about\nSET last_fetch=1794326400, interval_h=192, next_crawl_at=1795017600"
         },
         {
           "from": "meta_db",
@@ -1003,7 +1003,7 @@
           "phase": "Back off host",
           "label": "save host backoff",
           "detail": "Backoff state is durable so a frontier restart does not immediately hit a struggling site again.",
-          "payload": "PutItem host=shop.example.net next_allowed=1762790528 failures=1"
+          "payload": "PutItem host=shop.example.net next_allowed=1794326528 failures=1"
         },
         {
           "from": "frontier_store",

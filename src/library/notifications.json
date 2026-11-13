@@ -499,7 +499,7 @@
           "phase": "Accept request",
           "label": "POST /notify",
           "detail": "The auth service asks for a login code to be sent; the idempotency key makes its retries safe.",
-          "payload": "POST /notify\nIdempotency-Key: otp-u_17-1762601000\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\", \"expires_in\": 300 }"
+          "payload": "POST /notify\nIdempotency-Key: otp-u_17-1794137000\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n\n{ \"user_id\": \"u_17\", \"template\": \"login_code\", \"params\": { \"code\": \"482913\" }, \"priority\": \"critical\", \"expires_in\": 300 }"
         },
         {
           "from": "lb",
@@ -516,7 +516,7 @@
           "phase": "Deduplicate",
           "label": "SET NX idem:… processing EX 60",
           "detail": "Producers retry on timeouts. The first call takes a short claim; a repeat while it is held, or after it is marked queued, is acknowledged but not sent again. If this instance dies before queueing, the claim expires in 60 s and the producer's retry goes through, so a crash cannot swallow a login code.",
-          "payload": "SET idem:otp-u_17-1762601000 processing NX EX 60"
+          "payload": "SET idem:otp-u_17-1794137000 processing NX EX 60"
         },
         {
           "from": "dedupe",
@@ -555,7 +555,7 @@
           "phase": "Queue & respond",
           "label": "enqueue",
           "detail": "Critical and bulk traffic use separate queues, and workers always drain the critical queue first, so a 5M-user campaign cannot delay a login code. The message carries an expiry: a code nobody can use any more is dropped, not sent late.",
-          "payload": "{ \"msg_id\": \"n_8f31\", \"user_id\": \"u_17\", \"channel\": \"push\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"], \"body\": \"Tu código es 482913\", \"expires_at\": 1762601300, \"traceparent\": \"00-4bf92f…-01\" }"
+          "payload": "{ \"msg_id\": \"n_8f31\", \"user_id\": \"u_17\", \"channel\": \"push\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"], \"body\": \"Tu código es 482913\", \"expires_at\": 1794137300, \"traceparent\": \"00-4bf92f…-01\" }"
         },
         {
           "from": "notif_api",

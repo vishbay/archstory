@@ -189,7 +189,7 @@
           "from": "devices", "to": "nlb", "kind": "req", "phase": "Publish",
           "label": "PUBLISH dt/meter/m-0012345/telemetry QoS 1",
           "detail": "The meter's TLS connection has been open for days, so a reading costs one small MQTT packet with no DNS lookup and no handshake.",
-          "payload": "PUBLISH topic=dt/meter/m-0012345/telemetry qos=1 packetId=4711\n\n{ \"ts\": 1762790400, \"seq\": 88123, \"fw\": \"3.4.1\",\n  \"v\": { \"kwh\": 18234.567, \"kw\": 2.31, \"volt\": 251.2, \"amp\": 9.7, \"pf\": 0.98, \"temp_c\": 41.2 } }"
+          "payload": "PUBLISH topic=dt/meter/m-0012345/telemetry qos=1 packetId=4711\n\n{ \"ts\": 1794326400, \"seq\": 88123, \"fw\": \"3.4.1\",\n  \"v\": { \"kwh\": 18234.567, \"kw\": 2.31, \"volt\": 251.2, \"amp\": 9.7, \"pf\": 0.98, \"temp_c\": 41.2 } }"
         },
         {
           "from": "nlb", "to": "broker", "kind": "req", "phase": "Publish",
@@ -206,7 +206,7 @@
           "from": "broker", "to": "stream", "kind": "async", "phase": "Route",
           "label": "PutRecord, partition key m-0012345",
           "detail": "Using the device id as partition key keeps one device's readings in order on one shard, which the deduplication and windowing rely on. Device id plus seq identifies a reading at every hop, so it serves as the trace key from the meter to the archive.",
-          "payload": "PutRecord { StreamName: \"telemetry\", PartitionKey: \"m-0012345\",\n  Data: { device_id: \"m-0012345\", ts: 1762790400, seq: 88123, received_at: 1762790401.2, v: {...} } }"
+          "payload": "PutRecord { StreamName: \"telemetry\", PartitionKey: \"m-0012345\",\n  Data: { device_id: \"m-0012345\", ts: 1794326400, seq: 88123, received_at: 1794326401.2, v: {...} } }"
         },
         {
           "from": "broker", "to": "nlb", "kind": "res", "phase": "Acknowledge",
@@ -277,7 +277,7 @@
         {
           "from": "waf", "to": "console", "kind": "res", "phase": "Respond",
           "label": "200 OK, chart data",
-          "payload": "HTTP/1.1 200 OK\n\n{ \"device\": \"m-0012345\", \"field\": \"volt\", \"step\": \"10s\",\n  \"points\": [[1762786800, 238.9], [1762786810, 239.1], ...] }"
+          "payload": "HTTP/1.1 200 OK\n\n{ \"device\": \"m-0012345\", \"field\": \"volt\", \"step\": \"10s\",\n  \"points\": [[1794322800, 238.9], [1794322810, 239.1], ...] }"
         }
       ]
     },
@@ -313,14 +313,14 @@
           "from": "api", "to": "shadow", "kind": "req", "phase": "Record intent",
           "label": "set desired, add pending c-889",
           "detail": "The desired state is written before anything is sent, so the intent survives even if the device stays offline longer than the broker keeps its session. The version check stops two operators overwriting each other.",
-          "payload": "UpdateItem device_id = 'm-0012345'\n  SET desired.report_interval_s = 60, desired_version = 42,\n      pending.c889 = { type: 'set_config', status: 'PENDING', expires: 1763395200 }\n  CONDITION desired_version = 41"
+          "payload": "UpdateItem device_id = 'm-0012345'\n  SET desired.report_interval_s = 60, desired_version = 42,\n      pending.c889 = { type: 'set_config', status: 'PENDING', expires: 1794931200 }\n  CONDITION desired_version = 41"
         },
         { "from": "shadow", "to": "api", "kind": "res", "phase": "Record intent", "label": "version 42" },
         {
           "from": "api", "to": "broker", "kind": "req", "phase": "Publish",
           "label": "PUBLISH cmd/m-0012345/req QoS 1",
           "detail": "The command goes to the device's own command topic with QoS 1, carrying the command id and the desired version so the device can tell a repeat from a new command.",
-          "payload": "PUBLISH topic=cmd/m-0012345/req qos=1\n\n{ \"cmd_id\": \"c-889\", \"type\": \"set_config\", \"desired_version\": 42,\n  \"config\": { \"report_interval_s\": 60 }, \"expires\": 1763395200 }"
+          "payload": "PUBLISH topic=cmd/m-0012345/req qos=1\n\n{ \"cmd_id\": \"c-889\", \"type\": \"set_config\", \"desired_version\": 42,\n  \"config\": { \"report_interval_s\": 60 }, \"expires\": 1794931200 }"
         },
         {
           "from": "broker", "to": "broker", "kind": "local", "phase": "Publish",
@@ -470,7 +470,7 @@
           "from": "devices", "to": "nlb", "kind": "req", "phase": "Backfill",
           "label": "PUBLISH buffered readings, 50 per message",
           "detail": "Each meter drains its buffer at a capped rate with many readings per message, so 600k meters replaying hours of data add a modest, steady load instead of multiplying the peak.",
-          "payload": "PUBLISH topic=dt/meter/m-0012345/telemetry qos=1\n\n{ \"batch\": [ { \"ts\": 1762761600, \"seq\": 87150, \"v\": {...} }, ... 49 more ] }"
+          "payload": "PUBLISH topic=dt/meter/m-0012345/telemetry qos=1\n\n{ \"batch\": [ { \"ts\": 1794297600, \"seq\": 87150, \"v\": {...} }, ... 49 more ] }"
         },
         {
           "from": "nlb", "to": "broker", "kind": "req", "phase": "Backfill",

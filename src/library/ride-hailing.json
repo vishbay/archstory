@@ -512,7 +512,7 @@
           "phase": "Send position",
           "label": "WS frame: location",
           "detail": "Sent over an already-open WebSocket: no new connection or TLS handshake per update. The WAF inspected the upgrade request when the connection opened (a valid token, rate rules per IP); frames on an open connection pass straight through.",
-          "payload": "{ \"type\": \"loc\", \"driver_id\": \"d_7781\", \"lat\": 37.7793, \"lng\": -122.4192, \"heading\": 270, \"ts\": 1762601000 }"
+          "payload": "{ \"type\": \"loc\", \"driver_id\": \"d_7781\", \"lat\": 37.7793, \"lng\": -122.4192, \"heading\": 270, \"ts\": 1794137000 }"
         },
         {
           "from": "waf",

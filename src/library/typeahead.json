@@ -530,7 +530,7 @@
           "phase": "Count queries",
           "label": "searched \"system design\"",
           "detail": "Only submitted searches feed popularity, so the Search Service, not the Suggest Service, writes the log. Keystrokes are never logged.",
-          "payload": "{ \"q\": \"system design\", \"lang\": \"en\", \"ts\": 1762790400 }"
+          "payload": "{ \"q\": \"system design\", \"lang\": \"en\", \"ts\": 1794326400 }"
         },
         {
           "from": "logs",

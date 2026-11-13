@@ -642,7 +642,7 @@
           "phase": "Handle request",
           "label": "+ signed tenant context",
           "detail": "Sent over a VPC Link (private integration) to the internal load balancer. The gateway adds a short-lived context it signs itself, carrying the tenant, its database and its limits, so no service ever uses a client-supplied value or needs its own catalog lookup. A W3C traceparent header starts here and travels on every later hop, including job messages.",
-          "payload": "GET /api/projects\nX-Tenant-Context: tenant=globex; tier=pool; db=pool-1; stmt_timeout_ms=2000; db_conn_cap=5; exp=1731400030; sig=…\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+          "payload": "GET /api/projects\nX-Tenant-Context: tenant=globex; tier=pool; db=pool-1; stmt_timeout_ms=2000; db_conn_cap=5; exp=1794472030; sig=…\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
           "from": "lb",
@@ -801,7 +801,7 @@
           "phase": "Handle request",
           "label": "+ signed tenant context",
           "detail": "The catalog entry travels in the signed context, so the routing decision is made once, at the gateway.",
-          "payload": "POST /api/exports\nX-Tenant-Context: tenant=acme; tier=silo; db=acme-db; exp=1731400030; sig=…\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+          "payload": "POST /api/exports\nX-Tenant-Context: tenant=acme; tier=silo; db=acme-db; exp=1794472030; sig=…\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
         },
         {
           "from": "lb",

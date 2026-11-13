@@ -662,7 +662,7 @@
           "phase": "Run",
           "label": "POST /hooks/export",
           "detail": "Execution is at least once, so this call may be a repeat of an earlier attempt. The run id is sent as an idempotency key and the target uses it to skip work it already did. The request is signed with a key from the secrets manager so the tenant can verify it came from the scheduler, and the trace context lets a tenant line up our attempt with their own logs.",
-          "payload": "POST /hooks/export\nIdempotency-Key: r_8c2_20261111T0700Z\nX-Job-Attempt: 1\nX-Signature: t=1762844413,v1=5d1e...\ntraceparent: 00-9f2c4d1a7be04c3e8d55a1f0e6b2c7d9-6c8e0a2b4d6f8a1c-01\n\n{ \"job_id\": \"j_8c2\", \"scheduled_for\": \"2026-11-11T07:00:00Z\" }"
+          "payload": "POST /hooks/export\nIdempotency-Key: r_8c2_20261111T0700Z\nX-Job-Attempt: 1\nX-Signature: t=1794380413,v1=5d1e...\ntraceparent: 00-9f2c4d1a7be04c3e8d55a1f0e6b2c7d9-6c8e0a2b4d6f8a1c-01\n\n{ \"job_id\": \"j_8c2\", \"scheduled_for\": \"2026-11-11T07:00:00Z\" }"
         },
         {
           "from": "worker",

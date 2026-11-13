@@ -547,7 +547,7 @@
           "phase": "Register session",
           "label": "HSET session:alice phone-1",
           "detail": "This entry is how every later message finds each of Alice's devices. The gateway sends a heartbeat every 30 s, batched per gateway, that the Message Service turns into a refresh; if the gateway dies the key expires within a minute and she is treated as offline. Each field carries its own expiry time, so a dead laptop entry is ignored even while the phone keeps the key alive.",
-          "payload": "HSET session:alice phone-1 \"gateway-17 exp=1762600060\"\nEXPIRE session:alice 60"
+          "payload": "HSET session:alice phone-1 \"gateway-17 exp=1794136060\"\nEXPIRE session:alice 60"
         },
         {
           "from": "sessions",
