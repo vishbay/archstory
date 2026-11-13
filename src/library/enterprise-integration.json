@@ -50,7 +50,7 @@
       },
       {
         "label": "ERP outage backlog",
-        "value": "6 h window ≈ 5,000 orders plus 7,500 customer and price events; drained at 20/s in ~10 min"
+        "value": "6 h window ≈ 5,000 orders plus 7,500 customer events (12,500 at the daily averages); drained at 20/s in ~10 min"
       },
       {
         "label": "Salesforce API budget",
@@ -773,7 +773,7 @@
           "kind": "async",
           "phase": "Change captured",
           "label": "AccountChangeEvent (Pub/Sub API)",
-          "detail": "The connector holds a subscription to Salesforce Change Data Capture and stores the last replay id, so after a restart it resumes where it stopped instead of polling for changes.",
+          "detail": "The connector holds a subscription to Salesforce Change Data Capture and stores the last replay id, so after a restart it resumes where it stopped instead of polling for changes. Salesforce keeps change events for 72 hours, so an outage longer than that needs a resync of the affected records.",
           "payload": "{ \"ChangeEventHeader\": { \"entityName\": \"Account\", \"changeType\": \"UPDATE\",\n    \"recordIds\": [\"001Hn00001xYzAbIAK\"], \"changedFields\": [\"PersonEmail\", \"LastModifiedDate\"],\n    \"commitUser\": \"005Hn000004RepAAA\", \"commitNumber\": 11850391245013, \"commitTimestamp\": 1762766100000 },\n  \"PersonEmail\": \"ana.ruiz@example.com\" }"
         },
         {
@@ -1000,7 +1000,7 @@
           "kind": "local",
           "phase": "Pause",
           "label": "circuit opens: pause partitions",
-          "detail": "The next calls fail fast with 503, so the breaker opens and the connector stops consuming instead of dead-lettering every order. Events pile up in Kafka with offsets uncommitted: about 3,500 orders and customer changes over 4 hours, well inside 7 days of retention."
+          "detail": "The next calls fail fast with 503, so the breaker opens and the connector stops consuming instead of dead-lettering every order. Events pile up in Kafka with offsets uncommitted: about 8,300 orders and customer changes over 4 hours at the daily averages (3,300 orders plus 5,000 customer events), well inside 7 days of retention."
         },
         {
           "from": "ops",
@@ -1039,7 +1039,7 @@
           "kind": "local",
           "phase": "ERP back",
           "label": "resume, drain at 20 orders/s",
-          "detail": "The backlog drains in about 3 minutes. The cap protects SAP's limited work processes, which a burst of thousands of parallel calls right after maintenance would overload."
+          "detail": "At 20 events a second the backlog drains in about 7 minutes. The cap protects SAP's limited work processes, which a burst of thousands of parallel calls right after maintenance would overload."
         },
         {
           "from": "partners",

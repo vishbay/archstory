@@ -563,7 +563,7 @@
           "kind": "local",
           "phase": "Find due runs",
           "label": "tick (every 1 s)",
-          "detail": "All three scheduler instances run this loop at the same time. There is no leader: the database lock in the next step decides who gets which rows. An instance whose batch comes back full loops again at once instead of waiting for the next tick: at the top of the hour about 3.3k runs/s come due, more than 500 rows per second per instance would cover."
+          "detail": "All three scheduler instances run this loop at the same time. There is no leader: the database lock in the next step decides who gets which rows. An instance whose batch comes back full loops again at once instead of waiting for the next tick: at the top of the hour about 3.3k runs/s come due, roughly 1.1k per instance, so each instance needs two or three full batches of 500 a second."
         },
         {
           "from": "scheduler",

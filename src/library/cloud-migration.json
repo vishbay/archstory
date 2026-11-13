@@ -1072,7 +1072,7 @@
     {
       "target": "hybrid",
       "kind": "failure",
-      "text": "If one dedicated connection fails, BGP moves traffic to the other within seconds, so each must run under 50%. If both fail, traffic falls back to the IPsec VPN at about 1.25 Gbps per tunnel, so one tunnel cannot carry the 1.5 Gbps peak: run several tunnels with ECMP on the transit gateway, or accept that legacy pages, cart and orders (which reserve stock in the monolith) slow down and time out at peak, since the router cannot shed load by itself. Migrated catalog pages keep working either way. If the VPN is lost too, legacy paths stop and CDC pauses, resuming from its checkpoint when the link returns, provided Oracle kept the archived logs, so retain at least 24 hours of them."
+      "text": "If one dedicated connection fails, BGP moves traffic to the other within seconds when BFD is enabled on both ends (without it the default 90 s BGP hold timer applies), so each must run under 50%. If both fail, traffic falls back to the IPsec VPN at about 1.25 Gbps per tunnel, so one tunnel cannot carry the 1.5 Gbps peak: run several tunnels with ECMP on the transit gateway, or accept that legacy pages, cart and orders (which reserve stock in the monolith) slow down and time out at peak, since the router cannot shed load by itself. Migrated catalog pages keep working either way. If the VPN is lost too, legacy paths stop and CDC pauses, resuming from its checkpoint when the link returns, provided Oracle kept the archived logs, so retain at least 24 hours of them."
     },
     {
       "target": "acl",
@@ -1082,7 +1082,7 @@
     {
       "target": "hybrid",
       "kind": "security",
-      "text": "A dedicated connection is private but not encrypted: use MACsec on the 10 Gbps ports or run IPsec over it. Plan IP ranges so the VPC (10.64.0.0/16) does not overlap the data centre (10.8.0.0/14), allow only the router and service subnets through the data centre firewall, and give the CDC user only log reading rights on Oracle and write rights on the replicated tables. Card data stays with the on-premises payment module until payments migrate, which keeps the cloud out of PCI scope for now."
+      "text": "A dedicated connection is private but not encrypted: use MACsec on the 10 Gbps ports or run IPsec over it. Plan IP ranges so the VPC (10.64.0.0/16) does not overlap the data centre (10.8.0.0/14), allow only the router and service subnets through the data centre firewall, and give the CDC user only log reading rights on Oracle and write rights on the replicated tables. Card data stays with the on-premises payment module until payments migrate, which keeps the card data environment on-premises (any cloud component that still carries card data, such as the CDN, stays in scope, so confirm the boundary with your assessor)."
     },
     {
       "target": "onprem_db",

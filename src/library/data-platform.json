@@ -414,7 +414,7 @@
       "label": "Orchestrator",
       "kind": "scheduler",
       "ha": "regional",
-      "description": "Airflow DAGs: the 15 minute curated build, the nightly orders DAG, dbt runs and backfills. Owns dependencies, retries and SLAs",
+      "description": "Airflow DAGs: the 15 minute curated build, the nightly orders DAG, dbt runs and backfills. Owns dependencies, retries and deadline alerts",
       "cloud": {
         "aws": "MWAA",
         "gcp": "Cloud Composer"
@@ -1151,7 +1151,7 @@
     {
       "target": "lake",
       "kind": "scaling",
-      "text": "A 1 minute streaming trigger creates 1,440 commits and many small files per table per day. Compact hourly to files of about 512 MB sorted by the most filtered columns, expire old snapshots after 7 days and remove orphan files, or query planning and scans slow down week by week. Lifecycle rules move raw files older than 30 days to infrequent access and older than 90 days to archive-instant tiers, which cuts storage for that data by roughly 40 to 70%."
+      "text": "A 1 minute streaming trigger creates 1,440 commits and many small files per table per day. Compact hourly to files of about 512 MB sorted by the most filtered columns, expire old snapshots after 7 days and remove orphan files, or query planning and scans slow down week by week. Lifecycle rules move raw files older than 30 days to infrequent access and older than 90 days to archive-instant tiers, which cuts storage cost for that data by roughly 45 to 80% at S3 US East list prices (about $0.023, $0.0125 and $0.004 per GB-month for Standard, Standard-IA and Glacier Instant Retrieval), before retrieval fees and minimum storage durations."
     },
     {
       "target": "registry",

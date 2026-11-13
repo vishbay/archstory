@@ -439,7 +439,7 @@
         {
           "from": "broker", "to": "broker", "kind": "local", "phase": "Admission",
           "label": "node over its connect rate",
-          "detail": "Each broker node admits a fixed number of new connections per second and refuses the rest at once. Refusing fast is better than accepting everything and letting handshakes time out, which would make every device retry and add load. AWS IoT Core enforces the same idea through account-level connect quotas. Bringing all 2M devices back within the 15-minute target needs about 2,200 admitted connects a second in total, about 190 per EMQX node (280 with a zone down); on AWS the account's connect quota must be raised to that before launch, because its default is far lower."
+          "detail": "Each broker node admits a fixed number of new connections per second and refuses the rest at once. Refusing fast is better than accepting everything and letting handshakes time out, which would make every device retry and add load. AWS IoT Core enforces the same idea through account-level connect quotas. Bringing all 2M devices back within the 15-minute target needs about 2,200 admitted connects a second in total, about 190 per EMQX node (280 with a zone down); on AWS the account's connect requests quota (default 3,000 a second in most regions, 100 in some) must cover that, and the default of 500,000 concurrent connections per account must be raised to 2M before launch."
         },
         { "from": "broker", "to": "nlb", "kind": "res", "phase": "Admission", "label": "CONNACK 0x9F connection rate exceeded" },
         { "from": "nlb", "to": "devices", "kind": "res", "phase": "Admission", "label": "CONNACK 0x9F" },
@@ -510,7 +510,7 @@
     {
       "target": "broker",
       "kind": "tradeoff",
-      "text": "Managed broker or self-run. AWS IoT Core removes broker operations and includes certificate auth, rules and persistent sessions, but bills every message and connection-minute and has account quotas (connects per second, publishes per second) that must be raised before launch. Google Cloud IoT Core was retired in August 2023, so on GCP you run EMQX or HiveMQ on GKE (or buy their managed offering): cheaper per message at this volume, but you own upgrades, session clustering and capacity."
+      "text": "Managed broker or self-run. AWS IoT Core removes broker operations and includes certificate auth, rules and persistent sessions, but bills every message and connection-minute and has account quotas (concurrent connections, connects per second, publishes per second; the defaults are 500,000 connections and 20,000 inbound publishes a second in most regions) that must be raised before launch. Google Cloud IoT Core was retired in August 2023, so on GCP you run EMQX or HiveMQ on GKE (or buy their managed offering): cheaper per message at this volume, but you own upgrades, session clustering and capacity."
     },
     {
       "target": "broker",

@@ -49,7 +49,7 @@
       },
       {
         "label": "Replication",
-        "value": "~4 MB/s across the Atlantic ≈ 10 TB/month of cross-region transfer; lag p99 < 1 s"
+        "value": "~4 MB/s across the Atlantic at peak (about 4 TB/month at the average write rate, 10 TB if the peak held all month); lag p99 < 1 s"
       },
       {
         "label": "Capacity",
@@ -929,7 +929,7 @@
     {
       "target": "dns",
       "kind": "tradeoff",
-      "text": "DNS failover is cheap and simple but bounded by caching: detection (about 30 s) plus the TTL (30 s) sets the RTO, and some resolvers ignore low TTLs. An anycast global load balancer (AWS Global Accelerator, Google's global external load balancer) gives users fixed IPs and shifts traffic in seconds with no DNS change, at the cost of another managed layer in front of every request."
+      "text": "DNS failover is cheap and simple but bounded by caching: detection (about 30 s) plus the TTL (30 s) sets the RTO, and some resolvers ignore low TTLs. Route 53 alias records to a load balancer cannot carry a custom TTL (the load balancer's own 60 s applies, which makes the RTO about 90 s), so a true 30 s TTL needs non-alias records that point at the load balancer addresses, which change. An anycast global load balancer (AWS Global Accelerator, Google's global external load balancer) gives users fixed IPs and shifts traffic in seconds with no DNS change, at the cost of another managed layer in front of every request."
     },
     {
       "target": "db",

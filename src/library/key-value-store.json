@@ -573,7 +573,7 @@
           "kind": "local",
           "phase": "Flush and compact",
           "label": "memtable to SSTable, compact",
-          "detail": "When the memtable reaches about 128 MB it is written out as an immutable sorted SSTable and its commit log segment is freed. Compaction later merges SSTables so reads open few files, and drops overwritten versions and expired tombstones."
+          "detail": "When the memtable reaches its size limit (128 MB here, a tunable) it is written out as an immutable sorted SSTable and its commit log segment is freed. Compaction later merges SSTables so reads open few files, and drops overwritten versions and expired tombstones."
         },
         {
           "from": "storage-a",
@@ -943,7 +943,7 @@
     {
       "target": "router",
       "kind": "scaling",
-      "text": "Each server owns 128 virtual nodes scattered over the ring, so its load is the sum of many small ranges and evens out. A new server takes a small slice from nearly every existing server instead of half of one neighbour's range, and a failed server's load spreads over many peers. Bigger machines get more virtual nodes. The cost is more ranges to repair and more ring metadata to gossip."
+      "text": "Each server owns 128 virtual nodes (this design's choice; Cassandra now defaults to 16 with a token allocation algorithm that balances them) scattered over the ring, so its load is the sum of many small ranges and evens out. A new server takes a small slice from nearly every existing server instead of half of one neighbour's range, and a failed server's load spreads over many peers. Bigger machines get more virtual nodes. The cost is more ranges to repair and more ring metadata to gossip."
     },
     {
       "target": "storage-d",

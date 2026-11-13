@@ -1153,7 +1153,7 @@
     {
       "target": "inventory_db",
       "kind": "scaling",
-      "text": "A single hot SKU in a flash sale concentrates writes on one row, which tops out at a few hundred to a few thousand updates a second. Split its stock into several buckets (rows) and reserve from any bucket with stock. Both databases keep every commit in more than one zone (Aurora writes its storage across three zones; Cloud SQL HA writes synchronously to disks in two zones, with a standby instance), so losing a zone costs a failover of about a minute but no committed order."
+      "text": "A single hot SKU in a flash sale concentrates writes on one row, which tops out at roughly a few hundred to a few thousand updates a second (a rule of thumb that depends on hardware and transaction length; measure it). Split its stock into several buckets (rows) and reserve from any bucket with stock. Both databases keep every commit in more than one zone (Aurora writes its storage across three zones; Cloud SQL HA writes synchronously to disks in two zones, with a standby instance), so losing a zone costs a failover of about a minute but no committed order."
     },
     {
       "target": "events",
@@ -1163,7 +1163,7 @@
     {
       "target": "waf",
       "kind": "security",
-      "text": "The WAF runs at the CDN edge: managed rule sets, bot control, and rate rules on POST /orders per IP, per account and per card fingerprint, because card testing (bots trying stolen cards with small orders) is the classic attack on a checkout. Card numbers never touch our servers: the browser tokenizes the card with the provider, and only the Payment Service can read the provider API key from the secrets manager."
+      "text": "The WAF runs at the CDN edge: managed rule sets, bot control, and rate rules on POST /orders per IP and per account (the Payment Service adds limits per card fingerprint from the provider, which the WAF cannot see), because card testing (bots trying stolen cards with small orders) is the classic attack on a checkout. Card numbers never touch our servers: the browser tokenizes the card with the provider, and only the Payment Service can read the provider API key from the secrets manager."
     }
   ],
   "questions": [

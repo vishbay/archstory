@@ -341,7 +341,7 @@
       "id": "auth",
       "label": "Identity Provider",
       "kind": "auth",
-      "description": "OIDC; tokens carry a tenant_id claim",
+      "description": "OIDC; tokens carry a tenant_id claim (in Cognito a custom: attribute in the ID token, or a claim added to the access token by a pre token generation trigger)",
       "cloud": {
         "aws": "Cognito",
         "gcp": "Identity Platform"
@@ -1040,7 +1040,7 @@
     {
       "target": "pool_db",
       "kind": "security",
-      "text": "Defense in depth: tenant from the signed token, passed on in a gateway-signed context, and row-level security in the database, so one forgotten WHERE clause cannot leak data. RLS only holds if the app's role does not own the tables and lacks BYPASSRLS, the tables use FORCE ROW LEVEL SECURITY, and the tenant is set with SET LOCAL per transaction: a session-level SET would stay on the pooled connection for the next tenant's request."
+      "text": "Defense in depth: tenant from the signed token, passed on in a gateway-signed context, and row-level security in the database, so one forgotten WHERE clause cannot leak data. RLS only holds if the app's role does not own the tables and lacks BYPASSRLS, the tables use FORCE ROW LEVEL SECURITY, and the tenant is set with SET LOCAL per transaction: a session-level SET would stay on the pooled connection for the next tenant's request. Two gaps remain: foreign key and unique checks bypass row security (so a duplicate key error can reveal that another tenant's row exists, which composite keys that start with tenant_id avoid), and a view runs with its owner's rights unless it is created with security_invoker."
     },
     {
       "target": "catalog",
