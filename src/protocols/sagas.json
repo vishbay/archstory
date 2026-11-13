@@ -1000,7 +1000,7 @@
     {
       "target": "orchestrator",
       "kind": "scaling",
-      "text": "Order the steps by what can fail and what can be undone. Steps that can be compensated come first, then a pivot, the step after which the saga will go forward and no longer compensates, and last the retriable steps that are guaranteed to succeed eventually. Putting hard-to-undo steps late keeps the number of compensations small."
+      "text": "Order the steps by what can fail and what can be undone. Steps that can be compensated come first, then a pivot, the step after which the saga will go forward and no longer compensates, and last the retriable steps, which can simply be retried until they succeed. Putting hard-to-undo steps late keeps the number of compensations small."
     },
     {
       "target": "orchestrator",

@@ -147,7 +147,7 @@
           "kind": "req",
           "phase": "DNS",
           "label": "A? www.example.com",
-          "detail": "The stub resolver sends one UDP query to the recursive resolver, with recursion desired: 'find the whole answer for me'. Browsers ask for AAAA (IPv6) at the same time; only A is drawn. The resolver is 10 ms away, so the query takes 0.1 RTT.",
+          "detail": "The stub resolver sends one UDP query to the recursive resolver, with recursion desired: 'find the whole answer for me'. Browsers following Happy Eyeballs (RFC 8305) send the AAAA (IPv6) query first and the A query right after; only A is drawn. The resolver is 10 ms away, so the query takes 0.1 RTT.",
           "state": {
             "browser": "resolving"
           },

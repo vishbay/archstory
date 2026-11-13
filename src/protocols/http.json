@@ -42,7 +42,7 @@
       },
       {
         "label": "Connections per host (HTTP/1.1)",
-        "value": "6 in current browsers; RFC 9112 sets no number"
+        "value": "6 in Chrome; RFC 9112 sets no number"
       },
       {
         "label": "HTTP/2 frame header",
@@ -207,7 +207,7 @@
           "kind": "local",
           "phase": "Subresources",
           "label": "parse HTML: 3 more files",
-          "detail": "The parser finds style.css, app.js and hero.jpg. c1 can carry only one of them at a time: browsers do not use HTTP/1.1 pipelining (sending the next request before the response), because a broken proxy or server could mix up the responses. So the browser opens another connection. Real browsers open up to 6 per host; we draw 2 to keep the picture readable, and with 2 the script must wait for c1.",
+          "detail": "The parser finds style.css, app.js and hero.jpg. c1 can carry only one of them at a time: browsers do not use HTTP/1.1 pipelining (sending the next request before the response), because a broken proxy or server could mix up the responses. So the browser opens another connection. Chrome opens up to 6 per host; we draw 2 to keep the picture readable, and with 2 the script must wait for c1.",
           "fields": [
             {
               "name": "style.css",
@@ -1064,7 +1064,7 @@
     {
       "target": "h2",
       "kind": "note",
-      "text": "Server push let an HTTP/2 server send files before they were asked for, in PUSH_PROMISE frames. It rarely helped, because it often pushed files the browser already had cached, and browsers have removed it (Chrome in 2022). 103 Early Hints (RFC 8297), which tells the browser what to fetch, is the replacement."
+      "text": "Server push let an HTTP/2 server send files before they were asked for, in PUSH_PROMISE frames. It saw little use (Chrome measured 1.25% of HTTP/2 sites) and gave mixed results with no clear net gain, and Chrome 106 disabled it by default in 2022. 103 Early Hints (RFC 8297), which tells the browser what to fetch, is the replacement."
     },
     {
       "target": "browser",
@@ -1095,7 +1095,7 @@
         "browser"
       ],
       "q": "What is head-of-line blocking in HTTP/1.1, and how did browsers work around it?",
-      "a": "A connection carries one request at a time and responses come back in order, so a slow response holds up every request behind it on that connection. Browsers open up to 6 connections per host, and sites spread files over several hostnames (domain sharding) and bundled files to cut requests. Every extra connection costs its own TCP and TLS setup and starts with a small congestion window."
+      "a": "A connection carries one request at a time and responses come back in order, so a slow response holds up every request behind it on that connection. Chrome opens up to 6 connections per host, and sites spread files over several hostnames (domain sharding) and bundled files to cut requests. Every extra connection costs its own TCP and TLS setup and starts with a small congestion window."
     },
     {
       "id": "h2-tcp-hol",

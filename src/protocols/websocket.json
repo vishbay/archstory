@@ -44,7 +44,7 @@
       },
       {
         "label": "Idle timeout here",
-        "value": "60 s at the load balancer (an example; the default of several cloud load balancers)"
+        "value": "60 s at the load balancer (an example; the AWS Application Load Balancer default)"
       },
       {
         "label": "Heartbeat here",
