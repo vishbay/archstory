@@ -681,7 +681,7 @@
           "kind": "req",
           "phase": "Inbound",
           "label": "SYN to 203.0.113.77:443",
-          "detail": "Unlike with a NAT gateway, the internet can start a connection to this instance, because the public address is paired with it for good. The packet is delivered only if the rules allow it: the subnet route table needs the internet gateway route for the replies, and the security group and network ACL must allow port 443 in.",
+          "detail": "Unlike with a NAT gateway, the internet can start a connection to this instance, because the public address is paired with it for as long as the instance keeps that address. The packet is delivered only if the rules allow it: the subnet route table needs the internet gateway route for the replies, and the security group and network ACL must allow port 443 in.",
           "fields": [
             {
               "name": "flags",
@@ -1084,7 +1084,7 @@
           "to": "pub",
           "kind": "local",
           "label": "Rule order: deny at rule 90",
-          "detail": "Order matters. To block one address while the wider allow stays, add a deny with a lower number than the allow, here rule 90. The same SYN from 198.51.100.20 now matches rule 90 first and is denied, although rule 100 would have allowed it. A deny numbered higher than the allow would never be reached. Security groups have no deny rules, so a single address can only be blocked with a network ACL.",
+          "detail": "Order matters. To block one address while the wider allow stays, add a deny with a lower number than the allow, here rule 90. The same SYN from 198.51.100.20 now matches rule 90 first and is denied, although rule 100 would have allowed it. A deny numbered higher than the allow would never be reached. Security groups have no deny rules, so that job falls to a network ACL.",
           "fields": [
             {
               "name": "NACL in 90",
@@ -1113,7 +1113,7 @@
     {
       "target": "nat",
       "kind": "scaling",
-      "text": "Each IPv4 address on a NAT gateway supports up to 55,000 simultaneous connections to each unique destination (destination address, port and protocol), and a gateway supports 5 Gbps that scales automatically up to 100 Gbps. A fleet that opens many connections to one destination can run out of ports first; more addresses on the gateway (up to 8) raise that limit, and splitting instances across subnets with a gateway each raises bandwidth."
+      "text": "Each IPv4 address on a NAT gateway supports up to 55,000 simultaneous connections to each unique destination (destination address, port and protocol), and a gateway supports 5 Gbps that scales automatically up to 100 Gbps. A fleet that opens many connections to one destination can run out of ports first; more addresses on the gateway (up to 8: 1 primary and 7 secondary, with a default quota of 2 Elastic IP addresses that you can ask to raise) raise that limit, and splitting instances across subnets with a gateway each raises bandwidth. A connection idle for 350 seconds or more times out, and the gateway then sends an RST to the resources behind it, so long-lived idle connections need keepalive traffic more often than that."
     },
     {
       "target": "priv",
@@ -1128,7 +1128,7 @@
     {
       "target": "igw",
       "kind": "tradeoff",
-      "text": "A public IPv4 address is a one-to-one NAT pairing, fixed for the instance, so the same address serves any number of connections but each public instance needs its own. A NAT gateway instead shares one Elastic IP across many instances by tracking ports, at the cost of a table, port limits and no inbound connections. Whether an instance can be reached from the internet is decided by its route, its address, the security group and the network ACL together."
+      "text": "A public IPv4 address is a one-to-one NAT pairing with the instance (an Elastic IP stays until you release it), so the same address serves any number of connections but each public instance needs its own. A NAT gateway instead shares one Elastic IP across many instances by tracking ports, at the cost of a table, port limits and no inbound connections. Whether an instance can be reached from the internet is decided by its route, its address, the security group and the network ACL together."
     }
   ],
   "questions": [

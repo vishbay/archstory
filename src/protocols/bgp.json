@@ -25,7 +25,7 @@
       "Forwards on the most specific matching prefix, so a longer prefix always wins over a shorter one"
     ],
     "nonFunctional": [
-      "Detects a dead neighbour by the hold timer, since BGP does not use TCP keepalives; the keepalive interval is one third of the negotiated hold time",
+      "Detects a dead neighbour by the hold timer, since BGP does not use TCP keepalives; the suggested keepalive interval is one third of the negotiated hold time",
       "Scales by policy, not by topology: a route is accepted, preferred and passed on according to configured rules, which is also where mistakes enter",
       "Trusts its neighbours: the protocol does not check that an origin is entitled to a prefix, so filters and RPKI origin validation sit on top",
       "Converges slowly by design: advertisements for the same destination to one peer are rate limited by the MinRouteAdvertisementIntervalTimer"
@@ -674,7 +674,7 @@
           "to": "origin",
           "kind": "req",
           "label": "UPDATE path 64501 64503",
-          "detail": "ISP 64501 also advertises the route to its other external peer, the origin itself. Many routers avoid sending a route back to the peer it came from, but the receiver must not depend on that: it checks the path.",
+          "detail": "ISP 64501 also advertises the route to its other external peer, the origin itself. Whether a router sends a route back to the peer it learned it from is a matter of implementation and policy, and the receiver must not depend on it: it checks the path.",
           "fields": [
             {
               "name": "message",
@@ -923,7 +923,7 @@
           "to": "cust",
           "kind": "local",
           "label": "Longest prefix match wins",
-          "detail": "The customer now has two routes that overlap. They are different prefixes, so path length and the other tie-breakers do not compare them. RFC 4271 section 9.1.4: both are installed, and a lookup uses the most specific route that matches. Every destination from 198.51.100.0 to 198.51.100.127 follows the /25 towards AS 64504, and 198.51.100.128 to 198.51.100.255 still follows the /24.",
+          "detail": "The customer now has two routes that overlap. They are different prefixes, so path length and the other tie-breakers do not compare them. RFC 4271 section 9.1.4: when both are accepted, the Decision Process installs both in the Loc-RIB (it may install one aggregate instead, but only if both have the same NEXT_HOP, which is not the case here), and a lookup uses the most specific route that matches. Every destination from 198.51.100.0 to 198.51.100.127 follows the /25 towards AS 64504, and 198.51.100.128 to 198.51.100.255 still follows the /24.",
           "fields": [
             {
               "name": "198.51.100.7",
