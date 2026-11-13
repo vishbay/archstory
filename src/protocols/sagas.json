@@ -1,0 +1,1081 @@
+{
+  "schema": "archstory/v1",
+  "id": "sagas",
+  "meta": {
+    "title": "Sagas",
+    "summary": "How an order spanning inventory, payments and shipping completes without a distributed transaction: a sequence of local transactions with compensations, an orchestrator that runs undo steps in reverse when one fails, and idempotency keys that make retries safe. Ids, amounts and timeouts are illustrative.",
+    "tags": [
+      "sagas",
+      "compensation",
+      "idempotency",
+      "microservices"
+    ],
+    "difficulty": "medium",
+    "source": "Garcia-Molina and Salem, Sagas (SIGMOD 1987); Richardson, Microservices Patterns (Manning 2018)",
+    "kind": "protocol",
+    "order": 13,
+    "section": "Distributed systems"
+  },
+  "requirements": {
+    "functional": [
+      "Completes a business transaction across several services as a sequence of local transactions, each committed on its own in its own service",
+      "Every forward step that can be undone has a compensating step that semantically reverses it",
+      "When a step fails, the completed steps are compensated in the reverse order and the saga ends in a defined state (Compensated)",
+      "An orchestrator keeps the saga's state in a durable log, so it can resume or compensate after its own crash",
+      "Every command carries an idempotency key, so that retries and duplicate deliveries have the effect of one"
+    ],
+    "nonFunctional": [
+      "No isolation: other readers can see intermediate states, such as stock held for a pending order or a charge that is about to be refunded",
+      "No distributed locks and no blocking coordinator, so services stay available when others are slow, at the price of writing compensations",
+      "Compensations must be idempotent and retried until they succeed, because there is nothing to compensate them with",
+      "Messages are delivered at least once: lost replies and timeouts lead to retries, and every handler must expect duplicates",
+      "The saga is atomic only eventually: after a failure it takes the time of the compensating steps to get back to a consistent state"
+    ],
+    "scale": [
+      {
+        "label": "Forward steps",
+        "value": "3 here: reserve stock, charge payment, create shipment"
+      },
+      {
+        "label": "Compensations on failure",
+        "value": "at most 2 here (refund, release): the failed step made no change"
+      },
+      {
+        "label": "Order of compensations",
+        "value": "the reverse of the forward order"
+      },
+      {
+        "label": "Retry safety",
+        "value": "one idempotency key per step; the same key on every attempt"
+      },
+      {
+        "label": "Locks across services",
+        "value": "none: that is the point, and the cost is the lack of isolation"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "Places the order"
+    },
+    {
+      "id": "orchestrator",
+      "label": "Orchestrator",
+      "kind": "service",
+      "description": "Runs the saga: calls each step, logs progress durably, and runs the compensations when a step fails"
+    },
+    {
+      "id": "inventory",
+      "label": "Inventory",
+      "kind": "service",
+      "description": "Reserves and releases stock with local transactions"
+    },
+    {
+      "id": "payments",
+      "label": "Payments",
+      "kind": "service",
+      "description": "Charges and refunds; stores each idempotency key with its result"
+    },
+    {
+      "id": "shipping",
+      "label": "Shipping",
+      "kind": "service",
+      "description": "Creates shipments; can fail, for example when no carrier serves the address"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "orchestrator",
+      "label": "orders",
+      "protocol": "HTTP"
+    },
+    {
+      "from": "orchestrator",
+      "to": "inventory",
+      "label": "reserve, release",
+      "protocol": "RPC"
+    },
+    {
+      "from": "orchestrator",
+      "to": "payments",
+      "label": "charge, refund",
+      "protocol": "RPC"
+    },
+    {
+      "from": "orchestrator",
+      "to": "shipping",
+      "label": "create shipment",
+      "protocol": "RPC"
+    }
+  ],
+  "flows": [
+    {
+      "id": "happy",
+      "title": "Happy path (orchestrated)",
+      "summary": "Create the order, reserve stock, charge the payment, create the shipment, complete. Each service commits its own step, and the orchestrator logs the saga's progress.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "orchestrator",
+          "kind": "req",
+          "phase": "Create order",
+          "label": "POST /orders",
+          "detail": "The client creates an order. The orchestrator is a coordinator for the saga but, unlike two-phase commit, it holds no locks in the other services: each service commits its own step in its own local transaction. The saga is a list of steps, each paired with a compensating step that semantically undoes it. Order 7, item 9 and the amounts are illustrative.",
+          "state": {
+            "orchestrator": "Started",
+            "inventory": "Available",
+            "payments": "Idle",
+            "shipping": "Idle"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "forward / undo",
+              "items": [
+                "1 reserve/release",
+                "2 charge/refund",
+                "3 create ship/cancel"
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "orchestrator",
+          "kind": "local",
+          "phase": "Create order",
+          "label": "write saga log: STARTED",
+          "detail": "Before it calls anyone the orchestrator persists the saga's state, so that if it crashes it can resume or compensate after a restart. The order exists in the PENDING state: it is not confirmed, and other readers may already see it.",
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 7: PENDING",
+                "1 STARTED"
+              ],
+              "mark": [
+                0,
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "inventory",
+          "kind": "req",
+          "phase": "Reserve stock",
+          "label": "reserve item 9, order 7",
+          "detail": "Step 1 is a local transaction in Inventory: reserve one unit of item 9 for order 7. It commits at once, and from this moment other buyers see one unit less available.",
+          "state": {
+            "inventory": "Reserved"
+          },
+          "fields": [
+            {
+              "name": "Idempotency-Key",
+              "value": "order-7-reserve"
+            }
+          ],
+          "data": {
+            "inventory": {
+              "title": "stock",
+              "items": [
+                "item 9: 5 on hand",
+                "reserved 1 (order 7)",
+                "available 4"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "inventory",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Reserve stock",
+          "label": "reserved",
+          "detail": "Inventory confirms. The orchestrator records the step in its log and moves on. Writing the log entry and then calling the next service is the orchestrator's own progress marker.",
+          "state": {
+            "orchestrator": "Stock reserved"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 7: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "payments",
+          "kind": "req",
+          "phase": "Charge payment",
+          "label": "charge 30.00, key order-7-charge",
+          "detail": "Step 2 charges the customer. The request carries an idempotency key built from the order and the step, so that a retry of this exact command can be recognised. Payments stores the key together with the result in the same local transaction as the charge.",
+          "state": {
+            "payments": "Charged"
+          },
+          "fields": [
+            {
+              "name": "amount",
+              "value": "30.00",
+              "note": "Illustrative"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "order-7-charge",
+              "note": "The same key on every retry of this step"
+            }
+          ],
+          "data": {
+            "payments": {
+              "title": "charges",
+              "items": [
+                "ch-1: 30.00, order 7",
+                "key order-7-charge",
+                "charges made: 1"
+              ],
+              "mark": [
+                0,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "payments",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Charge payment",
+          "label": "charged ch-1",
+          "detail": "Payments confirms the charge. The orchestrator logs it.",
+          "state": {
+            "orchestrator": "Paid"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 7: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "shipping",
+          "kind": "req",
+          "phase": "Ship",
+          "label": "create shipment, order 7",
+          "detail": "Step 3 asks Shipping to create the shipment. Charging before shipping is deliberate: the step most likely to fail or to be hard to undo comes late, and steps that cannot be undone, such as handing a parcel to a carrier, should come after every step that can fail.",
+          "state": {
+            "shipping": "Created"
+          },
+          "fields": [
+            {
+              "name": "Idempotency-Key",
+              "value": "order-7-ship"
+            }
+          ],
+          "data": {
+            "shipping": {
+              "title": "shipments",
+              "items": [
+                "sh-1 for order 7",
+                "status: created"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "shipping",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Ship",
+          "label": "shipment sh-1",
+          "detail": "Shipping confirms. Every forward step has succeeded.",
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 7: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED",
+                "4 SHIPMENT_CREATED"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "orchestrator",
+          "kind": "local",
+          "phase": "Complete",
+          "label": "COMPLETED, order 7 CONFIRMED",
+          "detail": "The orchestrator writes the final log entry and flips the order from PENDING to CONFIRMED. The saga is complete. Between the first step and this one, the system as a whole was not in one consistent state: that is what a saga gives up compared with a single transaction.",
+          "state": {
+            "orchestrator": "Completed"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 7: CONFIRMED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED",
+                "4 SHIPMENT_CREATED",
+                "5 COMPLETED"
+              ],
+              "mark": [
+                0,
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "client",
+          "kind": "res",
+          "phase": "Complete",
+          "label": "order 7 confirmed",
+          "detail": "The client gets its answer. Many designs answer earlier, with 202 Accepted and the order in PENDING, and let the client poll or be notified.",
+          "fields": [
+            {
+              "name": "status",
+              "value": "CONFIRMED"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "compensation",
+      "title": "Shipping fails: compensation",
+      "summary": "The last step fails, so the orchestrator refunds the payment and then releases the stock, in the reverse order. Other readers see the intermediate states, which shows the lack of isolation.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "orchestrator",
+          "kind": "req",
+          "phase": "Create order",
+          "label": "POST /orders",
+          "detail": "A second order, number 8. The same saga starts: reserve stock, charge payment, create shipment. This time Shipping will fail (the address has no carrier). Values are illustrative.",
+          "state": {
+            "orchestrator": "Started",
+            "inventory": "Available",
+            "payments": "Idle",
+            "shipping": "Idle"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "forward / undo",
+              "items": [
+                "1 reserve/release",
+                "2 charge/refund",
+                "3 create ship/cancel"
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "orchestrator",
+          "kind": "local",
+          "phase": "Create order",
+          "label": "write saga log: STARTED",
+          "detail": "The orchestrator persists the saga state first. Order 8 is PENDING.",
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: PENDING",
+                "1 STARTED"
+              ],
+              "mark": [
+                0,
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "inventory",
+          "kind": "req",
+          "phase": "Forward steps",
+          "label": "reserve item 9, order 8",
+          "detail": "Step 1 commits locally in Inventory. Notice what any other reader sees right away: the stock is held for an order that is still PENDING. There is no isolation between the steps of a saga, so other transactions can read these intermediate values. A flag like this is a semantic lock.",
+          "state": {
+            "inventory": "Reserved"
+          },
+          "fields": [
+            {
+              "name": "Idempotency-Key",
+              "value": "order-8-reserve"
+            }
+          ],
+          "data": {
+            "inventory": {
+              "title": "stock",
+              "items": [
+                "item 9: 5 on hand",
+                "reserved 1 (order 8)",
+                "others see 4 left"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "inventory",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Forward steps",
+          "label": "reserved",
+          "detail": "Inventory confirms and the orchestrator logs it.",
+          "state": {
+            "orchestrator": "Stock reserved"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "payments",
+          "kind": "req",
+          "phase": "Forward steps",
+          "label": "charge 30.00, key order-8-charge",
+          "detail": "Step 2 commits locally in Payments. The charge is already visible to the customer, on a statement or in a notification, even though the order is not confirmed.",
+          "state": {
+            "payments": "Charged"
+          },
+          "fields": [
+            {
+              "name": "amount",
+              "value": "30.00"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "order-8-charge"
+            }
+          ],
+          "data": {
+            "payments": {
+              "title": "charges",
+              "items": [
+                "ch-2: 30.00, order 8",
+                "key order-8-charge",
+                "visible to customer"
+              ],
+              "mark": [
+                0,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "payments",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Forward steps",
+          "label": "charged ch-2",
+          "detail": "Payments confirms and the orchestrator logs it.",
+          "state": {
+            "orchestrator": "Paid"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "shipping",
+          "kind": "req",
+          "phase": "Forward steps",
+          "label": "create shipment, order 8",
+          "detail": "Step 3: create the shipment. Shipping tries and cannot.",
+          "fields": [
+            {
+              "name": "Idempotency-Key",
+              "value": "order-8-ship"
+            }
+          ],
+          "data": {
+            "shipping": {
+              "title": "shipments",
+              "items": [
+                "none for order 8",
+                "reason: no carrier"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "shipping",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Compensate",
+          "label": "failed: no carrier",
+          "detail": "Shipping reports a business failure. Nothing was created, so step 3 needs no undo, but steps 1 and 2 committed and cannot be rolled back by a database. The orchestrator switches to compensating: it runs the undo of each completed step, in reverse order, starting with the most recent (refund the payment) and ending with the first (release the stock).",
+          "state": {
+            "orchestrator": "Compensating"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED",
+                "4 SHIPMENT_FAILED",
+                "5 COMPENSATING"
+              ],
+              "mark": [
+                4,
+                5
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "payments",
+          "kind": "req",
+          "phase": "Compensate",
+          "label": "refund ch-2, key order-8-refund",
+          "detail": "Compensation 1 undoes step 2. A compensation is a new business operation, not a rollback: the charge is not erased, a refund is added, and the customer may see both. Compensations must be idempotent and must not fail for business reasons, since there is nothing left to compensate for them: the orchestrator retries until they succeed.",
+          "state": {
+            "payments": "Refunded"
+          },
+          "fields": [
+            {
+              "name": "refund of",
+              "value": "ch-2"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "order-8-refund"
+            }
+          ],
+          "data": {
+            "payments": {
+              "title": "charges",
+              "items": [
+                "ch-2: 30.00, order 8",
+                "refund rf-2: 30.00",
+                "key order-8-refund",
+                "net charged: 0.00"
+              ],
+              "mark": [
+                1,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "payments",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Compensate",
+          "label": "refunded rf-2",
+          "detail": "Payments confirms the refund and the orchestrator logs it.",
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: PENDING",
+                "1-2 started, reserved",
+                "3 PAYMENT_CHARGED",
+                "4 SHIPMENT_FAILED",
+                "5 COMPENSATING",
+                "6 PAYMENT_REFUNDED"
+              ],
+              "mark": [
+                5
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "inventory",
+          "kind": "req",
+          "phase": "Compensate",
+          "label": "release stock, order 8",
+          "detail": "Compensation 2 undoes step 1 and releases the reserved unit. It is also idempotent: releasing a reservation that is already released changes nothing.",
+          "state": {
+            "inventory": "Released"
+          },
+          "fields": [
+            {
+              "name": "Idempotency-Key",
+              "value": "order-8-release"
+            }
+          ],
+          "data": {
+            "inventory": {
+              "title": "stock",
+              "items": [
+                "item 9: 5 on hand",
+                "reserved 0",
+                "available 5 again"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "inventory",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Compensate",
+          "label": "released",
+          "detail": "Inventory confirms. Every completed step has now been undone, in the reverse of the order in which it ran.",
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: PENDING",
+                "1-3 forward done",
+                "4 SHIPMENT_FAILED",
+                "5 COMPENSATING",
+                "6 PAYMENT_REFUNDED",
+                "7 STOCK_RELEASED"
+              ],
+              "mark": [
+                5
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "orchestrator",
+          "kind": "local",
+          "phase": "Finish",
+          "label": "COMPENSATED, order 8 CANCELLED",
+          "detail": "The orchestrator logs the end of the saga and moves the order from PENDING to CANCELLED. The final state is Compensated: the saga did not roll back, it ended in a different consistent state in which the order does not exist and the money is back.",
+          "state": {
+            "orchestrator": "Compensated"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 8: CANCELLED",
+                "1-3 forward done",
+                "4 SHIPMENT_FAILED",
+                "5 COMPENSATING",
+                "6-7 refund, release",
+                "8 COMPENSATED"
+              ],
+              "mark": [
+                0,
+                5
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "client",
+          "kind": "res",
+          "phase": "Finish",
+          "label": "order 8 cancelled",
+          "detail": "The client is told the order was cancelled and why. In the meantime, other readers could see the stock held and the customer could see the charge: the lack of isolation shows up as short-lived, visible intermediate states.",
+          "fields": [
+            {
+              "name": "status",
+              "value": "CANCELLED",
+              "note": "reason: no carrier for the address"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retry",
+      "title": "Lost reply: retry with an idempotency key",
+      "summary": "The charge succeeds but its reply is lost. After a timeout the orchestrator retries with the same idempotency key, Payments returns the stored result, and the customer is charged once.",
+      "steps": [
+        {
+          "from": "orchestrator",
+          "to": "payments",
+          "kind": "req",
+          "phase": "First attempt",
+          "label": "charge 30.00, key order-9-charge",
+          "detail": "Order 9, with stock already reserved (illustrative). The orchestrator asks Payments to charge, with an idempotency key. Payments charges once and stores the key with the result.",
+          "state": {
+            "orchestrator": "Stock reserved",
+            "inventory": "Reserved",
+            "payments": "Charged",
+            "shipping": "Idle"
+          },
+          "fields": [
+            {
+              "name": "amount",
+              "value": "30.00"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "order-9-charge",
+              "note": "Attempt 1"
+            }
+          ],
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 9: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED"
+              ]
+            },
+            "payments": {
+              "title": "charges",
+              "items": [
+                "ch-3: 30.00, order 9",
+                "key order-9-charge",
+                "charges made: 1",
+                "requests seen: 1"
+              ],
+              "mark": [
+                0,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "payments",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "First attempt",
+          "label": "charged ch-3 (reply lost)",
+          "detail": "The charge succeeded but the reply never reaches the orchestrator: the network dropped it. From the orchestrator's side this is indistinguishable from the charge never having happened.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "charged ch-3",
+              "note": "Lost on the way"
+            }
+          ],
+          "lost": true
+        },
+        {
+          "from": "orchestrator",
+          "to": "orchestrator",
+          "kind": "local",
+          "phase": "Retry",
+          "label": "no reply for 2000 ms",
+          "detail": "The orchestrator waits for its timeout (2000 ms, illustrative) and has no answer. It cannot tell a lost request from a lost reply, and it cannot just give up: the customer may have been charged. The safe answer is to ask again, with the same key.",
+          "wait": 2000
+        },
+        {
+          "from": "orchestrator",
+          "to": "payments",
+          "kind": "req",
+          "phase": "Retry",
+          "label": "charge 30.00, SAME key (retry)",
+          "detail": "The retry carries the same idempotency key as the first attempt. Payments looks the key up, finds the earlier result, and does not charge again: charges made stays at 1 while requests seen goes to 2. Without the key a second charge would be created.",
+          "fields": [
+            {
+              "name": "amount",
+              "value": "30.00"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "order-9-charge",
+              "note": "Attempt 2: same key as attempt 1"
+            }
+          ],
+          "data": {
+            "payments": {
+              "title": "charges",
+              "items": [
+                "ch-3: 30.00, order 9",
+                "key order-9-charge",
+                "charges made: 1",
+                "requests seen: 2"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "payments",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Retry",
+          "label": "charged ch-3 (stored result)",
+          "detail": "Payments returns the stored result from the first attempt. The customer was charged exactly once, and the orchestrator learns what it needed. Delivery is at least once; the effect is once.",
+          "state": {
+            "orchestrator": "Paid"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 9: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "shipping",
+          "kind": "req",
+          "phase": "Ship",
+          "label": "create shipment, order 9",
+          "detail": "The saga continues with the shipment, again with a key of its own so that a retry here would be just as safe.",
+          "state": {
+            "shipping": "Created"
+          },
+          "fields": [
+            {
+              "name": "Idempotency-Key",
+              "value": "order-9-ship"
+            }
+          ],
+          "data": {
+            "shipping": {
+              "title": "shipments",
+              "items": [
+                "sh-3 for order 9",
+                "status: created"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "shipping",
+          "to": "orchestrator",
+          "kind": "res",
+          "phase": "Ship",
+          "label": "shipment sh-3",
+          "detail": "Shipping confirms.",
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 9: PENDING",
+                "1 STARTED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED",
+                "4 SHIPMENT_CREATED"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "orchestrator",
+          "kind": "local",
+          "phase": "Complete",
+          "label": "COMPLETED, order 9 CONFIRMED",
+          "detail": "The orchestrator completes the saga and confirms the order.",
+          "state": {
+            "orchestrator": "Completed"
+          },
+          "data": {
+            "orchestrator": {
+              "title": "saga log",
+              "items": [
+                "order 9: CONFIRMED",
+                "2 STOCK_RESERVED",
+                "3 PAYMENT_CHARGED",
+                "4 SHIPMENT_CREATED",
+                "5 COMPLETED"
+              ],
+              "mark": [
+                0,
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "orchestrator",
+          "to": "client",
+          "kind": "res",
+          "phase": "Complete",
+          "label": "order 9 confirmed",
+          "detail": "The client sees a normal confirmation: it never learns that a reply was lost and a retry was needed.",
+          "fields": [
+            {
+              "name": "status",
+              "value": "CONFIRMED"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "orchestrator",
+      "kind": "tradeoff",
+      "text": "Orchestration puts the flow in one place that calls each service and tracks state, which makes it easy to follow and to add steps but makes the orchestrator a component to keep correct and highly available. In choreography each service reacts to events from the others and no one owns the flow: there is no central point, but the saga is spread over many services and is harder to follow and to debug, and cyclic dependencies are easy to create."
+    },
+    {
+      "target": "inventory",
+      "kind": "failure",
+      "text": "A saga has the A, C and D of ACID but not I: other transactions can see intermediate results and act on them. Countermeasures include a semantic lock (a flag such as PENDING on the record, as the stock and the order show), commutative updates (such as debit and credit, which can be applied in any order), rereading a value before changing it, and versioning (so that out-of-order actions can be detected). Which one fits depends on what a dirty read would cost the business."
+    },
+    {
+      "target": "orchestrator",
+      "kind": "scaling",
+      "text": "Order the steps by what can fail and what can be undone. Steps that can be compensated come first, then a pivot, the step after which the saga will go forward and no longer compensates, and last the retriable steps that are guaranteed to succeed eventually. Putting hard-to-undo steps late keeps the number of compensations small."
+    },
+    {
+      "target": "orchestrator",
+      "kind": "note",
+      "text": "The orchestrator must update its own state and send its next command reliably. Writing both in one local transaction, with the command saved in an outbox table that a separate relay publishes, avoids a crash between the two. The relay delivers at least once, so receivers must be idempotent anyway."
+    },
+    {
+      "target": "payments",
+      "kind": "failure",
+      "text": "Idempotency keys only work if the key and the result are stored in the same local transaction as the effect, so a crash cannot leave a charge with no key. Keys are kept for a bounded time, and a request that reuses a key with a different body should be rejected, not treated as a retry."
+    },
+    {
+      "kind": "tradeoff",
+      "text": "Compared with two-phase commit, a saga takes no locks across services and has no blocking coordinator, so it scales and stays available. 2PC gives isolation and atomic commit at once but holds locks across a round trip and blocks when its coordinator fails. With a saga, you write the compensations and live with visible intermediate states."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-not-2pc",
+      "topic": "tradeoffs",
+      "targets": [
+        "orchestrator"
+      ],
+      "q": "Why use a saga instead of two-phase commit across services?",
+      "a": "2PC holds locks in every service across network round trips and blocks if the coordinator fails, and many services and message brokers do not support it at all. A saga commits each step locally and never holds a lock across services, so it scales and stays available. The price is no isolation and the work of writing compensations."
+    },
+    {
+      "id": "reverse-order",
+      "topic": "consistency",
+      "targets": [
+        "orchestrator",
+        "payments",
+        "inventory"
+      ],
+      "q": "Why are compensations run in the reverse order?",
+      "a": "Later steps often depend on the effects of earlier ones, so undoing the latest first keeps every undo valid: the refund is issued while the order still exists, and the stock is released last. It also mirrors how the forward steps were built up. The step that failed is not compensated, because it made no change."
+    },
+    {
+      "id": "compensation-must-not-fail",
+      "topic": "reliability",
+      "targets": [
+        "payments",
+        "inventory"
+      ],
+      "q": "What must be true of a compensating step?",
+      "a": "It must be idempotent, so retrying it is safe, and it must be retried until it succeeds, because there is no step that undoes a failed compensation. It is a new business action, such as a refund, not a database rollback, so its effects can be visible. Design it so it cannot fail for business reasons."
+    },
+    {
+      "id": "no-isolation",
+      "topic": "consistency",
+      "targets": [
+        "inventory",
+        "orchestrator"
+      ],
+      "q": "What does lack of isolation mean here, and how do you deal with it?",
+      "a": "While the saga runs, other transactions can see its intermediate results, such as stock held for an order that may be cancelled. Mark such records as pending (a semantic lock), use updates that commute, reread values before acting, or add versions to detect conflicts. Which fits depends on what a stale or dirty read costs the business."
+    },
+    {
+      "id": "idempotency-key",
+      "topic": "reliability",
+      "targets": [
+        "orchestrator",
+        "payments"
+      ],
+      "q": "A reply is lost and the orchestrator retries a charge. How do you avoid charging twice?",
+      "a": "The orchestrator sends the same idempotency key with every attempt of a step. Payments stores the key together with the result in the same local transaction as the charge, and on a repeated key returns the stored result without charging again. Delivery is at least once and the effect is once."
+    },
+    {
+      "id": "outbox",
+      "topic": "data",
+      "targets": [
+        "orchestrator"
+      ],
+      "q": "How does the orchestrator avoid losing a command when it crashes between saving state and sending?",
+      "a": "It writes the new state and the outgoing command to an outbox table in one local transaction. A relay reads the outbox and publishes the commands, deleting or marking them once sent. A crash can cause a duplicate send but never a lost one, so the receiver must be idempotent."
+    }
+  ]
+}

@@ -1,0 +1,1376 @@
+{
+  "schema": "archstory/v1",
+  "id": "raft",
+  "meta": {
+    "title": "Raft consensus",
+    "summary": "How three servers agree on one log even when servers crash: leader election with terms and votes, replication and the majority commit rule, and how a new leader repairs a lagging follower. Terms, indexes and timeouts are small illustrative numbers.",
+    "tags": [
+      "consensus",
+      "replicated log",
+      "leader election"
+    ],
+    "difficulty": "hard",
+    "source": "Ongaro and Ousterhout, In Search of an Understandable Consensus Algorithm (USENIX ATC 2014)",
+    "kind": "protocol",
+    "order": 11,
+    "section": "Distributed systems"
+  },
+  "requirements": {
+    "functional": [
+      "Keeps one replicated log on every server, so that all servers apply the same commands in the same order and end with the same state machine",
+      "Elects one leader per term: a server needs votes from a majority, and each server votes at most once per term",
+      "The leader accepts client commands, replicates them with AppendEntries, and treats an entry as committed once it is stored on a majority",
+      "Repairs a Follower whose log is missing or disagrees with the leader's, by walking back until the logs match and then overwriting the rest",
+      "Out of scope here: membership changes (adding or removing servers, joint consensus or single-server changes), which the paper covers separately"
+    ],
+    "nonFunctional": [
+      "Safety never depends on timing: at most one leader per term, committed entries are never lost, and servers never apply different commands at the same index",
+      "Liveness does need timing: broadcast time much smaller than the election timeout, which is much smaller than the time between failures",
+      "Terms stand in for a clock: a server that sees a higher term adopts it, and a leader or Candidate that sees a higher term steps down",
+      "currentTerm, votedFor and the log must be on stable storage before a server replies to an RPC, so a restart cannot make it vote twice or forget an acknowledged entry",
+      "A cluster of N servers needs a majority of floor(N/2) + 1 and keeps working while a minority is down; with fewer than a majority up it stops accepting writes rather than risk disagreement"
+    ],
+    "scale": [
+      {
+        "label": "3 servers",
+        "value": "majority 2, tolerates 1 failure"
+      },
+      {
+        "label": "5 servers",
+        "value": "majority 3, tolerates 2 failures"
+      },
+      {
+        "label": "4 servers",
+        "value": "majority 3, still tolerates only 1 failure, so no better than 3"
+      },
+      {
+        "label": "Election timeout",
+        "value": "the paper suggests 150 to 300 ms, random per server; the values in this module are illustrative"
+      },
+      {
+        "label": "Commit cost",
+        "value": "one round trip from the leader to the fastest Follower needed for a majority, plus a disk flush on each of those servers"
+      },
+      {
+        "label": "Replies the leader waits for",
+        "value": "majority minus itself: 1 of 2 Followers with 3 servers, 2 of 4 with 5"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "Sends commands to the leader and waits until the entry is committed"
+    },
+    {
+      "id": "s1",
+      "label": "S1",
+      "kind": "service",
+      "description": "One of three servers, each with its own log, term and state machine. Illustrative terms: S1 is the first leader"
+    },
+    {
+      "id": "s2",
+      "label": "S2",
+      "kind": "service",
+      "description": "A server of the same cluster; majority is 2 of 3"
+    },
+    {
+      "id": "s3",
+      "label": "S3",
+      "kind": "service",
+      "description": "A server of the same cluster; the one that falls behind in the failover flow"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "s1",
+      "label": "client commands",
+      "protocol": "RPC"
+    },
+    {
+      "from": "s1",
+      "to": "s2",
+      "label": "RequestVote, AppendEntries",
+      "protocol": "RPC"
+    },
+    {
+      "from": "s1",
+      "to": "s3",
+      "label": "RequestVote, AppendEntries",
+      "protocol": "RPC"
+    },
+    {
+      "from": "s2",
+      "to": "s3",
+      "label": "RequestVote, AppendEntries",
+      "protocol": "RPC"
+    }
+  ],
+  "flows": [
+    {
+      "id": "election",
+      "title": "Leader election",
+      "summary": "Three Followers, no leader. The shortest election timeout fires, that server becomes a Candidate in term 1, collects votes and starts heartbeats. Timeouts are illustrative.",
+      "steps": [
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Timeout",
+          "label": "no heartbeat for 190 ms",
+          "detail": "All three servers start as Followers in term 0 with empty logs, and nobody is sending heartbeats. Each Follower has an election timeout drawn at random, so they rarely fire together. The paper suggests 150 to 300 ms; the 190, 240 and 285 ms shown here are illustrative. S1 has the shortest timer, so it runs out first.",
+          "state": {
+            "s1": "Follower",
+            "s2": "Follower",
+            "s3": "Follower"
+          },
+          "wait": 190,
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 0, votedFor none",
+                "log empty",
+                "commitIndex 0",
+                "timeout 190 ms"
+              ]
+            },
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 0, votedFor none",
+                "log empty",
+                "commitIndex 0",
+                "timeout 240 ms"
+              ]
+            },
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 0, votedFor none",
+                "log empty",
+                "commitIndex 0",
+                "timeout 285 ms"
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Candidacy",
+          "label": "become Candidate, term 1",
+          "detail": "A Follower that hears nothing for a whole election timeout assumes the leader is gone. S1 adds 1 to currentTerm (0 becomes 1), changes to Candidate, votes for itself (votedFor = S1) and restarts its election timer. Then it asks the others for their votes. currentTerm and votedFor must reach disk before S1 sends anything, or a restart could let it vote twice in one term.",
+          "state": {
+            "s1": "Candidate"
+          },
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "votes 1 of 3"
+              ],
+              "mark": [
+                0,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s2",
+          "kind": "req",
+          "phase": "Candidacy",
+          "label": "RequestVote term 1",
+          "detail": "RequestVote carries the candidate's term and the position of the last entry in its log. On arrival S2 sees a higher term, so it adopts term 1. It has not voted in term 1 and S1's log (empty) is at least as up to date as its own (empty), so it will grant. Granting a vote resets S2's election timer.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1",
+              "note": "The candidate's new term"
+            },
+            {
+              "name": "candidateId",
+              "value": "S1"
+            },
+            {
+              "name": "lastLogIndex",
+              "value": "0",
+              "note": "Index of the candidate's last log entry (the log is empty)"
+            },
+            {
+              "name": "lastLogTerm",
+              "value": "0",
+              "note": "Term of that entry (none yet)"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "timer 240 ms, reset"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Candidacy",
+          "label": "RequestVote term 1",
+          "detail": "The same request goes to S3 at the same moment. S3 also has no vote to give in term 1 yet, so it records its vote for S1 and resets its timer.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "candidateId",
+              "value": "S1"
+            },
+            {
+              "name": "lastLogIndex",
+              "value": "0"
+            },
+            {
+              "name": "lastLogTerm",
+              "value": "0"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "timer 285 ms, reset"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Votes",
+          "label": "vote granted",
+          "detail": "S2 replies with its term and voteGranted = true. Each server gives at most one vote per term, first come first served, and that is what makes two leaders in the same term impossible: two different majorities of 3 servers must share at least one server, and that server voted only once.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "voteGranted",
+              "value": "true",
+              "note": "S2's one vote in term 1"
+            }
+          ],
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "votes 2 of 3"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Votes",
+          "label": "2 of 3 votes: Leader",
+          "detail": "A majority of the 3 servers is 2, and S1 already has it: its own vote and S2's. A Candidate that gets a majority becomes Leader at once and does not wait for the rest. S1 now starts sending heartbeats so nobody else times out.",
+          "state": {
+            "s1": "Leader"
+          }
+        },
+        {
+          "from": "s3",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Votes",
+          "label": "vote granted (late)",
+          "detail": "S3's vote arrives after S1 has already won. It is harmless: the election is decided and the vote is simply counted or ignored.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "voteGranted",
+              "value": "true",
+              "note": "Not needed for the majority"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "votes 3 of 3"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s2",
+          "kind": "req",
+          "phase": "Heartbeats",
+          "label": "AppendEntries (empty)",
+          "detail": "A heartbeat is an AppendEntries RPC with no entries. Receiving one from the current leader resets the Follower's election timer, so as long as heartbeats keep arriving faster than the timeout, no Follower becomes a Candidate. The paper wants broadcast time much smaller than the election timeout.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "leaderId",
+              "value": "S1"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "0",
+              "note": "Nothing precedes the new entries yet"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "0"
+            },
+            {
+              "name": "entries",
+              "value": "none",
+              "note": "Empty: a heartbeat"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "0"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "timer 240 ms, reset"
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Heartbeats",
+          "label": "AppendEntries (empty)",
+          "detail": "The same heartbeat goes to S3. Both Followers now know S1 is the leader of term 1 and wait quietly for the next heartbeat.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "leaderId",
+              "value": "S1"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "0"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "0"
+            },
+            {
+              "name": "entries",
+              "value": "none"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "0"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0",
+                "timer 285 ms, reset"
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Heartbeats",
+          "label": "success",
+          "detail": "S2 accepts the heartbeat: its term matches and the consistency check passes (there is nothing before the new entries to match).",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "from": "s3",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Heartbeats",
+          "label": "success",
+          "detail": "S3 does the same. The cluster is stable: one Leader and two Followers, all in term 1.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ],
+          "delay": 0
+        }
+      ]
+    },
+    {
+      "id": "replication",
+      "title": "Log replication and commit",
+      "summary": "A client write reaches the leader, is copied to the Followers and commits at a majority. The leader answers the client before every Follower has replied, and Followers learn the commit index on the next AppendEntries.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "s1",
+          "kind": "req",
+          "phase": "Client write",
+          "label": "SET x=1",
+          "detail": "The client sends its write to the leader. Only the leader accepts writes: a Follower that gets one would reply with the leader's address or forward it, and a client that does not know the leader tries servers until one answers. S1 is the Leader of term 1; S2 and S3 are its Followers with empty logs. All terms and indexes here are illustrative.",
+          "state": {
+            "s1": "Leader",
+            "s2": "Follower",
+            "s3": "Follower"
+          },
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0"
+              ]
+            },
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0"
+              ]
+            },
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "log empty",
+                "commitIndex 0"
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Client write",
+          "label": "append at index 1, term 1",
+          "detail": "The leader first appends the command to its own log as a new entry: index 1, term 1. The entry is not committed yet and nothing is applied to the state machine: if S1 crashed now, the entry could still be lost. The log is written to disk before the leader counts itself.",
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 0"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s2",
+          "kind": "req",
+          "phase": "Replicate",
+          "label": "AppendEntries idx 1",
+          "detail": "The leader sends the entry to every Follower. prevLogIndex and prevLogTerm name the entry just before the new one (none here, so 0 and 0): the Follower accepts only if its log has that entry. On arrival S2 appends the entry and writes it to disk.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "leaderId",
+              "value": "S1"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "0",
+              "note": "The entry before the new one"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "0",
+              "note": "Its term"
+            },
+            {
+              "name": "entries",
+              "value": "[1: SET x=1 (term 1)]"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "0",
+              "note": "The leader's commitIndex: still 0"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 0"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Replicate",
+          "label": "AppendEntries idx 1",
+          "detail": "The same request goes to S3, which appends the entry too. Data cards show a server's state once it has handled a message, so S3 already holds the entry here even though its reply is still on the way.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "leaderId",
+              "value": "S1"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "0"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "0"
+            },
+            {
+              "name": "entries",
+              "value": "[1: SET x=1 (term 1)]"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "0"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 0"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Commit",
+          "label": "success",
+          "detail": "S2's reply reaches the leader first. The entry is now on S1 and S2: 2 of 3 servers, a majority.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Commit",
+          "label": "majority: commitIndex = 1",
+          "detail": "The leader commits as soon as the entry is stored on a majority, and the entry is from the leader's current term (the rule that matters in a later flow). It does not wait for S3. commitIndex moves from 0 to 1, and the leader applies the command to its state machine, so x is now 1.",
+          "data": {
+            "s1": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 1",
+                "applied: x=1"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "client",
+          "kind": "res",
+          "phase": "Commit",
+          "label": "OK",
+          "detail": "Only now does the leader answer the client. It replied after a majority, not after all servers: one slow or dead Follower does not delay writes. A later leader is guaranteed to have this entry, because any new majority overlaps this one in at least one server and only a server with an up-to-date log can win.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "OK",
+              "note": "x = 1 is committed"
+            }
+          ]
+        },
+        {
+          "from": "s3",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Commit",
+          "label": "success",
+          "detail": "S3's reply arrives later. It changes nothing for the client, but the leader now knows all three servers hold index 1.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Followers learn",
+          "label": "next heartbeat after 50 ms",
+          "detail": "Followers learn the new commitIndex from the next AppendEntries, so they apply the entry slightly after the leader. The heartbeat interval (50 ms here) is illustrative and much shorter than the election timeout.",
+          "wait": 50
+        },
+        {
+          "from": "s1",
+          "to": "s2",
+          "kind": "req",
+          "phase": "Followers learn",
+          "label": "AppendEntries, commit 1",
+          "detail": "This heartbeat carries no new entry but its leaderCommit is 1. A Follower sets commitIndex to min(leaderCommit, index of its last new entry) and applies everything up to it: S2 now applies x=1.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "leaderId",
+              "value": "S1"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "1"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "1"
+            },
+            {
+              "name": "entries",
+              "value": "none",
+              "note": "Heartbeat"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "1",
+              "note": "Tells the Follower the entry is committed"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 1",
+                "applied: x=1"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "s1",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Followers learn",
+          "label": "AppendEntries, commit 1",
+          "detail": "S3 learns the same and applies x=1. Every server now has the entry in its log, commitIndex 1 and x = 1 in its state machine.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "leaderId",
+              "value": "S1"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "1"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "1"
+            },
+            {
+              "name": "entries",
+              "value": "none"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "1"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 1",
+                "applied: x=1"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Followers learn",
+          "label": "success",
+          "detail": "S2 acknowledges: its entry at index 1 has term 1, so the consistency check passes.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "from": "s3",
+          "to": "s1",
+          "kind": "res",
+          "phase": "Followers learn",
+          "label": "success",
+          "detail": "S3 acknowledges the same.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "1"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ],
+          "delay": 0
+        }
+      ]
+    },
+    {
+      "id": "failover",
+      "title": "Leader failure and log repair",
+      "summary": "The leader crashes holding an entry nobody else has. A Follower with a shorter log loses the first election, a server with the longer log wins, and AppendEntries walks nextIndex back to repair the lagging Follower. Terms, indexes and timeouts are illustrative.",
+      "steps": [
+        {
+          "from": "s1",
+          "to": "s1",
+          "kind": "local",
+          "phase": "Leader fails",
+          "label": "S1 crashes",
+          "detail": "S1, the Leader of term 1, crashes (illustrative). Its log holds three entries, but only entries 1 and 2 reached another server: entry 2 is on S1 and S2, so it is committed, and S1's commitIndex is 2. Entry 3 exists only on S1 and was never acknowledged to a client. S2 knows commitIndex 1 only, and S3 is a Follower that missed entry 2. A crashed server has no role; its card keeps what it had on disk.",
+          "state": {
+            "s1": "Leader",
+            "s2": "Follower",
+            "s3": "Follower"
+          },
+          "data": {
+            "s1": {
+              "title": "log (S1 is down)",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "3: SET z=3 (term 1)",
+                "commitIndex 2"
+              ],
+              "mark": [
+                3
+              ]
+            },
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1"
+              ]
+            },
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 1, votedFor S1",
+                "1: SET x=1 (term 1)",
+                "commitIndex 1"
+              ]
+            }
+          }
+        },
+        {
+          "from": "s3",
+          "to": "s3",
+          "kind": "local",
+          "phase": "Election",
+          "label": "S3 election timeout, 190 ms",
+          "detail": "Heartbeats from S1 stop. Each Follower's election timer runs on. S3's fires first (190 ms here, illustrative; the timers are redrawn at random every time they are reset). S3 has the shorter log, which makes it a poor leader, but the timers know nothing about logs.",
+          "wait": 190
+        },
+        {
+          "from": "s3",
+          "to": "s3",
+          "kind": "local",
+          "phase": "Election",
+          "label": "become Candidate, term 2",
+          "detail": "S3 raises its term to 2, votes for itself and asks S2 for a vote. S1 is down, so a request to it would get no answer and is not drawn. It needs 2 votes out of 3.",
+          "state": {
+            "s3": "Candidate"
+          },
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 2, votedFor S3",
+                "1: SET x=1 (term 1)",
+                "commitIndex 1",
+                "votes 1 of 3"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "s3",
+          "to": "s2",
+          "kind": "req",
+          "phase": "Election",
+          "label": "RequestVote term 2",
+          "detail": "S2 sees term 2, which is higher than its own 1, so it adopts term 2 and forgets its old vote. Then it checks the election restriction: the candidate's log must be at least as up to date as its own. Compare last terms first: both are 1. Same term, so the longer log wins: S3's last index is 1, S2's is 2. S3's log is behind, so S2 refuses.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "2"
+            },
+            {
+              "name": "candidateId",
+              "value": "S3"
+            },
+            {
+              "name": "lastLogIndex",
+              "value": "1",
+              "note": "S3's last entry is at index 1"
+            },
+            {
+              "name": "lastLogTerm",
+              "value": "1",
+              "note": "and has term 1"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 2, votedFor none",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s3",
+          "kind": "res",
+          "phase": "Election",
+          "label": "vote denied",
+          "detail": "The reply carries term 2 and voteGranted = false. S3 has only its own vote, 1 of 3, so it stays a Candidate. This is the election restriction at work: a server missing a committed entry cannot become leader, so committed entries never have to be copied backwards from a Follower to a leader.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "2"
+            },
+            {
+              "name": "voteGranted",
+              "value": "false",
+              "note": "S3's log is not at least as up to date"
+            }
+          ]
+        },
+        {
+          "from": "s2",
+          "to": "s2",
+          "kind": "local",
+          "phase": "Election",
+          "label": "S2 timeout: Candidate, term 3",
+          "detail": "S2's timer was not reset (only a heartbeat from a current leader or a granted vote resets it), so it fires soon after S3's. The 60 ms wait is illustrative: it stands for the rest of S2's timeout. S2 raises its term from 2 to 3 and votes for itself.",
+          "state": {
+            "s2": "Candidate"
+          },
+          "wait": 60,
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 3, votedFor S2",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1",
+                "votes 1 of 3"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Election",
+          "label": "RequestVote term 3",
+          "detail": "S3 sees term 3, higher than its own 2, so it steps down from Candidate to Follower and adopts term 3. S2's last entry is (index 2, term 1) and S3's is (index 1, term 1): same last term, longer log, so S2 passes the restriction and S3 votes for it.",
+          "state": {
+            "s3": "Follower"
+          },
+          "fields": [
+            {
+              "name": "term",
+              "value": "3"
+            },
+            {
+              "name": "candidateId",
+              "value": "S2"
+            },
+            {
+              "name": "lastLogIndex",
+              "value": "2",
+              "note": "S2's last entry is at index 2"
+            },
+            {
+              "name": "lastLogTerm",
+              "value": "1",
+              "note": "and has term 1"
+            }
+          ],
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 3, votedFor S2",
+                "1: SET x=1 (term 1)",
+                "commitIndex 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "s3",
+          "to": "s2",
+          "kind": "res",
+          "phase": "Election",
+          "label": "vote granted",
+          "detail": "S2 now has its own vote and S3's: 2 of 3, a majority of the configured 3 servers. A dead S1 still counts in the size of the cluster, which is why 2 votes are needed and 1 would not do.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "3"
+            },
+            {
+              "name": "voteGranted",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "from": "s2",
+          "to": "s2",
+          "kind": "local",
+          "phase": "Election",
+          "label": "2 of 3 votes: Leader",
+          "detail": "S2 becomes the Leader of term 3. A new leader assumes every Follower is as up to date as it is: it sets nextIndex for each one to its own last log index plus 1, which is 3. Its commitIndex is still 1: it does not yet know entry 2 is committed, and it may not count replicas to find out (see the notes). The entry 3 that only S1 held is not in S2's log and will never be committed.",
+          "state": {
+            "s2": "Leader"
+          },
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 3, votedFor S2",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1",
+                "S3 next 3"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Log repair",
+          "label": "AppendEntries prev=2",
+          "detail": "The leader's first AppendEntries (a heartbeat) names the entry before nextIndex: prevLogIndex 2, prevLogTerm 1. S3 has no entry at index 2, so the consistency check fails and S3 refuses. Followers never accept entries past a gap or a mismatch.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "3"
+            },
+            {
+              "name": "leaderId",
+              "value": "S2"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "2",
+              "note": "S3's log has only 1 entry"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "1"
+            },
+            {
+              "name": "entries",
+              "value": "none"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "from": "s3",
+          "to": "s2",
+          "kind": "res",
+          "phase": "Log repair",
+          "label": "success = false",
+          "detail": "S3 rejects. The leader reacts by decrementing nextIndex for S3 from 3 to 2 and trying again with an earlier prevLogIndex. A real implementation may jump back faster, but one step at a time is the rule in the paper.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "3"
+            },
+            {
+              "name": "success",
+              "value": "false",
+              "note": "Consistency check failed"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 3, votedFor S2",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1",
+                "S3 next 2"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "s2",
+          "to": "s3",
+          "kind": "req",
+          "phase": "Log repair",
+          "label": "AppendEntries prev=1, [2]",
+          "detail": "Now prevLogIndex is 1 and prevLogTerm is 1, and S3 does have index 1 with term 1: the check passes. The request carries entry 2, and S3 appends it. Because the two logs agree at index 1 they agree on everything before it (the Log Matching property).",
+          "fields": [
+            {
+              "name": "term",
+              "value": "3"
+            },
+            {
+              "name": "leaderId",
+              "value": "S2"
+            },
+            {
+              "name": "prevLogIndex",
+              "value": "1",
+              "note": "S3 has index 1 with term 1"
+            },
+            {
+              "name": "prevLogTerm",
+              "value": "1"
+            },
+            {
+              "name": "entries",
+              "value": "[2: SET y=2 (term 1)]"
+            },
+            {
+              "name": "leaderCommit",
+              "value": "1"
+            }
+          ],
+          "data": {
+            "s3": {
+              "title": "term, vote, log",
+              "items": [
+                "term 3, votedFor S2",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "s3",
+          "to": "s2",
+          "kind": "res",
+          "phase": "Log repair",
+          "label": "success = true",
+          "detail": "S3 accepts. The leader sets matchIndex for S3 to 2 and nextIndex to 3. S2's and S3's logs are now identical, entries 1 and 2. A new leader commonly also appends a no-op entry of its own term; once that is on a majority it commits, and entry 2 is committed with it.",
+          "fields": [
+            {
+              "name": "term",
+              "value": "3"
+            },
+            {
+              "name": "success",
+              "value": "true"
+            }
+          ],
+          "data": {
+            "s2": {
+              "title": "term, vote, log",
+              "items": [
+                "term 3, votedFor S2",
+                "1: SET x=1 (term 1)",
+                "2: SET y=2 (term 1)",
+                "commitIndex 1",
+                "S3 next 3, match 2"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "s2",
+      "kind": "failure",
+      "text": "Election restriction: a voter refuses a candidate whose log is less up to date than its own, comparing the term of the last entry first and then the log length. Every committed entry is on a majority and every winner needs a majority, so the two majorities overlap and a winner always holds all committed entries. Here S3 cannot win while S2 has entry 2."
+    },
+    {
+      "target": "s1",
+      "kind": "tradeoff",
+      "text": "A leader never commits an entry from an earlier term by counting replicas (section 5.4.2, the Figure 8 scenario). An old-term entry can sit on a majority and still be overwritten by a later leader that was elected without it. The leader instead commits an entry of its own term by counting; the Log Matching property then commits every earlier entry too. This is why a new leader usually appends a no-op entry as soon as it is elected."
+    },
+    {
+      "kind": "scaling",
+      "text": "Use an odd cluster size. 3 servers tolerate 1 failure and 5 tolerate 2; a 4th server raises the majority to 3 without tolerating more failures, and adds a replica to wait for. More servers also mean more work for the leader on every write."
+    },
+    {
+      "target": "client",
+      "kind": "tradeoff",
+      "text": "Linearizable reads need care: a leader that has been deposed may not know it yet and could serve stale data. Two common fixes are ReadIndex (the leader confirms with a round of heartbeats that it is still leader, then reads once it has applied up to its commit index) and lease-based reads (the leader trusts a time lease and avoids the round trip, but relies on bounded clock drift). Reads served by Followers can be stale."
+    },
+    {
+      "target": "s3",
+      "kind": "scaling",
+      "text": "The log cannot grow forever. Each server periodically snapshots its state machine and discards the log entries the snapshot covers; a Follower that is so far behind that the leader no longer holds the entries it needs is sent the snapshot (InstallSnapshot). Snapshots and membership changes are not modelled in these flows."
+    },
+    {
+      "kind": "security",
+      "text": "Raft tolerates crashes and message loss, not Byzantine faults: a server that lies about its log or votes can break safety. Servers must authenticate each other (for example mutual TLS) and the cluster ports should not be reachable by clients or the wider network."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-majority",
+      "topic": "reliability",
+      "targets": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "q": "Why does Raft need a majority, and what does it say about 3 versus 5 servers?",
+      "a": "Any two majorities of the same cluster share at least one server. That shared server is what carries a committed entry into every later election and stops two leaders being elected in one term. 3 servers need 2 and tolerate 1 failure; 5 need 3 and tolerate 2. A 4th server does not help, since the majority becomes 3 and you still tolerate only 1."
+    },
+    {
+      "id": "one-vote",
+      "topic": "consistency",
+      "targets": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "q": "What stops two leaders being elected in the same term?",
+      "a": "Each server votes for at most one candidate per term, and votedFor is written to disk before the reply. A leader needs a majority of the votes, and two different majorities must overlap in a server that voted only once. Two leaders can still exist in different terms, and the older one steps down when it sees the higher term."
+    },
+    {
+      "id": "election-restriction",
+      "topic": "consistency",
+      "targets": [
+        "s2",
+        "s3"
+      ],
+      "q": "In the failover flow, why could S3 not win the election in term 2?",
+      "a": "A voter only grants a vote to a candidate whose log is at least as up to date as its own: higher last term wins, and with equal last terms the longer log wins. S3's last entry is index 1, S2's is index 2, both term 1, so S2 refused. Because committed entries live on a majority, any server that can win a majority vote already has them."
+    },
+    {
+      "id": "figure-8",
+      "topic": "consistency",
+      "targets": [
+        "s1"
+      ],
+      "q": "Why may a leader not commit an entry from an older term just because it is on a majority?",
+      "a": "Such an entry can still be overwritten. A later leader can be elected by a majority that lacks the entry, because its last entry has a higher term, and it then replaces the entry on the servers that had it. So a leader commits only entries of its own term by counting replicas, and the Log Matching property commits all earlier ones with them. That is why new leaders append a no-op."
+    },
+    {
+      "id": "reply-early",
+      "topic": "performance",
+      "targets": [
+        "s1",
+        "client"
+      ],
+      "q": "Why can the leader answer the client after a majority and not wait for all servers?",
+      "a": "The entry is already on enough servers that no future leader can be elected without it, so it cannot be lost by a minority failing. Waiting for all servers would let one slow or dead Follower stall every write. The Followers that missed it are caught up later by the same AppendEntries mechanism and the consistency check."
+    },
+    {
+      "id": "split-votes",
+      "topic": "reliability",
+      "targets": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "q": "What is a split vote and how does Raft keep it rare?",
+      "a": "If two servers become Candidates at nearly the same time, the votes can split so that nobody has a majority. Each Candidate then times out and starts a new election in a higher term. Because election timeouts are random and redrawn every time, one server usually times out well before the others and wins before they start. The paper suggests a range such as 150 to 300 ms."
+    }
+  ]
+}

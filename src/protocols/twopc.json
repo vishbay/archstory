@@ -1,0 +1,1040 @@
+{
+  "schema": "archstory/v1",
+  "id": "twopc",
+  "meta": {
+    "title": "Two-phase commit",
+    "summary": "How a coordinator makes a transaction commit atomically across two databases: prepare, a forced commit decision, then commit. Includes a NO vote and the blocking problem when the coordinator crashes. Transaction ids, amounts and timeouts are illustrative.",
+    "tags": [
+      "atomic commit",
+      "distributed transactions",
+      "2PC",
+      "XA"
+    ],
+    "difficulty": "hard",
+    "source": "Gray, Notes on Data Base Operating Systems (1978); Bernstein, Hadzilacos and Goodman, Concurrency Control and Recovery in Database Systems (1987)",
+    "kind": "protocol",
+    "order": 12,
+    "section": "Distributed systems"
+  },
+  "requirements": {
+    "functional": [
+      "Atomic commit across several participants: either all of them commit a transaction or none does",
+      "Phase 1: the coordinator asks every participant to PREPARE; a participant that votes YES promises it can commit and may not change its mind",
+      "The coordinator's forced COMMIT record is the commit point; the decision is COMMIT only if every vote was YES, otherwise ABORT",
+      "Phase 2: the coordinator sends the decision, participants apply it, release their locks and acknowledge",
+      "Recovery from logs: a restarted coordinator or participant reads its own log to find out where it was"
+    ],
+    "nonFunctional": [
+      "A participant that has voted YES is in doubt: it cannot commit or abort on its own, so it holds its locks until it learns the decision",
+      "If the coordinator is down after the participants are prepared, they block: this is why 2PC is not fault-tolerant on its own",
+      "Every force-write is a disk flush on the path of the transaction, and locks are held across at least a network round trip, which limits throughput on hot rows and adds to tail latency",
+      "Participant handlers must be idempotent: PREPARE, COMMIT and ABORT can be delivered again after a timeout or a restart",
+      "Atomicity holds even when messages are delayed or lost and machines crash and restart, as long as logs survive; availability does not"
+    ],
+    "scale": [
+      {
+        "label": "Messages",
+        "value": "4 per participant: PREPARE, vote, decision, ACK; 8 for the 2 participants here"
+      },
+      {
+        "label": "Round trips on the commit path",
+        "value": "2 between coordinator and participants, plus the client's own request and answer (3 in this drawing)"
+      },
+      {
+        "label": "Forced log writes",
+        "value": "1 + 2n for n participants in the plain protocol: the coordinator's COMMIT, and each participant's prepare and commit records (5 here)"
+      },
+      {
+        "label": "Lock time added",
+        "value": "from a participant's vote until the decision arrives: at least one round trip plus the coordinator's forced write"
+      },
+      {
+        "label": "Cost of a coordinator outage",
+        "value": "all prepared participants hold their locks for its whole duration"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "Asks for a transaction that spans two databases to be committed"
+    },
+    {
+      "id": "coordinator",
+      "label": "Coordinator",
+      "kind": "service",
+      "description": "Runs the protocol and keeps the decision in a durable log, which is the commit point"
+    },
+    {
+      "id": "pa",
+      "label": "Participant A",
+      "kind": "sql_db",
+      "description": "The payments database: debits an account and holds its lock until the decision"
+    },
+    {
+      "id": "pb",
+      "label": "Participant B",
+      "kind": "sql_db",
+      "description": "The inventory database: reserves an item and holds its lock until the decision"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "coordinator",
+      "label": "commit request",
+      "protocol": "RPC"
+    },
+    {
+      "from": "coordinator",
+      "to": "pa",
+      "label": "PREPARE, COMMIT, ABORT",
+      "protocol": "RPC"
+    },
+    {
+      "from": "coordinator",
+      "to": "pb",
+      "label": "PREPARE, COMMIT, ABORT",
+      "protocol": "RPC"
+    },
+    {
+      "from": "pa",
+      "to": "pb",
+      "label": "ask about the outcome",
+      "protocol": "RPC"
+    }
+  ],
+  "flows": [
+    {
+      "id": "commit",
+      "title": "Commit: both participants vote YES",
+      "summary": "Prepare, force the commit decision, then commit. The commit path costs 2 round trips between the coordinator and the participants, and the forced COMMIT record comes before any COMMIT message.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "coordinator",
+          "kind": "req",
+          "phase": "Request",
+          "label": "commit request, tx 42",
+          "detail": "The client's transaction has already done its work at both participants: A (payments) has debited an account and B (inventory) has reserved an item, but nothing is durable yet and both keep a lock on the rows they touched. Participants keep those locks until the final decision arrives. The client now asks the coordinator to commit, and the coordinator runs two-phase commit. Both participants are in the Init state, meaning they have not voted. The transaction id, amounts and ids are illustrative.",
+          "state": {
+            "coordinator": "Init",
+            "pa": "Init",
+            "pb": "Init"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "log empty"
+              ]
+            },
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "debit acct 7 by 30.00",
+                "lock acct 7 held",
+                "no prepare record yet"
+              ]
+            },
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "reserve 1 of item 9",
+                "lock item 9 held",
+                "no prepare record yet"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pa",
+          "kind": "req",
+          "phase": "Phase 1: prepare",
+          "label": "PREPARE tx 42",
+          "detail": "Phase 1 asks every participant: can you commit this? The coordinator first writes its start record, naming the participants, then sends PREPARE and waits for votes (state Waiting). On arrival A force-writes a prepare record to its log, which means it can now commit even after a crash, and keeps its lock. From this moment A has promised not to abort on its own, and its state is Prepared, also called in doubt.",
+          "state": {
+            "coordinator": "Waiting",
+            "pa": "Prepared (in doubt)"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx42, A, B"
+              ]
+            },
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx42 [forced]",
+                "lock acct 7 held"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Phase 1: prepare",
+          "label": "PREPARE tx 42",
+          "detail": "The same PREPARE goes to B, sent right behind the first. B force-writes its prepare record, keeps its lock on item 9 and becomes Prepared (in doubt) too.",
+          "state": {
+            "pb": "Prepared (in doubt)"
+          },
+          "delay": 0,
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx42 [forced]",
+                "lock item 9 held"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "pa",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 1: prepare",
+          "label": "vote YES",
+          "detail": "A answers YES: its prepare record is on disk. A YES is a promise that A can commit if told to, whatever happens to A in the meantime. A may not take it back.",
+          "fields": [
+            {
+              "name": "tx",
+              "value": "42"
+            },
+            {
+              "name": "vote",
+              "value": "YES",
+              "note": "A promises it can commit"
+            }
+          ]
+        },
+        {
+          "from": "pb",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 1: prepare",
+          "label": "vote YES",
+          "detail": "B votes YES as well. The coordinator now has every vote and all of them are YES. A single NO, or a timeout, would have meant ABORT instead (next flow).",
+          "fields": [
+            {
+              "name": "tx",
+              "value": "42"
+            },
+            {
+              "name": "vote",
+              "value": "YES",
+              "note": "B promises it can commit"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx42, A, B",
+                "votes: A YES, B YES"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Phase 2: decide",
+          "label": "force COMMIT tx 42 to its log",
+          "detail": "This is the commit point. The coordinator force-writes the COMMIT record to its log before it sends any COMMIT message. Once that record is on disk the transaction is committed, even if the coordinator crashes the next instant: when it restarts it reads the record and carries on. Before this write, a crash would mean abort.",
+          "state": {
+            "coordinator": "Committed"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx42, A, B",
+                "COMMIT tx42 [forced]",
+                "= the commit point"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pa",
+          "kind": "req",
+          "phase": "Phase 2: commit",
+          "label": "COMMIT tx 42",
+          "detail": "Phase 2 tells every participant the decision. On arrival A force-writes a commit record, makes its changes final and releases its lock. A's locks were held from the update until now: through the vote and the coordinator's forced write.",
+          "state": {
+            "pa": "Committed"
+          },
+          "data": {
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx42 [forced]",
+                "COMMIT tx42 [forced]",
+                "lock acct 7 released"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Phase 2: commit",
+          "label": "COMMIT tx 42",
+          "detail": "B does the same: commit record, changes final, lock on item 9 released.",
+          "state": {
+            "pb": "Committed"
+          },
+          "delay": 0,
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx42 [forced]",
+                "COMMIT tx42 [forced]",
+                "lock item 9 released"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "pa",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 2: commit",
+          "label": "ACK",
+          "detail": "A acknowledges after its commit record is durable. The acknowledgment tells the coordinator it can stop remembering this transaction for A."
+        },
+        {
+          "from": "pb",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 2: commit",
+          "label": "ACK",
+          "detail": "B acknowledges. This is the second coordinator to participant round trip; the first was PREPARE and the votes.",
+          "delay": 0
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Finish",
+          "label": "write END tx 42",
+          "detail": "With an ACK from every participant the coordinator writes an end record. It does not need to be forced: if it is lost, recovery just resends COMMIT, which the participants handle again. After it the coordinator can forget the transaction.",
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx42, A, B",
+                "COMMIT tx42 [forced]",
+                "END tx42"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "client",
+          "kind": "res",
+          "phase": "Finish",
+          "label": "committed",
+          "detail": "The coordinator answers the client. The client saw 3 round trips: its own request and answer, plus 2 between coordinator and participants. A coordinator may also answer right after the commit point, because the outcome can no longer change; this drawing follows the plain order.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "committed",
+              "note": "tx 42 is durable at A and B"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "abort",
+      "title": "A participant votes NO",
+      "summary": "A cannot commit and votes NO. The coordinator decides ABORT and tells the participant that voted YES, which rolls back and releases its locks.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "coordinator",
+          "kind": "req",
+          "phase": "Request",
+          "label": "commit request, tx 43",
+          "detail": "A second transaction. Its work is done at A and B, with locks held. A's account has 20.00 and the transaction debits 30.00, which breaks a constraint, so A will not be able to commit. Amounts are illustrative.",
+          "state": {
+            "coordinator": "Init",
+            "pa": "Init",
+            "pb": "Init"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "log empty"
+              ]
+            },
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "debit acct 7 by 30.00",
+                "balance 20.00 < 30.00",
+                "lock acct 7 held"
+              ]
+            },
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "reserve 1 of item 9",
+                "lock item 9 held",
+                "no prepare record yet"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pa",
+          "kind": "req",
+          "phase": "Phase 1: prepare",
+          "label": "PREPARE tx 43",
+          "detail": "The coordinator writes its start record and sends PREPARE. A cannot commit, so it needs no promise and no wait: it may abort on its own at this point, because it has not voted YES. It rolls its work back, releases its lock and records the abort.",
+          "state": {
+            "coordinator": "Waiting",
+            "pa": "Aborted"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx43, A, B"
+              ]
+            },
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "ABORT tx43",
+                "rolled back",
+                "lock acct 7 released"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Phase 1: prepare",
+          "label": "PREPARE tx 43",
+          "detail": "B can commit, so it force-writes its prepare record and becomes Prepared (in doubt). It now holds its lock on item 9 and cannot undo anything until the coordinator speaks.",
+          "state": {
+            "pb": "Prepared (in doubt)"
+          },
+          "delay": 0,
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx43 [forced]",
+                "lock item 9 held"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "pb",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 1: vote",
+          "label": "vote YES",
+          "detail": "B votes YES. On its own this looks like a commit in progress; the other vote decides.",
+          "fields": [
+            {
+              "name": "tx",
+              "value": "43"
+            },
+            {
+              "name": "vote",
+              "value": "YES"
+            }
+          ]
+        },
+        {
+          "from": "pa",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 1: vote",
+          "label": "vote NO",
+          "detail": "A votes NO. One NO is enough: the transaction must abort everywhere. A missing vote would be treated the same way: if a participant does not answer within the coordinator's timeout, the coordinator may still decide ABORT, since it has not decided anything yet.",
+          "fields": [
+            {
+              "name": "tx",
+              "value": "43"
+            },
+            {
+              "name": "vote",
+              "value": "NO",
+              "note": "A has already rolled back"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx43, A, B",
+                "votes: B YES, A NO"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Phase 2: decide",
+          "label": "decide ABORT tx 43",
+          "detail": "The coordinator records ABORT in its log. This is the decision, and it does not have to wait for any more votes. No participant has been told to commit, so nothing can disagree with it.",
+          "state": {
+            "coordinator": "Aborted"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx43, A, B",
+                "ABORT tx43"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Phase 2: abort",
+          "label": "ABORT tx 43",
+          "detail": "Only B needs the message: A voted NO and already knows the outcome. B, which was in doubt, rolls its work back, records the abort and releases its lock.",
+          "state": {
+            "pb": "Aborted"
+          },
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx43 [forced]",
+                "ABORT tx43",
+                "lock item 9 released"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "pb",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 2: abort",
+          "label": "ACK",
+          "detail": "B acknowledges the abort. In the plain protocol drawn here the coordinator waits for it before it forgets the transaction; the presumed-abort variant skips this step, because a coordinator with no record of a transaction simply answers ABORT."
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Finish",
+          "label": "write END tx 43",
+          "detail": "All participants that needed to hear the decision have acknowledged, so the coordinator writes its end record and forgets the transaction.",
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx43, A, B",
+                "ABORT tx43",
+                "END tx43"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "client",
+          "kind": "res",
+          "phase": "Finish",
+          "label": "aborted",
+          "detail": "The client learns the transaction aborted and nothing changed. No locks are left at either participant.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "aborted",
+              "note": "no changes at A or B"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "blocking",
+      "title": "Coordinator crashes after the participants prepared",
+      "summary": "Both participants are Prepared and hold their locks when the coordinator crashes. They cannot decide, even by asking each other, until the coordinator restarts and resends the decision from its log.",
+      "steps": [
+        {
+          "from": "coordinator",
+          "to": "pa",
+          "kind": "req",
+          "phase": "Phase 1: prepare",
+          "label": "PREPARE tx 44",
+          "detail": "This flow starts when the coordinator sends PREPARE for a third transaction (illustrative). Both participants have done their work and hold their locks. A force-writes a prepare record and becomes Prepared (in doubt).",
+          "state": {
+            "coordinator": "Waiting",
+            "pa": "Prepared (in doubt)",
+            "pb": "Init"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx44, A, B"
+              ]
+            },
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx44 [forced]",
+                "lock acct 7 held"
+              ],
+              "mark": [
+                0
+              ]
+            },
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "reserve 1 of item 9",
+                "lock item 9 held",
+                "no prepare record yet"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Phase 1: prepare",
+          "label": "PREPARE tx 44",
+          "detail": "B does the same and becomes Prepared (in doubt).",
+          "state": {
+            "pb": "Prepared (in doubt)"
+          },
+          "delay": 0,
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx44 [forced]",
+                "lock item 9 held"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "pa",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 1: vote",
+          "label": "vote YES",
+          "detail": "A votes YES.",
+          "fields": [
+            {
+              "name": "tx",
+              "value": "44"
+            },
+            {
+              "name": "vote",
+              "value": "YES"
+            }
+          ]
+        },
+        {
+          "from": "pb",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Phase 1: vote",
+          "label": "vote YES",
+          "detail": "B votes YES.",
+          "fields": [
+            {
+              "name": "tx",
+              "value": "44"
+            },
+            {
+              "name": "vote",
+              "value": "YES"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx44, A, B",
+                "votes: A YES, B YES"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Crash",
+          "label": "force COMMIT tx 44 to its log",
+          "detail": "The coordinator reaches the commit point: the COMMIT record is on its disk. Nobody else knows yet.",
+          "state": {
+            "coordinator": "Committed"
+          },
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx44, A, B",
+                "COMMIT tx44 [forced]",
+                "= the commit point"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Crash",
+          "label": "coordinator crashes",
+          "detail": "The coordinator crashes before it sends a single COMMIT (illustrative). Its log survives on disk, but the process is gone. A and B each hold a prepare record and a lock, and neither has heard a decision.",
+          "data": {
+            "coordinator": {
+              "title": "log (down)",
+              "items": [
+                "begin tx44, A, B",
+                "COMMIT tx44 [forced]",
+                "crashed, none sent"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "pa",
+          "to": "pa",
+          "kind": "local",
+          "phase": "Blocked",
+          "label": "A waits 5000 ms, no decision",
+          "detail": "A's timer runs out (5000 ms, illustrative). A cannot abort: the coordinator may have decided COMMIT already, and B may already have committed. A cannot commit: the coordinator may have decided ABORT because of a NO vote that A never saw. All A can do is wait, and its lock on account 7 stays held.",
+          "wait": 5000,
+          "data": {
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx44 [forced]",
+                "lock acct 7 BLOCKED"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "pa",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Blocked",
+          "label": "outcome of tx 44?",
+          "detail": "Cooperative termination: A asks the other participant. The rules are simple. If B knows the outcome, A adopts it. If B has not voted (still Init), the transaction cannot have committed, so B can abort and A can abort too. Only if every participant is Prepared is nobody able to decide.",
+          "fields": [
+            {
+              "name": "question",
+              "value": "outcome of tx 44?"
+            }
+          ]
+        },
+        {
+          "from": "pb",
+          "to": "pa",
+          "kind": "res",
+          "phase": "Blocked",
+          "label": "Prepared, no decision",
+          "detail": "B is in doubt as well, so neither can decide. This is the blocking problem of two-phase commit: with the coordinator down, both stay Prepared and keep their locks, and anyone else who needs acct 7 or item 9 waits too. A crash before the commit point would look identical to the participants, but the recovered coordinator would then abort.",
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx44 [forced]",
+                "lock item 9 BLOCKED"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "coordinator",
+          "kind": "local",
+          "phase": "Recovery",
+          "label": "coordinator restarts after 20 s",
+          "detail": "The coordinator comes back (20 s, illustrative) and reads its log. It finds a COMMIT record and no END record, so the decision was COMMIT and participants may not know. Had the log held only the start record, it would decide ABORT (presumed abort): the same silence for the participants, the opposite outcome. That is why they could not guess.",
+          "wait": 20000,
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx44, A, B",
+                "COMMIT tx44 [forced]",
+                "no END: resend COMMIT"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pa",
+          "kind": "req",
+          "phase": "Recovery",
+          "label": "COMMIT tx 44 (resent)",
+          "detail": "The coordinator resends the decision to each participant. A commits, writes its commit record and releases its lock at last. The handler must be idempotent: the message may arrive twice, for example if the coordinator crashes again before it hears back.",
+          "state": {
+            "pa": "Committed"
+          },
+          "data": {
+            "pa": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx44 [forced]",
+                "COMMIT tx44 [forced]",
+                "lock acct 7 released"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coordinator",
+          "to": "pb",
+          "kind": "req",
+          "phase": "Recovery",
+          "label": "COMMIT tx 44 (resent)",
+          "detail": "B commits and releases its lock too. Both locks were held for the whole outage, about 25 seconds here (5 s + 20 s), plus the usual round trips.",
+          "state": {
+            "pb": "Committed"
+          },
+          "delay": 0,
+          "data": {
+            "pb": {
+              "title": "log and locks",
+              "items": [
+                "PREPARE tx44 [forced]",
+                "COMMIT tx44 [forced]",
+                "lock item 9 released"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "pa",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Recovery",
+          "label": "ACK",
+          "detail": "A acknowledges the commit."
+        },
+        {
+          "from": "pb",
+          "to": "coordinator",
+          "kind": "res",
+          "phase": "Recovery",
+          "label": "ACK",
+          "detail": "B acknowledges. With both ACKs the coordinator writes its end record and the transaction is finished.",
+          "delay": 0,
+          "data": {
+            "coordinator": {
+              "title": "coordinator log",
+              "items": [
+                "begin tx44, A, B",
+                "COMMIT tx44 [forced]",
+                "END tx44"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "coordinator",
+      "kind": "failure",
+      "text": "Why 2PC blocks: a participant that voted YES cannot abort alone, because the coordinator may have decided COMMIT, and cannot commit alone, because another participant may have voted NO. If all participants are Prepared and the coordinator is down, nobody can tell which decision was made. A crash before the commit point and one after look the same to them."
+    },
+    {
+      "target": "coordinator",
+      "kind": "scaling",
+      "text": "Variants fix part of this. Three-phase commit adds a step so participants can finish without the coordinator, but it assumes bounded message delays and no network partitions, so it is rarely used. Paxos Commit stores the decision on a group of acceptors so that it survives the loss of the coordinator. Spanner runs 2PC between groups that are each replicated by Paxos, so a single machine failure does not leave participants stuck. Percolator-style systems keep the commit point in the data store itself so other transactions can finish or roll back a crashed client's work. The details of each are beyond this module."
+    },
+    {
+      "target": "pa",
+      "kind": "tradeoff",
+      "text": "Locks are held across a network round trip and two forced writes: from the update to the arrival of COMMIT. Hot rows queue behind each other, throughput on them is bounded by that time, and the slowest participant sets the latency of everyone. A stalled coordinator freezes the locks of every transaction it was running."
+    },
+    {
+      "target": "pb",
+      "kind": "note",
+      "text": "XA is the standard interface between a transaction manager (the coordinator) and resource managers such as databases and message queues, with calls for prepare, commit, rollback and recovery. A heuristic decision is when an operator or a timeout makes an in-doubt participant commit or roll back by itself. If the coordinator decided the opposite, the outcome is mixed and has to be repaired by hand."
+    },
+    {
+      "target": "pa",
+      "kind": "failure",
+      "text": "Participant handlers must be idempotent. COMMIT can arrive again after the coordinator restarts or a reply is lost: a participant that already committed just acknowledges again, and a PREPARE retried after a YES gets the same YES. A participant asking about a transaction the coordinator no longer remembers is told ABORT under presumed abort, or COMMIT if the coordinator kept the outcome."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-two-phases",
+      "topic": "consistency",
+      "targets": [
+        "coordinator",
+        "pa",
+        "pb"
+      ],
+      "q": "Why does atomic commit need two phases and not just one message that says commit?",
+      "a": "A participant may be unable to commit, because of a constraint, a conflict or a crash, and a single COMMIT message cannot say so before others have committed. Phase 1 finds out whether every participant can commit and makes each one promise it can. Only then does phase 2 deliver a decision that no participant can refuse."
+    },
+    {
+      "id": "commit-point",
+      "topic": "consistency",
+      "targets": [
+        "coordinator"
+      ],
+      "q": "What is the commit point and why must it be forced to disk before COMMIT is sent?",
+      "a": "It is the moment the coordinator's COMMIT record reaches stable storage. If it were only in memory, a crash could lose it after some participants had already committed, and the recovered coordinator would then abort a transaction that is partly committed. With the record on disk, recovery always reaches the same decision."
+    },
+    {
+      "id": "blocking",
+      "topic": "reliability",
+      "targets": [
+        "coordinator",
+        "pa",
+        "pb"
+      ],
+      "q": "Why do participants block when the coordinator crashes, and can they ask each other?",
+      "a": "A Prepared participant promised not to abort and cannot commit without knowing every vote. Asking the others helps only if one of them knows the outcome or has not voted yet. If all are Prepared they cannot tell COMMIT from ABORT, so they wait with their locks held until the coordinator recovers."
+    },
+    {
+      "id": "latency-locks",
+      "topic": "performance",
+      "targets": [
+        "pa",
+        "pb"
+      ],
+      "q": "What does 2PC cost in latency and throughput?",
+      "a": "Two coordinator-participant round trips plus forced writes at every step on the critical path, so commit latency is the sum of the slowest participant in each phase. Locks are held from the update until the decision arrives, so hot rows can only be committed one transaction per lock hold time. Across data centres the round trips dominate."
+    },
+    {
+      "id": "idempotent",
+      "topic": "reliability",
+      "targets": [
+        "pa",
+        "pb"
+      ],
+      "q": "Why must participant handlers be idempotent?",
+      "a": "Messages can be lost, and the coordinator resends PREPARE and COMMIT until it hears back, so a participant can see the same message several times. A repeated COMMIT for a transaction it already committed must simply be acknowledged, and a repeated PREPARE must give the same vote. Without that, retries would corrupt data or deadlock recovery."
+    },
+    {
+      "id": "vs-consensus",
+      "topic": "tradeoffs",
+      "targets": [
+        "coordinator"
+      ],
+      "q": "How is two-phase commit different from consensus such as Raft?",
+      "a": "Atomic commit needs every participant to agree: one NO vote or one dead participant means the transaction cannot commit. Consensus needs only a majority and keeps going while a minority fails. Real systems combine them: the coordinator and each participant can be a Raft or Paxos group, so that no single machine failure blocks the transaction."
+    }
+  ]
+}

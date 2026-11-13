@@ -33,7 +33,7 @@ describe('sections', () => {
     expect(g.map(s => [s.section, s.designs.map(x => x.id)])).toEqual([
       ['Network', ['dns', 'tcp', 'url', 'http', 'websocket', 'loadbalancing', 'nat']],
       ['Security', ['tls', 'oauth']],
-      ['Distributed systems', ['hashring']],
+      ['Distributed systems', ['hashring', 'raft', 'twopc', 'sagas']],
     ])
   })
 
