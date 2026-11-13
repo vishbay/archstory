@@ -25,7 +25,7 @@ get it checked and reviewed, then rehearse it as a timed or AI mock interview.
 
 <br />
 
-<img src="docs/screenshot.png" alt="A redirect in the URL shortener design: the request has reached the API service, the Flow panel explains the hop and shows the real message" width="100%" />
+<img src="docs/demo.gif" alt="A tour of ArchStory: the home page, a request flowing hop by hop through the URL shortener with the Flow panel explaining each step, and a region failure drill in the multi-region design" width="100%" />
 
 </div>
 
