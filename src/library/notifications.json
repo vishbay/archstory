@@ -129,7 +129,7 @@
       {
         "id": "critical-burn",
         "severity": "page",
-        "when": "Critical notifications later than 5 s burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Critical notifications later than 5 s burning the latency budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Login codes and security alerts are late, and the person is waiting.",
         "target": "push_worker",
         "slo": "critical-latency"
@@ -153,7 +153,7 @@
       {
         "id": "delivery-burn",
         "severity": "page",
-        "when": "Provider rejections burning the delivery budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Provider rejections burning the delivery budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Notifications are not reaching phones or inboxes.",
         "target": "push_worker",
         "slo": "delivery-rate"
@@ -169,7 +169,7 @@
       {
         "id": "accept-burn",
         "severity": "page",
-        "when": "API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "API errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Producers cannot hand off notifications, so login codes are not even queued.",
         "target": "lb",
         "slo": "accept-availability"
@@ -377,10 +377,10 @@
       "label": "Push Workers",
       "kind": "worker",
       "cloud": {
-        "aws": "Lambda",
+        "aws": "ECS Fargate",
         "gcp": "Cloud Run"
       },
-      "description": "Drain the critical queue first, then bulk pushes; leave the VPC through NAT"
+      "description": "Long-lived services holding HTTP/2 connections to APNs and FCM; a dedicated pool for the critical queue so bulk pushes never delay it; leave the VPC through NAT"
     },
     {
       "id": "email_worker",
@@ -554,7 +554,7 @@
           "kind": "async",
           "phase": "Queue & respond",
           "label": "enqueue",
-          "detail": "Critical and bulk traffic use separate queues, and workers always drain the critical queue first, so a 5M-user campaign cannot delay a login code. The message carries an expiry: a code nobody can use any more is dropped, not sent late.",
+          "detail": "Critical and bulk traffic use separate queues, and a dedicated pool of workers drains the critical queue, so a 5M-user campaign cannot delay a login code. The message carries an expiry: a code nobody can use any more is dropped, not sent late.",
           "payload": "{ \"msg_id\": \"n_8f31\", \"user_id\": \"u_17\", \"channel\": \"push\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"], \"body\": \"Tu código es 482913\", \"expires_at\": 1794137300, \"traceparent\": \"00-4bf92f…-01\" }"
         },
         {

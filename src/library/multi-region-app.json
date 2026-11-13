@@ -165,7 +165,7 @@
       {
         "id": "read-burn",
         "severity": "page",
-        "when": "Read errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour), in either region",
+        "when": "Read errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour), in either region",
         "why": "Users cannot load their profile or orders. Check whether one region is failing and DNS has not moved its users yet.",
         "target": "lb",
         "slo": "read-availability"
@@ -173,7 +173,7 @@
       {
         "id": "order-burn",
         "severity": "page",
-        "when": "Order errors burning the error budget 14 times too fast (5 minutes and 1 hour)",
+        "when": "Order errors burning the error budget 14.4 times too fast (5 minutes and 1 hour)",
         "why": "Users cannot buy, which loses revenue directly.",
         "target": "api",
         "slo": "order-availability"

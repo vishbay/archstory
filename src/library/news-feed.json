@@ -130,7 +130,7 @@
       {
         "id": "timeline-burn",
         "severity": "page",
-        "when": "Timeline errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Timeline errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "People cannot read their feed. This is the main product.",
         "target": "lb",
         "slo": "timeline-availability"
@@ -146,7 +146,7 @@
       {
         "id": "timeline-slow",
         "severity": "page",
-        "when": "Timeline requests over 200 ms burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Timeline requests over 200 ms burning the latency budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Slow feeds drive people away even when nothing is failing.",
         "target": "timeline_svc",
         "slo": "timeline-latency"
@@ -170,7 +170,7 @@
       {
         "id": "post-burn",
         "severity": "page",
-        "when": "Post errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Post errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Nobody can post; the feed slowly empties of new content.",
         "target": "post_svc",
         "slo": "post-success"

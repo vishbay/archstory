@@ -816,7 +816,7 @@
     {
       "target": "room",
       "kind": "scaling",
-      "text": "The waiting room turns a spike of millions into a steady flow the booking service can handle, and gives fans a fair, visible place in line. It admits about 2,000 fans/s; six booking instances at about 1,000 requests/s each carry the resulting ~4,000/s, and still do with a zone lost."
+      "text": "The waiting room turns a spike of millions into a steady flow the booking service can handle, and gives fans a fair, visible place in line. It admits about 2,000 fans/s (an illustrative rate tuned to what booking can carry; a real waiting room slows admission as seats run out, because every admitted fan can hold seats); six booking instances at about 1,000 requests/s each carry the resulting ~4,000/s, and still do with a zone lost."
     },
     {
       "target": "cdn",
@@ -899,7 +899,7 @@
       {
         "id": "booking-burn",
         "severity": "page",
-        "when": "Hold or pay errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Hold or pay errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "During an on-sale every minute of errors is lost sales and angry fans.",
         "target": "room",
         "slo": "booking-availability"

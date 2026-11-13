@@ -121,7 +121,7 @@
       {
         "id": "startup-burn",
         "severity": "page",
-        "when": "Plays starting later than 2 s burning the error budget 14 times too fast over 1 hour and over 5 minutes",
+        "when": "Plays starting later than 2 s burning the error budget 14.4 times too fast over 1 hour and over 5 minutes",
         "why": "Viewers leave before the first frame. Usually the Playback API, a cold origin or a bad player release.",
         "target": "viewer",
         "slo": "playback-start"
@@ -136,7 +136,7 @@
       {
         "id": "cdn-errors",
         "severity": "page",
-        "when": "Segment errors burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
+        "when": "Segment errors burning the error budget 14.4 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Segments are failing to load, so playback stops.",
         "target": "cdn",
         "slo": "segment-availability"
@@ -915,7 +915,7 @@
     {
       "target": "cdn",
       "kind": "tradeoff",
-      "text": "At the calculator's flat assumed rates (0.03 USD per GB through the CDN, 0.09 direct; real list prices are tiered and lower at this volume) the estimate puts this design near $1B a month, almost all of it CDN egress for about 0.9 EB a day. Nobody pays list price at this scale: large streamers sign committed CDN contracts at a small fraction of a cent per GB, peer directly with internet providers, and place their own cache servers inside ISP networks (Netflix Open Connect, Google Global Cache), so most bytes never cross a paid link. In an interview, give the list-price number, then say egress is the cost to attack and how."
+      "text": "At the calculator's flat assumed rates (0.03 USD per GB through the CDN, 0.09 direct; real list prices are tiered and lower at this volume) the estimate puts this design near $1B a month (tiered CloudFront list prices would put it nearer $0.5B), almost all of it CDN egress for about 0.9 EB a day. Nobody pays list price at this scale: large streamers sign committed CDN contracts at a small fraction of a cent per GB, peer directly with internet providers, and place their own cache servers inside ISP networks (Netflix Open Connect, Google Global Cache), so most bytes never cross a paid link. In an interview, give the list-price number, then say egress is the cost to attack and how."
     },
     {
       "target": "waf",

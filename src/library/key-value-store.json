@@ -142,7 +142,7 @@
       {
         "id": "put-burn",
         "severity": "page",
-        "when": "Put errors or quorum timeouts burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
+        "when": "Put errors or quorum timeouts burning the error budget 14.4 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Callers are failing writes; with N = 3 this usually means two replicas of some ranges are unreachable.",
         "target": "router",
         "slo": "put-availability"
@@ -150,7 +150,7 @@
       {
         "id": "get-slow",
         "severity": "page",
-        "when": "Gets slower than 10 ms burning the error budget 14 times too fast over 1 hour and over 5 minutes",
+        "when": "Gets slower than 10 ms burning the error budget 14.4 times too fast over 1 hour and over 5 minutes",
         "why": "Every caller waits on the second-fastest replica, so a sick node or a compaction backlog shows up here first.",
         "target": "router",
         "slo": "get-latency"
@@ -158,7 +158,7 @@
       {
         "id": "put-slow",
         "severity": "page",
-        "when": "Puts slower than 20 ms burning the error budget 14 times too fast over 1 hour and over 5 minutes",
+        "when": "Puts slower than 20 ms burning the error budget 14.4 times too fast over 1 hour and over 5 minutes",
         "why": "Writes wait on the second replica's fsync, so a slow disk or a zone with high latency shows up here before puts fail.",
         "target": "router",
         "slo": "put-latency"

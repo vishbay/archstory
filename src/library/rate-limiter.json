@@ -117,7 +117,7 @@
       {
         "id": "api-burn",
         "severity": "page",
-        "when": "API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "API errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "The limiter must never be the reason the API is down.",
         "target": "gw",
         "slo": "api-availability"
@@ -133,7 +133,7 @@
       {
         "id": "limiter-latency-burn",
         "severity": "page",
-        "when": "Slow limit decisions burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Slow limit decisions burning the latency budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Every API request pays this latency.",
         "target": "gw",
         "slo": "limiter-latency"

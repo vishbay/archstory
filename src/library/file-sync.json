@@ -751,7 +751,7 @@
       {
         "id": "sync-burn",
         "severity": "page",
-        "when": "Metadata API 5xx burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket instead)",
+        "when": "Metadata API 5xx burning the error budget 14.4 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket instead)",
         "why": "Devices cannot commit or fetch changes right now.",
         "target": "lb",
         "slo": "sync-availability"
@@ -759,7 +759,7 @@
       {
         "id": "propagation-slow",
         "severity": "page",
-        "when": "Notifications later than 5 s burning the error budget 14 times too fast over 1 hour and over 5 minutes",
+        "when": "Notifications later than 5 s burning the error budget 14.4 times too fast over 1 hour and over 5 minutes",
         "why": "Users see stale files on their other devices and start editing old versions, which creates conflicts.",
         "target": "notify",
         "slo": "change-propagation"

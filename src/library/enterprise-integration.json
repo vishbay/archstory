@@ -155,7 +155,7 @@
       {
         "id": "partner-api-burn",
         "severity": "page",
-        "when": "Partner API errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Partner API errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Partners cannot place or track orders, and their own systems start retrying on top of the outage.",
         "target": "apim",
         "slo": "partner-api-availability"

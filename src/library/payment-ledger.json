@@ -148,7 +148,7 @@
       {
         "id": "transfer-burn",
         "severity": "page",
-        "when": "Transfer errors burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Transfer errors burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Users cannot move their money.",
         "target": "gw",
         "slo": "transfer-availability"
@@ -164,7 +164,7 @@
       {
         "id": "transfer-slow",
         "severity": "page",
-        "when": "Slow transfers burning the latency budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Slow transfers burning the latency budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Slow transfers make apps time out and retry, which adds load to the primary.",
         "target": "gw",
         "slo": "transfer-latency"

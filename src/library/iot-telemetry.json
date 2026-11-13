@@ -601,7 +601,7 @@
       {
         "id": "connect-burn",
         "severity": "page",
-        "when": "Connect success below 99.9%, burning the error budget 14 times too fast over 5 minutes and 1 hour, or connected devices dropping by more than 5% in 5 minutes",
+        "when": "Connect success below 99.9%, burning the error budget 14.4 times too fast over 5 minutes and 1 hour, or connected devices dropping by more than 5% in 5 minutes",
         "why": "Devices cannot report or receive commands. A sudden drop in connected devices is often the first sign of an outage that will be followed by a reconnect storm.",
         "target": "broker",
         "slo": "connect-success"

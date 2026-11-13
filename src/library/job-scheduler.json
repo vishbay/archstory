@@ -141,7 +141,7 @@
       {
         "id": "lag-burn",
         "severity": "page",
-        "when": "Runs starting more than 10 s late burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
+        "when": "Runs starting more than 10 s late burning the error budget 14.4 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Jobs are firing late for many tenants, which is the main promise of a scheduler.",
         "target": "scheduler",
         "slo": "start-lag"
@@ -149,7 +149,7 @@
       {
         "id": "api-burn",
         "severity": "page",
-        "when": "Job API 5xx burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
+        "when": "Job API 5xx burning the error budget 14.4 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Tenants cannot create, cancel or inspect jobs.",
         "target": "job_api",
         "slo": "api-availability"

@@ -365,7 +365,7 @@
           "kind": "req",
           "phase": "Auth and limits",
           "label": "token bucket, groups, history",
-          "detail": "One pipelined round trip takes a token from the user's bucket (20 questions a minute, 300k tokens a day), reads the user's flattened group list and the last 4 turns of the conversation. On a group-list miss the orchestrator reads the memberships the connectors synced into the registry and caches them for 5 minutes, which keeps revocations inside the 15-minute budget.",
+          "detail": "One pipelined round trip (the keys share a hash tag such as {u_jdoe}, so they live in one cluster slot) takes a token from the user's bucket (20 questions a minute, 300k tokens a day), reads the user's flattened group list and the last 4 turns of the conversation. On a group-list miss the orchestrator reads the memberships the connectors synced into the registry and caches them for 5 minutes, which keeps revocations inside the 15-minute budget.",
           "payload": "EVALSHA take_token 1 ratelimit:u_jdoe 20 60\nGET  principals:u_jdoe\nLRANGE conv:c_71f -8 -1"
         },
         {
@@ -1067,7 +1067,7 @@
       {
         "id": "answer-burn",
         "severity": "page",
-        "when": "Failed or errored answers burning the error budget 14 times too fast (checked over 5 minutes and 1 hour)",
+        "when": "Failed or errored answers burning the error budget 14.4 times too fast (checked over 5 minutes and 1 hour)",
         "why": "Employees cannot get answers at all, including the degraded links-only response.",
         "target": "chat_api",
         "slo": "answer-availability"

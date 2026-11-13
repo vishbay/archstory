@@ -80,6 +80,7 @@ System design interviews are not about memorising boxes and arrows. They are abo
 - Monitoring: SLOs, error budgets, alerts, what to watch and how to debug
 - A floating player dock with a step track, speed control and a one-line Key to the node states
 - Readable in light and dark themes, checked for text contrast on every screen
+- Every design fact-checked twice against official documentation, RFCs and papers; assumptions are labelled as such
 - Export the canvas as a PNG
 - *Ask AI about this design*: copies the design you are studying as a prompt for any assistant, so you can ask your own questions about it
 

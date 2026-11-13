@@ -115,7 +115,7 @@
       {
         "id": "suggest-burn",
         "severity": "page",
-        "when": "Suggest errors burning the error budget 14 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
+        "when": "Suggest errors burning the error budget 14.4 times too fast over 1 hour and over 5 minutes (a slow burn, 6 times over 6 hours, opens a ticket)",
         "why": "Search feels broken without suggestions, even though search itself still works.",
         "target": "cdn",
         "slo": "suggest-availability"
