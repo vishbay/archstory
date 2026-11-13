@@ -1179,3 +1179,10 @@ button.listening { border-color: var(--hard); color: var(--hard-t); }
 .card-meta { align-items: flex-start; gap: 8px; }
 .card-meta > span:first-child { min-width: 0; }
 .card-meta > .pill { flex: none; white-space: nowrap; line-height: 1.4; }
+
+/* Side panels scroll vertically only: tabs wrap onto a second row, long labels wrap, nothing scrolls sideways */
+.panel-body { overflow-x: hidden; }
+aside.left .tabs, aside.right .tabs { flex-wrap: wrap; overflow-x: visible; }
+.panel-body .kv { table-layout: fixed; }
+.panel-body .kv th { white-space: normal; width: 42%; overflow-wrap: anywhere; }
+.panel-body .kv td { overflow-wrap: anywhere; }
