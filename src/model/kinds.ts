@@ -12,6 +12,7 @@ export const KINDS: Record<string, KindInfo> = {
   cdn:           { label: 'CDN',             icon: '🌐', color: '#0ea5e9', tier: 'edge' },
   waf:           { label: 'WAF',             icon: '🛡️', color: '#0ea5e9', tier: 'edge' },
   load_balancer: { label: 'Load balancer (L7)', icon: '⚖️', color: '#8b5cf6', tier: 'entry' },
+  balancer:      { label: 'Load balancer',   icon: '⚖️', color: '#8b5cf6', tier: 'entry' },   // layer not fixed: the design says which
   network_load_balancer: { label: 'Network load balancer (L4)', icon: '🔀', color: '#8b5cf6', tier: 'entry' },
   api_gateway:   { label: 'API gateway',     icon: '🚪', color: '#8b5cf6', tier: 'entry' },
   rate_limiter:  { label: 'Rate limiter',    icon: '🚦', color: '#f97316', tier: 'entry' },

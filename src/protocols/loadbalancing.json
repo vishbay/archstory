@@ -66,7 +66,7 @@
     {
       "id": "lb",
       "label": "Load balancer",
-      "kind": "load_balancer",
+      "kind": "balancer",
       "description": "Runs as an L4 network load balancer in the first scenario and as an L7 application load balancer in the others. Listens on 203.0.113.50:443"
     },
     {
