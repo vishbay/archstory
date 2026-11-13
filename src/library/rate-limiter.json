@@ -400,7 +400,7 @@
           "kind": "res",
           "phase": "Response",
           "label": "200 + rate headers",
-          "payload": "HTTP/2 200\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 143"
+          "payload": "HTTP/2 200\nX-RateLimit-Limit: 1000\nX-RateLimit-Remaining: 143"
         },
         {
           "from": "lb",
@@ -568,7 +568,7 @@
     {
       "target": "counters",
       "kind": "scaling",
-      "text": "Shard Redis by API key so each key's bucket lives on one shard. A shard runs on the order of 100k small scripts a second, so 1M/s needs about 10 shards plus headroom; each shard has a replica in another zone. A single very hot key still lands on one shard (see the hybrid note)."
+      "text": "Shard Redis by API key so each key's bucket lives on one shard. A shard might run on the order of 100k small scripts a second (an assumption to load test, not a documented limit), so 1M/s needs about 10 shards plus headroom; each shard has a replica in another zone. A single very hot key still lands on one shard (see the hybrid note)."
     },
     {
       "target": "counters",
@@ -593,7 +593,7 @@
     {
       "target": "lb",
       "kind": "security",
-      "text": "There is no WAF component: AWS WAF cannot attach to a network load balancer. DDoS protection comes from Shield Advanced on the NLB (or Cloud Armor network edge policies on GCP), and L7 rules run in Envoy. Teams that need managed WAF rule sets put CloudFront or an ALB with AWS WAF in front, giving up the static IPs."
+      "text": "There is no WAF component: AWS WAF cannot attach to a network load balancer. DDoS protection comes from Shield Advanced, which protects an NLB through its Elastic IP addresses (or Cloud Armor network edge policies on GCP), and L7 rules run in Envoy. Teams that need managed WAF rule sets put CloudFront or an ALB with AWS WAF in front, giving up the static IPs."
     }
   ],
   "questions": [

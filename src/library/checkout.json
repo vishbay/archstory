@@ -1153,12 +1153,12 @@
     {
       "target": "inventory_db",
       "kind": "scaling",
-      "text": "A single hot SKU in a flash sale concentrates writes on one row, which tops out at a few hundred to a few thousand updates a second. Split its stock into several buckets (rows) and reserve from any bucket with stock. Both databases keep every commit in more than one zone (Aurora writes its storage across three zones; Cloud SQL HA keeps a synchronous standby), so losing a zone costs a failover of about a minute but no committed order."
+      "text": "A single hot SKU in a flash sale concentrates writes on one row, which tops out at a few hundred to a few thousand updates a second. Split its stock into several buckets (rows) and reserve from any bucket with stock. Both databases keep every commit in more than one zone (Aurora writes its storage across three zones; Cloud SQL HA writes synchronously to disks in two zones, with a standby instance), so losing a zone costs a failover of about a minute but no committed order."
     },
     {
       "target": "events",
       "kind": "failure",
-      "text": "Kafka replicates each partition across 3 zones; with one zone down it still has a majority of replicas and keeps accepting writes."
+      "text": "Kafka replicates each partition across 3 zones. With acks=all and min.insync.replicas=2, one zone down still leaves two in-sync replicas, so producers keep writing; a second zone down stops writes rather than risk losing acknowledged events."
     },
     {
       "target": "waf",

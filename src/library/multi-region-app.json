@@ -221,13 +221,13 @@
       {
         "target": "db",
         "name": "Replication latency to the other region",
-        "metric": "dynamodb_replication_latency_ms{source_region,receiving_region}",
+        "metric": "ReplicationLatency{ReceivingRegion} (DynamoDB, milliseconds)",
         "why": "The live RPO: how many seconds of writes a region failure would lose."
       },
       {
         "target": "dns",
         "name": "Health check status per region",
-        "metric": "route53_health_check_status{endpoint=use1|euw1}",
+        "metric": "HealthCheckStatus{HealthCheckId} (Route 53)",
         "why": "Tells you which regions DNS is currently answering with."
       },
       {
@@ -624,7 +624,7 @@
     {
       "id": "order",
       "title": "Place an order: commit locally, replicate to the other region",
-      "summary": "The order is written in the user's nearest region and the user gets an answer without waiting on the Atlantic. The global table copies the item to the other region about a second later, and the order id doubles as the idempotency key.",
+      "summary": "The order is written in the user's nearest region and the user gets an answer without waiting on the Atlantic. The global table copies the item to the other region, usually within a second or two, and the order id doubles as the idempotency key.",
       "steps": [
         {
           "from": "client",

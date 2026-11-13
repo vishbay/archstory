@@ -27,11 +27,11 @@
     "scale": [
       {
         "label": "Uploads",
-        "value": "500 hours of video per minute"
+        "value": "500 hours of video per minute (assumed, YouTube order of magnitude)"
       },
       {
         "label": "Watch time",
-        "value": "1B hours / day"
+        "value": "1B hours / day (assumed)"
       },
       {
         "label": "Renditions",

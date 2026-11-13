@@ -317,7 +317,7 @@
       "id": "jobs_db",
       "label": "Jobs DB",
       "kind": "sql_db",
-      "description": "Source of truth: job definitions, tenant limits and one row per active run with state, due time, attempt and lease. Survives a zone loss (Aurora keeps 6 storage copies across 3 zones; Cloud SQL HA keeps a synchronous standby in another zone); a failover pauses dispatch for under a minute or so, which shows up as start lag, not lost runs",
+      "description": "Source of truth: job definitions, tenant limits and one row per active run with state, due time, attempt and lease. Survives a zone loss (Aurora keeps 6 storage copies across 3 zones; Cloud SQL HA writes synchronously to disks in two zones, with a standby instance in the other); a failover pauses dispatch for under a minute or so, which shows up as start lag, not lost runs",
       "cloud": {
         "aws": "Aurora PostgreSQL",
         "gcp": "Cloud SQL Postgres"
@@ -526,7 +526,7 @@
           "kind": "res",
           "phase": "Persist",
           "label": "COMMIT ok",
-          "detail": "Committed durably across zones (Aurora's quorum storage, or Cloud SQL's synchronous standby), so the job survives a zone failure."
+          "detail": "Committed durably across zones (Aurora's quorum storage, or Cloud SQL's synchronous two-zone disk writes), so the job survives a zone failure."
         },
         {
           "from": "job_api",

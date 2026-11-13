@@ -256,7 +256,7 @@
         "target": "push_worker",
         "name": "Provider responses by code",
         "metric": "push_responses_total{provider,code}",
-        "why": "410 means a stale token; 429 means APNs or FCM is throttling us."
+        "why": "APNs 410 or FCM 404 (UNREGISTERED) means a stale token; 429 means APNs or FCM is throttling us."
       }
     ],
     "debug": [
@@ -273,7 +273,7 @@
         "symptom": "Offline users get no push",
         "steps": [
           "Check the push queue age, the dead-letter queue and worker errors.",
-          "Check provider responses: many unregistered tokens (410) mean stale device rows that need cleaning.",
+          "Check provider responses: many unregistered tokens (APNs 410, FCM 404) mean stale device rows that need cleaning.",
           "Check provider throttling (429) and that the APNs key and FCM credentials are still valid."
         ]
       },
@@ -312,7 +312,7 @@
       "id": "ws",
       "label": "Chat Gateway",
       "kind": "websocket_gateway",
-      "description": "Terminates TLS and WebSockets; each node holds ~1M connections, so ~200 nodes plus headroom",
+      "description": "Terminates TLS and WebSockets; each node holds ~1M connections (an assumption to confirm with a load test), so ~200 nodes plus headroom",
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "GKE"

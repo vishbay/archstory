@@ -243,7 +243,7 @@
       {
         "target": "tracker",
         "name": "Stream lag",
-        "metric": "kinesis_iterator_age_seconds",
+        "metric": "GetRecords.IteratorAgeMilliseconds (Kinesis)",
         "why": "How far behind real time the rider's map and the trip traces are."
       }
     ],

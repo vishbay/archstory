@@ -501,7 +501,7 @@
           "kind": "local",
           "phase": "Version and persist",
           "label": "commit log append + memtable",
-          "detail": "The write is appended to the commit log and inserted into the memtable, a sorted in-memory map. Commit log fsyncs are grouped every 2 ms, and A counts its own copy toward W only after that fsync, so the ack really means durable. No random disk write happens on the write path, which keeps put latency flat."
+          "detail": "The write is appended to the commit log and inserted into the memtable, a sorted in-memory map. Commit log fsyncs are grouped every 2 ms (a batch sync mode: Cassandra's default is periodic every 10 s, which would not support this promise), and A counts its own copy toward W only after that fsync, so the ack really means durable. No random disk write happens on the write path, which keeps put latency flat."
         },
         {
           "from": "storage-a",

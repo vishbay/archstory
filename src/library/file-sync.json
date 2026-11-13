@@ -35,7 +35,7 @@
       },
       {
         "label": "Storage",
-        "value": "~500 PB of blocks before deduplication"
+        "value": "~500 PB of blocks before deduplication (assuming an average file of about 5 MB)"
       },
       {
         "label": "Commits",

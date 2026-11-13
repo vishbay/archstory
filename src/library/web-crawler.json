@@ -543,7 +543,7 @@
           "kind": "req",
           "phase": "Check robots.txt",
           "label": "SET EX 86400",
-          "detail": "Store the parsed rules, not the raw file, so every later check is a lookup. The Crawl-delay is also reported to the frontier with the result.",
+          "detail": "Store the parsed rules, not the raw file, so every later check is a lookup. The Crawl-delay is also reported to the frontier with the result (it is a non-standard directive that RFC 9309 does not define, and some large crawlers ignore it, but this crawler honors it).",
           "payload": "SET robots:example.org '{\"disallow\":[\"/admin/\",\"/search\"],\"crawl_delay\":2}' EX 86400"
         },
         {

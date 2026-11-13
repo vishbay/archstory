@@ -233,7 +233,7 @@
       {
         "target": "hybrid",
         "name": "Link utilisation and BGP state per connection",
-        "metric": "dx_connection_bps_egress, dx_connection_bps_ingress, dx_bgp_state{connection}",
+        "metric": "ConnectionBpsEgress, ConnectionBpsIngress, ConnectionState{ConnectionId}, VirtualInterfaceBgpStatus",
         "why": "Each connection must stay under 50% so either one can carry everything when the other fails."
       },
       {

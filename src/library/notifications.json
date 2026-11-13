@@ -233,7 +233,7 @@
       },
       {
         "target": "apns",
-        "name": "Unregistered (410) rate",
+        "name": "Unregistered rate (APNs 410, FCM 404)",
         "metric": "client_errors_total{peer,code}",
         "why": "A rise means many users uninstalled or tokens have gone stale."
       },
@@ -624,7 +624,7 @@
           "kind": "res",
           "phase": "Deliver",
           "label": "200 / 410 Unregistered",
-          "detail": "410 means the app was uninstalled."
+          "detail": "APNs answers 410 when the token is no longer valid, for example because the app was uninstalled (FCM answers 404 UNREGISTERED)."
         },
         {
           "from": "push_worker",
@@ -732,7 +732,7 @@
           "kind": "local",
           "phase": "Send in batches",
           "label": "token bucket, 5k/s fleet-wide",
-          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled: the 5k/s account quota is split across the worker fleet, and critical emails are taken first, so a campaign uses only what is left. 1.4M emails take about 5 minutes."
+          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled: the account's sending rate quota (assumed here to have been raised to 5k/s; SES accounts start at 1 message per second in the sandbox and need an increase request, also for the daily quota) is split across the worker fleet, and critical emails are taken first, so a campaign uses only what is left. 1.4M emails take about 5 minutes."
         },
         {
           "from": "email_worker",

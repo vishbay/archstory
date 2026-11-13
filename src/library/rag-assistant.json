@@ -45,7 +45,7 @@
       },
       {
         "label": "Chunks and vectors",
-        "value": "40M chunks of about 400 tokens; 1024-dim float32 vectors are 160 GB, about 250 GB with the HNSW graph"
+        "value": "40M chunks of about 400 tokens; 1024-dim float32 vectors are 160 GB (40M x 1024 x 4 bytes), about 250 GB with the HNSW graph (a rough allowance: graph overhead depends on the M setting, so measure it)"
       },
       {
         "label": "Change rate",
@@ -140,7 +140,7 @@
       "description": "One record per chunk: text, 1024-dim embedding, BM25 terms, doc id, version, source link and the principals allowed to read it. Serves k-NN and keyword search with the permission filter applied inside the query. Sharded across data nodes in three zones with one replica of each shard, so the HNSW graphs need about twice the 250 GB in memory; reached through the VPC",
       "cloud": {
         "aws": "Amazon OpenSearch Service",
-        "gcp": "Vertex AI Vector Search"
+        "gcp": "Vector Search"
       }
     },
     {
@@ -201,7 +201,7 @@
       "description": "Managed model API: a small fast model for query rewriting and checks, a larger model for answers, and a fallback model with its own quota. Reached through a private endpoint (interface VPC endpoint or Private Service Connect), not the internet, in the company's own region",
       "cloud": {
         "aws": "Amazon Bedrock",
-        "gcp": "Vertex AI"
+        "gcp": "Gemini Enterprise Agent Platform"
       }
     },
     {
@@ -211,7 +211,7 @@
       "description": "Managed embedding model (1024 dimensions) and a cross-encoder reranking model, reached through the same private endpoint",
       "cloud": {
         "aws": "Amazon Bedrock",
-        "gcp": "Vertex AI"
+        "gcp": "Gemini Enterprise Agent Platform"
       }
     },
     {
