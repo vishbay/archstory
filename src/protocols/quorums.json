@@ -1,0 +1,1697 @@
+{
+  "schema": "archstory/v1",
+  "id": "quorums",
+  "meta": {
+    "title": "Quorum replication and version vectors",
+    "summary": "How Dynamo style stores read and write N replicas: the R + W > N overlap rule, read repair, sloppy quorums with hinted handoff, the stale reads you get when R + W <= N, and version vectors that detect concurrent writes. Versions, timeouts and the failure scenarios are illustrative.",
+    "tags": [
+      "quorum",
+      "replication",
+      "Dynamo",
+      "consistency",
+      "version vectors"
+    ],
+    "difficulty": "medium",
+    "source": "DeCandia et al., Dynamo: Amazon's Highly Available Key-value Store (SOSP 2007), sections 2, 4.4 to 4.6, 6; Apache Cassandra documentation, Dynamo-based architecture",
+    "kind": "protocol",
+    "order": 14,
+    "section": "Distributed systems"
+  },
+  "requirements": {
+    "functional": [
+      "Stores each key on N replicas and lets the client choose how many replicas must take part in a write (W) and in a read (R)",
+      "A coordinator sends writes to the replicas, waits for W acknowledgements and answers; for a read it waits for R replies and returns the newest version it saw",
+      "When R + W > N every read set shares at least one replica with every write set, so the newest acknowledged version is among the replies",
+      "Reads that find stale replicas repair them (read repair); a replica that is down is covered by a sloppy quorum and a hinted copy that is handed off on recovery",
+      "Concurrent writes are detected with version vectors and returned as siblings for the client to reconcile, or resolved by a policy such as last write wins",
+      "Out of scope here: partitioning with consistent hashing and virtual nodes (see the hash ring module), membership by gossip (see the gossip module), and Merkle tree anti-entropy details"
+    ],
+    "nonFunctional": [
+      "Availability: with sloppy quorums and W as low as 1 Dynamo is an always writeable store (section 2.3), at the cost of weaker consistency",
+      "Latency: an operation waits for the slowest of the R or W replicas it needs, so a smaller quorum is faster and less durable",
+      "Durability: the window of vulnerability for a write shrinks as W grows, and hinted copies keep N copies alive during a failure",
+      "Consistency is tunable and eventual: R + W > N gives overlap, not linearizability"
+    ],
+    "scale": [
+      {
+        "label": "N = 3, R = 2, W = 2",
+        "value": "R + W = 4 > 3: overlap, tolerates 1 replica down on both paths. The common Dynamo configuration (section 6)"
+      },
+      {
+        "label": "N = 3, R = 1, W = 1",
+        "value": "R + W = 2 <= 3: no guaranteed overlap, fastest, stale reads possible"
+      },
+      {
+        "label": "N = 3, R = 1, W = 3",
+        "value": "R + W = 4 > 3: fast reads, a write fails if any replica is down"
+      },
+      {
+        "label": "N = 5, R = 3, W = 3",
+        "value": "R + W = 6 > 5: tolerates 2 replicas down"
+      },
+      {
+        "label": "Latency",
+        "value": "the slowest of the R (or W) replicas that must answer"
+      },
+      {
+        "label": "Overlap rule",
+        "value": "any W-set and R-set of N share at least R + W - N replicas when R + W > N"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "web_client",
+      "description": "Sends put and get requests and sees only the coordinator"
+    },
+    {
+      "id": "coord",
+      "label": "Coordinator",
+      "kind": "service",
+      "description": "Counts acknowledgements against W and replies against R. In Dynamo it is normally the first of the top N nodes of the preference list; drawn as a separate actor here"
+    },
+    {
+      "id": "r1",
+      "label": "Replica 1",
+      "kind": "service",
+      "description": "One of the N = 3 replicas of the key"
+    },
+    {
+      "id": "r2",
+      "label": "Replica 2",
+      "kind": "service",
+      "description": "One of the N = 3 replicas of the key"
+    },
+    {
+      "id": "r3",
+      "label": "Replica 3",
+      "kind": "service",
+      "description": "The replica that misses writes, is down in one flow and is cut off in another"
+    },
+    {
+      "id": "r4",
+      "label": "Replica 4",
+      "kind": "service",
+      "description": "Not a replica of the key: the next healthy node on the ring, which holds the hinted copy while Replica 3 is down. Added to the module for the hinted handoff flow"
+    }
+  ],
+  "edges": [
+    {
+      "from": "client",
+      "to": "coord",
+      "label": "put, get",
+      "protocol": "RPC"
+    },
+    {
+      "from": "coord",
+      "to": "r1",
+      "label": "write, read",
+      "protocol": "RPC"
+    },
+    {
+      "from": "coord",
+      "to": "r2",
+      "label": "write, read",
+      "protocol": "RPC"
+    },
+    {
+      "from": "coord",
+      "to": "r3",
+      "label": "write, read",
+      "protocol": "RPC"
+    },
+    {
+      "from": "coord",
+      "to": "r4",
+      "label": "hinted write",
+      "protocol": "RPC"
+    },
+    {
+      "from": "r4",
+      "to": "r3",
+      "label": "hinted handoff",
+      "protocol": "RPC"
+    }
+  ],
+  "flows": [
+    {
+      "id": "quorum-read-write",
+      "title": "Write W=2, read R=2, read repair",
+      "summary": "Three replicas, W = 2 and R = 2. One replica misses the write, a later read still returns the new value because the read quorum overlaps the write quorum, and the stale replica is repaired. Versions are illustrative write numbers; Dynamo uses vector clocks.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "put cart = B",
+          "phase": "Write, W = 2",
+          "detail": "The client asks the coordinator to store the key \"cart\" with the new value B. This module has N = 3 replicas, write quorum W = 2 and read quorum R = 2, and every replica starts with version 1 = A. Versions here are plain write numbers set by one coordinator; they are illustrative, because Dynamo itself compares vector clocks (see the version vector flow). The coordinator is drawn as its own actor for clarity: in Dynamo it is normally the first of the top N nodes of the key's preference list (DeCandia et al. section 4.5).",
+          "state": {
+            "r1": "Up",
+            "r2": "Up",
+            "r3": "Up"
+          },
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "write quorum W",
+              "value": "2",
+              "note": "Acks needed before the client hears success"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 0 of W 2"
+              ],
+              "mark": [
+                2
+              ]
+            },
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value A",
+                "version 1"
+              ]
+            },
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value A",
+                "version 1"
+              ]
+            },
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value A",
+                "version 1"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r1",
+          "kind": "req",
+          "label": "write version 2",
+          "detail": "The coordinator makes the new version and sends it to the replicas of the key. Replica 1 stores it at once. A write is just a message to each replica: the quorum is only about how many acknowledgements the coordinator waits for.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "version",
+              "value": "2"
+            }
+          ],
+          "data": {
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r2",
+          "kind": "req",
+          "label": "write version 2",
+          "detail": "The same write goes to Replica 2 at the same moment and it stores it too.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "version",
+              "value": "2"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "write version 2 (lost)",
+          "detail": "The write to Replica 3 is lost on the way (a dropped packet, a slow link or a busy node: illustrative). With W = 2 the coordinator does not need it, which is the point of a quorum: one slow or unreachable replica does not block a write. Replica 3 keeps version 1 for now.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "version",
+              "value": "2"
+            }
+          ],
+          "delay": 0,
+          "lost": true
+        },
+        {
+          "from": "r1",
+          "to": "coord",
+          "kind": "res",
+          "label": "ack",
+          "detail": "Replica 1 acknowledges. One of the two acks the coordinator needs.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "stored",
+              "note": "Version 2 is on Replica 1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 1 of W 2"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "r2",
+          "to": "coord",
+          "kind": "res",
+          "label": "ack",
+          "detail": "Replica 2 acknowledges and the coordinator now holds W = 2 acks, so the write succeeds. The write set is {R1, R2}.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "stored"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 2 of W 2",
+                "write set R1, R2"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "client",
+          "kind": "res",
+          "label": "write ok (2 of 3)",
+          "detail": "The coordinator answers the client without waiting for Replica 3. The write is acknowledged by two of the three replicas, so one replica is now behind. Until something repairs it, a read that reaches Replica 3 can see the old value.",
+          "fields": [
+            {
+              "name": "status",
+              "value": "success",
+              "note": "2 of 3 replicas hold version 2"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "get cart",
+          "phase": "Read, R = 2",
+          "detail": "Later the client reads the key. With R = 2 the coordinator needs two replica answers. The coordinator in Dynamo asks all N replicas and waits for the first R replies (section 4.5); to keep the drawing short only the two replies that arrive first are shown, from Replica 2 and Replica 3 (Replica 1 is slower in this illustration).",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "read quorum R",
+              "value": "2",
+              "note": "Replies needed"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "replies 0 of R 2"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r2",
+          "kind": "req",
+          "label": "read cart",
+          "detail": "The coordinator asks Replica 2 for the versions it holds.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            }
+          ]
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "read cart",
+          "detail": "And Replica 3, the one that missed the write.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "r2",
+          "to": "coord",
+          "kind": "res",
+          "label": "version 2 = B",
+          "detail": "Replica 2 returns version 2 with the value B.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "version",
+              "value": "2"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "replies 1 of R 2"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "r3",
+          "to": "coord",
+          "kind": "res",
+          "label": "version 1 = A (stale)",
+          "detail": "Replica 3 returns its old version 1 with the value A. The coordinator now holds R = 2 replies. The read set is {R2, R3} and it shares Replica 2 with the write set {R1, R2}: that overlap is what R + W > N guarantees, because any two sets of sizes W and R out of N must share a member when W + R > N.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "A"
+            },
+            {
+              "name": "version",
+              "value": "1",
+              "note": "Older than the version 2 from Replica 2"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "replies 2 of R 2",
+                "read set R2, R3",
+                "overlap R2"
+              ],
+              "mark": [
+                2,
+                3,
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "client",
+          "kind": "res",
+          "label": "value B (version 2)",
+          "detail": "The coordinator returns the newest version it saw, version 2 = B. The stale answer from Replica 3 is outvoted by the shared replica. This only works because the reply from the overlap replica was among the R replies: with R = 1 the coordinator could have asked Replica 3 alone (see the stale read flow).",
+          "fields": [
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "version",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "async",
+          "label": "read repair: version 2",
+          "detail": "Replica 3 returned a stale version, so after answering the client the coordinator sends it the newest version. Dynamo calls this read repair: it repairs replicas that missed a recent update at an opportunistic time and relieves the anti-entropy protocol from having to do it (section 5, Implementation). Replica 3 now holds version 2.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "B"
+            },
+            {
+              "name": "version",
+              "value": "2"
+            }
+          ],
+          "data": {
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "sloppy-quorum",
+      "title": "A replica is down: hinted handoff",
+      "summary": "Replica 3 is down during a write. A sloppy quorum sends the write to the next healthy node with a hint, the write still succeeds with W = 2, and the hint is handed off when Replica 3 returns. The timeout is illustrative.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "put cart = C",
+          "phase": "Write, R3 down",
+          "detail": "The key already has version 2 = B on all three replicas and the client now writes C, but Replica 3 is down (it crashed or is cut off: illustrative). N = 3, W = 2. The ordered preference list of this key is R1, R2, R3 and then Replica 4, the next node along the ring (also illustrative).",
+          "state": {
+            "r1": "Up",
+            "r2": "Up",
+            "r3": "Down",
+            "r4": "Up"
+          },
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "C"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 0 of W 2",
+                "copies 0 of N 3"
+              ],
+              "mark": [
+                2
+              ]
+            },
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2"
+              ]
+            },
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2"
+              ]
+            },
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2"
+              ]
+            },
+            "r4": {
+              "title": "replica copy",
+              "items": [
+                "no copy of cart"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r1",
+          "kind": "req",
+          "label": "write version 3",
+          "detail": "The coordinator writes the new version to the first nodes of the preference list. Replica 1 stores it.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3"
+            }
+          ],
+          "data": {
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r2",
+          "kind": "req",
+          "label": "write version 3",
+          "detail": "And Replica 2.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "write version 3 (lost)",
+          "detail": "Replica 3 never answers: it is down, so the message is lost.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3"
+            }
+          ],
+          "delay": 0,
+          "lost": true
+        },
+        {
+          "from": "coord",
+          "to": "coord",
+          "kind": "local",
+          "label": "R3 silent for 150 ms",
+          "phase": "Sloppy quorum",
+          "detail": "After a timeout (150 ms, illustrative) the coordinator treats Replica 3 as unreachable. Dynamo does this with a purely local notion of failure detection: node A may consider node B failed if B does not respond to its messages, and it keeps using other nodes for B's partitions while retrying B periodically (section 4.8). Read and write operations involve the first N healthy nodes of the preference list, skipping nodes that are down (section 4.5).",
+          "wait": 150
+        },
+        {
+          "from": "coord",
+          "to": "r4",
+          "kind": "req",
+          "label": "write version 3, hint R3",
+          "detail": "This is a sloppy quorum: the write goes to the first N healthy nodes, which are no longer the first N nodes of the list. Replica 4 gets the data with a hint in its metadata naming the intended recipient, Replica 3. It keeps hinted replicas in a separate local store that it scans periodically. The copy keeps three replicas of the new version alive even though one home replica is down.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3"
+            },
+            {
+              "name": "hint",
+              "value": "R3",
+              "note": "The node this copy really belongs to"
+            }
+          ],
+          "data": {
+            "r4": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3",
+                "hint for R3"
+              ],
+              "mark": [
+                1,
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "r1",
+          "to": "coord",
+          "kind": "res",
+          "label": "ack",
+          "detail": "Replica 1 acknowledges.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "stored"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 1 of W 2",
+                "copies 1 of N 3"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "r2",
+          "to": "coord",
+          "kind": "res",
+          "label": "ack",
+          "detail": "Replica 2 acknowledges and W = 2 is reached.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "stored"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 2 of W 2",
+                "copies 2 of N 3"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "client",
+          "kind": "res",
+          "label": "write ok",
+          "detail": "The coordinator answers the client as soon as W = 2 acknowledgements are in. Hinted handoff is what makes Dynamo always writeable: the write succeeds despite the failure. Applications that need the highest availability can even set W to 1 (section 4.6).",
+          "fields": [
+            {
+              "name": "status",
+              "value": "success"
+            }
+          ]
+        },
+        {
+          "from": "r4",
+          "to": "coord",
+          "kind": "res",
+          "label": "ack (hinted copy)",
+          "detail": "The stand-in acknowledges later. Now three copies of version 3 exist: R1, R2 and the hinted copy on Replica 4. A sloppy quorum weakens the overlap guarantee: if R1 and R2 were to fail now, a read of the home replicas would not find the hinted copy that holds version 3.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "stored, hinted"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 2, W 2",
+                "R + W = 4 > N 3",
+                "acks 2 of W 2",
+                "copies 3 of N 3"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "r3",
+          "to": "r3",
+          "kind": "local",
+          "label": "R3 is back up",
+          "phase": "Recovery",
+          "detail": "Replica 3 recovers. It still holds the version it had before the outage, version 2 = B, so it is stale. Nothing has told it yet.",
+          "state": {
+            "r3": "Up"
+          },
+          "data": {
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value B",
+                "version 2",
+                "missed version 3"
+              ],
+              "mark": [
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "r4",
+          "to": "r3",
+          "kind": "async",
+          "label": "hand off: version 3 = C",
+          "detail": "Replica 4 notices that Replica 3 is reachable again and sends the hinted replica to it. Once the transfer succeeds Replica 4 may delete its copy without reducing the number of replicas in the system (section 4.6). Replica 3 now holds version 3.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3"
+            },
+            {
+              "name": "hint",
+              "value": "R3"
+            }
+          ],
+          "data": {
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "r4",
+          "to": "r4",
+          "kind": "local",
+          "label": "delete the hint",
+          "detail": "Replica 4 drops the hinted copy. Hinted handoff guarantees only that the intended replica eventually gets the write if the stand-in survives and the hint is delivered. It does not make the write durable on Replica 4 (if that node is lost before the handoff the copy is lost, and the replica count stays below N until anti-entropy repairs it), it does not merge conflicting versions, and it does not fix replicas that missed a write for any other reason. Dynamo handles the rest with Merkle tree anti-entropy (section 4.7).",
+          "data": {
+            "r4": {
+              "title": "replica copy",
+              "items": [
+                "no copy of cart"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "stale-read",
+      "title": "R + W <= N: a stale read",
+      "summary": "With R = 1 and W = 1 on three replicas the write set and the read set can be disjoint, so a read returns the old value after the write was acknowledged. The loss of the other two copies is illustrative.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "put cart = D (W = 1)",
+          "phase": "Write, W = 1",
+          "detail": "Now R = 1 and W = 1: the fast and available setting, but R + W = 2 is not more than N = 3, so a read set and a write set need not overlap. All three replicas start with version 3 = C (illustrative write numbers).",
+          "state": {
+            "r1": "Up",
+            "r2": "Up",
+            "r3": "Up"
+          },
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "D"
+            },
+            {
+              "name": "write quorum W",
+              "value": "1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 1, W 1",
+                "R + W = 2 <= N 3",
+                "acks 0 of W 1"
+              ],
+              "mark": [
+                1
+              ]
+            },
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3"
+              ]
+            },
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3"
+              ]
+            },
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value C",
+                "version 3"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r1",
+          "kind": "req",
+          "label": "write version 4",
+          "detail": "The coordinator writes version 4 = D to Replica 1.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "value",
+              "value": "D"
+            },
+            {
+              "name": "version",
+              "value": "4"
+            }
+          ],
+          "data": {
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "key cart",
+                "value D",
+                "version 4"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "r1",
+          "to": "coord",
+          "kind": "res",
+          "label": "ack",
+          "detail": "One ack is all that W = 1 needs.",
+          "fields": [
+            {
+              "name": "result",
+              "value": "stored"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 1, W 1",
+                "R + W = 2 <= N 3",
+                "acks 1 of W 1",
+                "write set R1"
+              ],
+              "mark": [
+                1,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "client",
+          "kind": "res",
+          "label": "write ok (1 of 3)",
+          "detail": "The client is told the write succeeded after a single replica stored it. The write is fast and survives the loss of any two replicas as far as availability goes, but only one copy exists for now.",
+          "fields": [
+            {
+              "name": "status",
+              "value": "success",
+              "note": "Only 1 of 3 replicas holds version 4"
+            }
+          ]
+        },
+        {
+          "from": "coord",
+          "to": "r2",
+          "kind": "req",
+          "label": "write version 4 (lost)",
+          "detail": "The copies to the other replicas are still in flight and in this illustration they are lost (a dropped packet or a restarting node). Replica 2 keeps version 3.",
+          "fields": [
+            {
+              "name": "version",
+              "value": "4"
+            }
+          ],
+          "delay": 0,
+          "lost": true
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "write version 4 (lost)",
+          "detail": "The same for Replica 3.",
+          "fields": [
+            {
+              "name": "version",
+              "value": "4"
+            }
+          ],
+          "delay": 0,
+          "lost": true
+        },
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "get cart (R = 1)",
+          "phase": "Read, R = 1",
+          "detail": "Another read arrives with R = 1. The coordinator may answer from the first replica that replies; here that is Replica 3.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "read quorum R",
+              "value": "1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 1, W 1",
+                "R + W = 2 <= N 3",
+                "replies 0 of R 1"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "read cart",
+          "detail": "The coordinator asks Replica 3.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            }
+          ]
+        },
+        {
+          "from": "r3",
+          "to": "coord",
+          "kind": "res",
+          "label": "version 3 = C",
+          "detail": "Replica 3 answers with the value it has, version 3 = C. One reply meets R = 1, so the coordinator stops here.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3",
+              "note": "The newest is version 4 on Replica 1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 1, W 1",
+                "R + W = 2 <= N 3",
+                "replies 1 of R 1",
+                "read set R3"
+              ],
+              "mark": [
+                1,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "client",
+          "kind": "res",
+          "label": "value C (stale)",
+          "detail": "The client reads C although D was acknowledged earlier. This is a stale read, and it is not a bug: with R + W <= N the quorums are allowed to miss each other.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "C"
+            },
+            {
+              "name": "version",
+              "value": "3",
+              "note": "Stale: version 4 exists"
+            }
+          ]
+        },
+        {
+          "from": "coord",
+          "to": "coord",
+          "kind": "local",
+          "label": "R1 and R3 do not overlap",
+          "detail": "The write set {R1} and the read set {R3} share no replica, so nothing in the read could reveal version 4. Choosing W = 1, R = 1 buys latency and availability and gives up the overlap. Eventually the lost writes are repaired (read repair, anti-entropy), so the replicas converge, but a read in between can be stale.",
+          "data": {
+            "coord": {
+              "title": "quorum",
+              "items": [
+                "N 3, R 1, W 1",
+                "R + W = 2 <= N 3",
+                "write set R1",
+                "read set R3",
+                "overlap none"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "version-vectors",
+      "title": "Concurrent writes and version vectors",
+      "summary": "During a partition two clients write the same key on different sides. Vector clocks show the two versions are concurrent, a read returns both as siblings, and a merge write that carries both clocks supersedes them. Names, values and the partition are illustrative.",
+      "steps": [
+        {
+          "from": "coord",
+          "to": "coord",
+          "kind": "local",
+          "label": "start: D1 on all replicas",
+          "phase": "Start",
+          "detail": "Version vectors let the store tell a newer version from a conflicting one. Each version of the key carries a list of (node, counter) pairs, the vector clock of Dynamo (section 4.4). All three replicas hold the same cart, D1 = \"milk\" with clock R1:1. A network partition then splits {R1, R2} from {R3} (illustrative). Each client is served by a coordinator on its own side; the Coordinator actor stands for whichever node coordinates, and the clock names it. In Dynamo the coordinator is one of the top N replicas.",
+          "state": {
+            "r1": "Side 1",
+            "r2": "Side 1",
+            "r3": "Side 2"
+          },
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "no request yet"
+              ]
+            },
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "D1: milk",
+                "clock R1:1"
+              ]
+            },
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "D1: milk",
+                "clock R1:1"
+              ]
+            },
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "D1: milk",
+                "clock R1:1"
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "client A: add eggs",
+          "phase": "Write on side 1",
+          "detail": "Client A read D1 (context R1:1) and writes \"milk, eggs\" with that context. The coordinator on side 1 is R1: it increments its own counter and the new version gets the clock R1:2. D1 is an ancestor of it because every counter of R1:1 is less than or equal to the matching counter of R1:2.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, eggs"
+            },
+            {
+              "name": "context",
+              "value": "R1:1",
+              "note": "The vector clock the client read"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "acting as R1",
+                "D2 clock R1:2"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r1",
+          "kind": "req",
+          "label": "write D2",
+          "detail": "R1 stores D2. D2 descends from D1, so D2 overwrites D1 (syntactic reconciliation).",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, eggs"
+            },
+            {
+              "name": "clock",
+              "value": "R1:2"
+            }
+          ],
+          "data": {
+            "r1": {
+              "title": "replica copy",
+              "items": [
+                "D2: milk, eggs",
+                "clock R1:2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r2",
+          "kind": "req",
+          "label": "write D2",
+          "detail": "R2 stores D2 too. Each write is acknowledged and W is met on this side; the acks are left out of the drawing.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, eggs"
+            },
+            {
+              "name": "clock",
+              "value": "R1:2"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "r2": {
+              "title": "replica copy",
+              "items": [
+                "D2: milk, eggs",
+                "clock R1:2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "client B: add jam",
+          "phase": "Write on side 2",
+          "detail": "Client B also read D1 (context R1:1) before A wrote, and writes \"milk, jam\". Its request is served on side 2, where R3 is the coordinator: R3 adds its own entry and the clock becomes R1:1,R3:1. Neither client has seen the other's write.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, jam"
+            },
+            {
+              "name": "context",
+              "value": "R1:1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "acting as R3",
+                "D3 clock R1:1,R3:1"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "write D3",
+          "detail": "R3 stores D3. R3 has D1 as ancestor, so D3 replaces it there. Now R1 and R2 hold D2, R3 holds D3, and the clocks are R1:2 and R1:1,R3:1.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, jam"
+            },
+            {
+              "name": "clock",
+              "value": "R1:1,R3:1"
+            }
+          ],
+          "data": {
+            "r3": {
+              "title": "replica copy",
+              "items": [
+                "D3: milk, jam",
+                "clock R1:1,R3:1"
+              ]
+            }
+          }
+        },
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "get cart, R = 2",
+          "phase": "Read after healing",
+          "detail": "The partition heals and a client reads with R = 2. The coordinator asks R2 and R3 (to keep the drawing short, only those two).",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            },
+            {
+              "name": "read quorum R",
+              "value": "2"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "R = 2",
+                "replies 0 of 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r2",
+          "kind": "req",
+          "label": "read cart",
+          "detail": "The coordinator asks R2 for all versions it holds.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            }
+          ]
+        },
+        {
+          "from": "r2",
+          "to": "coord",
+          "kind": "res",
+          "label": "D2 clock R1:2",
+          "detail": "R2 returns D2 with the clock R1:2.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, eggs"
+            },
+            {
+              "name": "clock",
+              "value": "R1:2"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "R = 2",
+                "replies 1 of 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "r3",
+          "kind": "req",
+          "label": "read cart",
+          "detail": "And R3.",
+          "fields": [
+            {
+              "name": "key",
+              "value": "cart"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "r3",
+          "to": "coord",
+          "kind": "res",
+          "label": "D3 clock R1:1,R3:1",
+          "detail": "R3 returns D3 with the clock R1:1,R3:1.",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, jam"
+            },
+            {
+              "name": "clock",
+              "value": "R1:1,R3:1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "R = 2",
+                "replies 2 of 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "coord",
+          "kind": "local",
+          "label": "compare: D2 and D3 conflict",
+          "detail": "Comparing counter by counter: R1 is 2 in D2 and 1 in D3, so D2 is ahead there; R3 is 0 (absent) in D2 and 1 in D3, so D3 is ahead there. Neither clock is less than or equal to the other in every entry, so neither version is an ancestor of the other: they are concurrent, in conflict. The store cannot pick one safely; Dynamo keeps both as siblings and returns all the leaves with a context that summarizes both clocks, R1:2,R3:1 (section 4.4).",
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "D2 R1:2",
+                "D3 R1:1,R3:1",
+                "D2 vs D3: concurrent",
+                "context R1:2,R3:1"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "coord",
+          "to": "client",
+          "kind": "res",
+          "label": "two siblings",
+          "detail": "The client gets D2 \"milk, eggs\" and D3 \"milk, jam\". Two policies exist. Last write wins keeps one version by timestamp and silently drops the other client's change (the cart would lose either eggs or jam); a data store that resolves conflicts itself can only use simple policies like this (section 2.3). Application merge keeps both: here the union \"milk, eggs, jam\", which is what the shopping cart does in Dynamo (a deleted item can then resurface).",
+          "fields": [
+            {
+              "name": "siblings",
+              "value": "2",
+              "note": "D2 and D3"
+            },
+            {
+              "name": "context",
+              "value": "R1:2,R3:1"
+            }
+          ]
+        },
+        {
+          "from": "client",
+          "to": "coord",
+          "kind": "req",
+          "label": "write merged cart, D4",
+          "phase": "Reconcile",
+          "detail": "The client writes the merged cart passing the context R1:2,R3:1, which tells the store that this write has seen both siblings. If R1 coordinates it, R1 increments its entry: the new clock is R1:3,R3:1. Every entry is at least the entry of D2 and of D3, so D4 descends from both and replaces them (the pattern of the paper's D5 example, section 4.4).",
+          "fields": [
+            {
+              "name": "value",
+              "value": "milk, eggs, jam"
+            },
+            {
+              "name": "context",
+              "value": "R1:2,R3:1"
+            }
+          ],
+          "data": {
+            "coord": {
+              "title": "coordinator",
+              "items": [
+                "acting as R1",
+                "D4: milk, eggs, jam",
+                "clock R1:3,R3:1",
+                "D4 dominates D2, D3"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "coord",
+      "kind": "tradeoff",
+      "text": "Latency is dictated by the slowest of the R (or W) replicas that must answer (section 4.5), which is why R and W are usually below N. W = N makes writes slow and unavailable when any replica is down but lets R = 1 read the newest value; R = N does the opposite; W = 1 is always writeable but gives the thinnest durability window. The common Dynamo configuration reported in the paper is (N, R, W) = (3, 2, 2)."
+    },
+    {
+      "target": "r3",
+      "kind": "failure",
+      "text": "A sloppy quorum plus hinted handoff keeps writes succeeding while replicas are down, but it trades away the overlap guarantee: the nodes that hold the newest data may not be the nodes a later read asks. Handoff delivers a hint only if the stand-in survives; the replica count can stay under N until anti-entropy (Merkle trees) repairs it."
+    },
+    {
+      "target": "coord",
+      "kind": "failure",
+      "text": "R + W > N alone is not linearizability. Overlap lets a read find the newest acknowledged version, but it does not order operations in real time: a write that failed halfway can sit on some replicas, a read that runs while a write is in flight can return either value and a later read can return the older one, and sloppy quorums remove the overlap. Dynamo is eventually consistent by design."
+    },
+    {
+      "target": "r2",
+      "kind": "security",
+      "text": "Quorum voting assumes replicas are honest and only crash or lag. A replica that lies, for example by returning a forged high version, defeats it, and masking such faults needs larger quorums and signatures (Byzantine fault tolerance). Dynamo itself assumed a non-hostile environment with no authentication or authorization requirements (section 2.1)."
+    },
+    {
+      "target": "r1",
+      "kind": "tradeoff",
+      "text": "Tunable consistency in one line: Dynamo and Apache Cassandra both let each operation choose how many replicas it needs. Cassandra offers levels such as ONE, QUORUM and ALL and follows the rule W + R > RF (replication factor) for read-your-write visibility. Last write wins by timestamp, which Cassandra uses, silently drops one of two concurrent writes, while vector clocks with application merge, as in the Dynamo paper, keep both at the price of pushing reconciliation to the application."
+    }
+  ],
+  "questions": [
+    {
+      "id": "intersection",
+      "topic": "consistency",
+      "targets": [
+        "coord",
+        "r2"
+      ],
+      "q": "Why does R + W > N make a read see the latest write?",
+      "a": "A write is acknowledged by W replicas and a read consults R replicas. If R + W > N the two sets must share at least one replica, because together they are larger than the whole set. That shared replica holds the newest acknowledged version, and the coordinator picks the highest version among its R replies."
+    },
+    {
+      "id": "rw-choice",
+      "topic": "tradeoffs",
+      "targets": [
+        "coord"
+      ],
+      "q": "How do you pick R and W for N = 3?",
+      "a": "It is a latency, availability and consistency trade. (3, 2, 2) tolerates one slow or failed replica on both paths and still overlaps. W = 3, R = 1 gives fast reads but no write when any replica is down. W = 1, R = 1 is the fastest and most available but R + W = 2 is not above 3, so reads can be stale."
+    },
+    {
+      "id": "hinted",
+      "topic": "reliability",
+      "targets": [
+        "r4",
+        "r3"
+      ],
+      "q": "What do sloppy quorums and hinted handoff give you, and what do they not?",
+      "a": "A write is stored on the first N healthy nodes, so it succeeds during a failure, and a stand-in holds a hinted copy until the intended replica returns. They do not keep the overlap guarantee, they do not help if the stand-in fails before handoff, and they do not resolve conflicting versions. Anti-entropy and read repair do the rest."
+    },
+    {
+      "id": "linearizable",
+      "topic": "consistency",
+      "targets": [
+        "coord"
+      ],
+      "q": "Are quorum reads linearizable by themselves?",
+      "a": "No. A read that overlaps a write still on its way to some replicas may return the old or new value, and a later read may go back to the old one. Sloppy quorums and clock skew make it worse. Systems that need linearizability add a consensus protocol, as in the Raft module."
+    },
+    {
+      "id": "concurrent",
+      "topic": "data",
+      "targets": [
+        "coord",
+        "r1",
+        "r3"
+      ],
+      "q": "How do version vectors detect two concurrent writes?",
+      "a": "Each version carries (node, counter) pairs. One version is an ancestor of another if every counter in its clock is less than or equal to the other's, and then it can be dropped. If neither clock is below the other in every entry, as R1:2 and R1:1,R3:1, the versions are concurrent and the store keeps both as siblings."
+    },
+    {
+      "id": "lww",
+      "topic": "tradeoffs",
+      "targets": [
+        "coord"
+      ],
+      "q": "Last write wins or application merge for siblings?",
+      "a": "Last write wins needs no application code and gives one value, but it silently discards one of the concurrent writes and depends on the clocks of the writers. Application merge keeps every update, for example a cart union, at the cost of code that must handle several versions and cases like deleted items coming back."
+    }
+  ]
+}

@@ -1,0 +1,1469 @@
+{
+  "schema": "archstory/v1",
+  "id": "gossip",
+  "meta": {
+    "title": "Gossip and failure detection",
+    "summary": "How a cluster with no coordinator spreads information and notices crashed members: push-pull anti-entropy rounds that converge on the newest key versions, SWIM failure detection with indirect pings and suspicion, and a node refuting a false suspicion with a higher incarnation number. The cluster, partner choices and timeouts are illustrative.",
+    "tags": [
+      "gossip",
+      "epidemic",
+      "SWIM",
+      "failure detection",
+      "membership"
+    ],
+    "difficulty": "medium",
+    "source": "Demers et al., Epidemic Algorithms for Replicated Database Maintenance (PODC 1987); Das, Gupta and Motivala, SWIM: Scalable Weakly-consistent Infection-style Process Group Membership Protocol (2002); hashicorp/memberlist DefaultLANConfig; Apache Cassandra documentation",
+    "kind": "protocol",
+    "order": 15,
+    "section": "Distributed systems"
+  },
+  "requirements": {
+    "functional": [
+      "Spreads updates (key versions, membership changes) to every node without a coordinator: each round every node reconciles with one randomly chosen peer",
+      "Anti-entropy: two nodes compare their state and both keep the newer version of each key (push, pull or push-pull), so the cluster converges even if earlier messages were lost",
+      "Failure detection (SWIM): each period a member pings one random member, and if no ack comes it asks k other members to ping it indirectly before suspecting it",
+      "Suspicion: a member that cannot be reached is first suspected, not declared dead; it can refute with an Alive message carrying a higher incarnation number",
+      "Membership updates (Suspect, Alive, Confirm) are piggybacked on the ping, ping-req and ack messages that failure detection sends anyway",
+      "Out of scope here: choosing seed nodes, joining and leaving in detail, rumor mongering with loss of interest, and the Lifeguard extensions"
+    ],
+    "nonFunctional": [
+      "Constant load per node: each node starts one exchange (or one probe) per round no matter how large the cluster is",
+      "Fast spread: the number of rounds to reach everyone grows with the logarithm of the cluster size",
+      "No single point of failure: any node can start gossip and any node can fail, with nothing to elect",
+      "Eventual consistency: at any moment nodes can hold different views, and they agree if the gossip is allowed to finish",
+      "Low false positives: indirect probes and the suspicion timeout trade a slower detection for fewer wrongly declared failures"
+    ],
+    "scale": [
+      {
+        "label": "Per node per round",
+        "value": "one initiated exchange, independent of cluster size"
+      },
+      {
+        "label": "Rounds to spread",
+        "value": "grows with log N; the exact number depends on the random choices (this module shows 2 rounds for 5 illustrative nodes)"
+      },
+      {
+        "label": "SWIM message load",
+        "value": "constant expected overhead per member: pings, ping-reqs and acks only"
+      },
+      {
+        "label": "Indirect probes k",
+        "value": "a small constant; k = 2 in this module (illustrative), 3 in the hashicorp memberlist LAN defaults"
+      },
+      {
+        "label": "memberlist LAN defaults",
+        "value": "probe every 1 s, probe timeout 500 ms, gossip every 200 ms to 3 nodes"
+      },
+      {
+        "label": "Cassandra",
+        "value": "every node gossips once a second with random peers"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "a",
+      "label": "Node A",
+      "kind": "service",
+      "description": "A member of an illustrative five node cluster. Each node keeps its own copy of the data and its own view of who is alive"
+    },
+    {
+      "id": "b",
+      "label": "Node B",
+      "kind": "service",
+      "description": "A member of the cluster; the node that learns the news first in the SWIM flows"
+    },
+    {
+      "id": "c",
+      "label": "Node C",
+      "kind": "service",
+      "description": "A member of the cluster; picked by A for an indirect probe"
+    },
+    {
+      "id": "d",
+      "label": "Node D",
+      "kind": "service",
+      "description": "A member of the cluster"
+    },
+    {
+      "id": "e",
+      "label": "Node E",
+      "kind": "service",
+      "description": "The node that holds z 1 in the anti-entropy flow, crashes in the failure detection flow and is only slow in the refutation flow"
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "b",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "a",
+      "to": "c",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "a",
+      "to": "d",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "a",
+      "to": "e",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "b",
+      "to": "c",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "b",
+      "to": "d",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "b",
+      "to": "e",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "c",
+      "to": "d",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "c",
+      "to": "e",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    },
+    {
+      "from": "d",
+      "to": "e",
+      "label": "gossip, ping",
+      "protocol": "UDP"
+    }
+  ],
+  "flows": [
+    {
+      "id": "anti-entropy",
+      "title": "Anti-entropy: push-pull rounds",
+      "summary": "Five nodes with different key versions converge by each picking a partner every round and keeping the higher version of every key. The partner choices are illustrative; for them the cluster agrees after 2 rounds.",
+      "steps": [
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "five nodes, three keys",
+          "phase": "Round 0",
+          "detail": "A cluster of five nodes (illustrative) each holds a map from key to version number. Node A has x at version 2, B has an older x at version 1, C has y at version 1, E has z at version 1, and D has nothing. Nobody has the full picture: the newest version of every key is x 2, y 1, z 1. Anti-entropy lets every node pick a random partner each round and reconcile completely with it (Demers et al. 1987). Which partner each node picks below is illustrative; a real node picks at random.",
+          "state": {
+            "a": "Stale",
+            "b": "Stale",
+            "c": "Stale",
+            "d": "Stale",
+            "e": "Stale"
+          },
+          "data": {
+            "a": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 0",
+                "z: 0",
+                "round 0"
+              ]
+            },
+            "b": {
+              "title": "key versions",
+              "items": [
+                "x: 1",
+                "y: 0",
+                "z: 0",
+                "round 0"
+              ]
+            },
+            "c": {
+              "title": "key versions",
+              "items": [
+                "x: 0",
+                "y: 1",
+                "z: 0",
+                "round 0"
+              ]
+            },
+            "d": {
+              "title": "key versions",
+              "items": [
+                "x: 0",
+                "y: 0",
+                "z: 0",
+                "round 0"
+              ]
+            },
+            "e": {
+              "title": "key versions",
+              "items": [
+                "x: 0",
+                "y: 0",
+                "z: 1",
+                "round 0"
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "d",
+          "kind": "req",
+          "label": "A and D exchange",
+          "phase": "Round 1",
+          "detail": "A picks D (illustrative) and they exchange maps in one push-pull: A pushes x2 y0 z0, D replies with x0 y0 z0, and both keep the higher version of every key, x2 y0 z0. Result: D learns x. Within a round the five exchanges are drawn one after another and each uses what the nodes hold at that moment; real nodes gossip concurrently, so the order is a simplification.",
+          "state": {
+            "a": "Stale",
+            "d": "Stale"
+          },
+          "fields": [
+            {
+              "name": "A sends",
+              "value": "x2 y0 z0"
+            },
+            {
+              "name": "D replies",
+              "value": "x0 y0 z0"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y0 z0",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 0",
+                "z: 0",
+                "round 1"
+              ]
+            },
+            "d": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 0",
+                "z: 0",
+                "round 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "a",
+          "kind": "req",
+          "label": "B and A exchange",
+          "detail": "B picks A (illustrative) and they exchange maps in one push-pull: B pushes x1 y0 z0, A replies with x2 y0 z0, and both keep the higher version of every key, x2 y0 z0. Result: B learns x.",
+          "state": {
+            "b": "Stale",
+            "a": "Stale"
+          },
+          "fields": [
+            {
+              "name": "B sends",
+              "value": "x1 y0 z0"
+            },
+            {
+              "name": "A replies",
+              "value": "x2 y0 z0"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y0 z0",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 0",
+                "z: 0",
+                "round 1"
+              ],
+              "mark": [
+                0
+              ]
+            },
+            "a": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 0",
+                "z: 0",
+                "round 1"
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "e",
+          "kind": "req",
+          "label": "C and E exchange",
+          "detail": "C picks E (illustrative) and they exchange maps in one push-pull: C pushes x0 y1 z0, E replies with x0 y0 z1, and both keep the higher version of every key, x0 y1 z1. Result: E learns y; C learns z.",
+          "state": {
+            "c": "Stale",
+            "e": "Stale"
+          },
+          "fields": [
+            {
+              "name": "C sends",
+              "value": "x0 y1 z0"
+            },
+            {
+              "name": "E replies",
+              "value": "x0 y0 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x0 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "key versions",
+              "items": [
+                "x: 0",
+                "y: 1",
+                "z: 1",
+                "round 1"
+              ],
+              "mark": [
+                2
+              ]
+            },
+            "e": {
+              "title": "key versions",
+              "items": [
+                "x: 0",
+                "y: 1",
+                "z: 1",
+                "round 1"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "d",
+          "to": "c",
+          "kind": "req",
+          "label": "D and C exchange",
+          "detail": "D picks C (illustrative) and they exchange maps in one push-pull: D pushes x2 y0 z0, C replies with x0 y1 z1, and both keep the higher version of every key, x2 y1 z1. Result: C learns x; D learns y, z.",
+          "state": {
+            "d": "Current",
+            "c": "Current"
+          },
+          "fields": [
+            {
+              "name": "D sends",
+              "value": "x2 y0 z0"
+            },
+            {
+              "name": "C replies",
+              "value": "x0 y1 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "d": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 1"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            },
+            "c": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "b",
+          "kind": "req",
+          "label": "E and B exchange",
+          "detail": "E picks B (illustrative) and they exchange maps in one push-pull: E pushes x0 y1 z1, B replies with x2 y0 z0, and both keep the higher version of every key, x2 y1 z1. Result: B learns y, z; E learns x.",
+          "state": {
+            "e": "Current",
+            "b": "Current"
+          },
+          "fields": [
+            {
+              "name": "E sends",
+              "value": "x0 y1 z1"
+            },
+            {
+              "name": "B replies",
+              "value": "x2 y0 z0"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "e": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 1"
+              ],
+              "mark": [
+                0
+              ]
+            },
+            "b": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 1"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "c",
+          "kind": "req",
+          "label": "A and C exchange",
+          "phase": "Round 2",
+          "detail": "A picks C (illustrative) and they exchange maps in one push-pull: A pushes x2 y0 z0, C replies with x2 y1 z1, and both keep the higher version of every key, x2 y1 z1. Result: A learns y, z. After round 1 four nodes already hold the full map; only A still lacks y and z, and its own pick this round is C.",
+          "state": {
+            "a": "Current",
+            "c": "Current"
+          },
+          "fields": [
+            {
+              "name": "A sends",
+              "value": "x2 y0 z0"
+            },
+            {
+              "name": "C replies",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ],
+              "mark": [
+                1,
+                2
+              ]
+            },
+            "c": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "e",
+          "kind": "req",
+          "label": "B and E exchange",
+          "detail": "B picks E (illustrative) and they exchange maps in one push-pull: B pushes x2 y1 z1, E replies with x2 y1 z1, and both keep the higher version of every key, x2 y1 z1. Result: neither learns anything new. Exchanges between nodes that already agree still happen and cost a message, they just change nothing.",
+          "state": {
+            "b": "Current",
+            "e": "Current"
+          },
+          "fields": [
+            {
+              "name": "B sends",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "E replies",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "e": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "a",
+          "kind": "req",
+          "label": "C and A exchange",
+          "detail": "C picks A (illustrative) and they exchange maps in one push-pull: C pushes x2 y1 z1, A replies with x2 y1 z1, and both keep the higher version of every key, x2 y1 z1. Result: neither learns anything new. Exchanges between nodes that already agree still happen and cost a message, they just change nothing.",
+          "state": {
+            "c": "Current",
+            "a": "Current"
+          },
+          "fields": [
+            {
+              "name": "C sends",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "A replies",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "a": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "d",
+          "to": "b",
+          "kind": "req",
+          "label": "D and B exchange",
+          "detail": "D picks B (illustrative) and they exchange maps in one push-pull: D pushes x2 y1 z1, B replies with x2 y1 z1, and both keep the higher version of every key, x2 y1 z1. Result: neither learns anything new. Exchanges between nodes that already agree still happen and cost a message, they just change nothing.",
+          "state": {
+            "d": "Current",
+            "b": "Current"
+          },
+          "fields": [
+            {
+              "name": "D sends",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "B replies",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "d": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "b": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "d",
+          "kind": "req",
+          "label": "E and D exchange",
+          "detail": "E picks D (illustrative) and they exchange maps in one push-pull: E pushes x2 y1 z1, D replies with x2 y1 z1, and both keep the higher version of every key, x2 y1 z1. Result: neither learns anything new. Exchanges between nodes that already agree still happen and cost a message, they just change nothing.",
+          "state": {
+            "e": "Current",
+            "d": "Current"
+          },
+          "fields": [
+            {
+              "name": "E sends",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "D replies",
+              "value": "x2 y1 z1"
+            },
+            {
+              "name": "both keep",
+              "value": "x2 y1 z1",
+              "note": "The higher version of each key"
+            }
+          ],
+          "data": {
+            "e": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "d": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "all five agree after round 2",
+          "phase": "Converged",
+          "detail": "Every node now holds x 2, y 1, z 1. For these illustrative partner choices the cluster converged in 2 rounds (the last exchange that taught anything was A with C in round 2). In general a push-pull epidemic needs a number of rounds that grows with the logarithm of the cluster size, so the cost per node stays flat as N grows; the exact count depends on the random choices.",
+          "state": {
+            "a": "Current",
+            "b": "Current",
+            "c": "Current",
+            "d": "Current",
+            "e": "Current"
+          },
+          "data": {
+            "a": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "b": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "c": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "d": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            },
+            "e": {
+              "title": "key versions",
+              "items": [
+                "x: 2",
+                "y: 1",
+                "z: 1",
+                "round 2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "swim-detection",
+      "title": "SWIM: ping, ping-req, suspect, dead",
+      "summary": "A probes a crashed node, tries k = 2 indirect probes, suspects it, spreads the suspicion on later pings and finally confirms it dead. The timeouts and which members get probed are illustrative.",
+      "steps": [
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "protocol period: probe E",
+          "phase": "Probe",
+          "detail": "SWIM splits membership into failure detection and dissemination (Das, Gupta and Motivala, 2002). Each protocol period T' every member picks one other member at random from its list and pings it. Node A picks E this period. E has in fact crashed (illustrative), but nobody knows yet: each of A, B, C and D currently lists E as alive with incarnation 0.",
+          "state": {
+            "a": "Alive",
+            "b": "Alive",
+            "c": "Alive",
+            "d": "Alive",
+            "e": "Crashed"
+          },
+          "data": {
+            "a": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0",
+                "probing E"
+              ]
+            },
+            "b": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            },
+            "c": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            },
+            "d": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "e",
+          "kind": "req",
+          "label": "ping E",
+          "detail": "A sends a ping to E and waits for an ack. E is down, so the ping is lost and nothing comes back.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "target",
+              "value": "E"
+            }
+          ],
+          "lost": true
+        },
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "no ack in 200 ms",
+          "phase": "Indirect probe",
+          "detail": "A waits for the ack until a timeout that is shorter than the protocol period (200 ms here, illustrative; the paper bases it on the round trip time of the network, and requires the period to be at least three times the round trip estimate). No ack arrives, so A does not conclude anything yet and starts an indirect probe.",
+          "wait": 200
+        },
+        {
+          "from": "a",
+          "to": "b",
+          "kind": "req",
+          "label": "ping-req(E) via B",
+          "detail": "A picks k members at random and asks each to ping E for it. Here k = 2 (illustrative); the candidates are the three members other than A and E, and A picks B and C. Going through other members avoids blaming E for a problem on the single network path between A and E.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping-req"
+            },
+            {
+              "name": "target",
+              "value": "E"
+            },
+            {
+              "name": "k",
+              "value": "2",
+              "note": "Number of indirect probes"
+            }
+          ]
+        },
+        {
+          "from": "a",
+          "to": "c",
+          "kind": "req",
+          "label": "ping-req(E) via C",
+          "detail": "The second indirect probe goes to C.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping-req"
+            },
+            {
+              "name": "target",
+              "value": "E"
+            },
+            {
+              "name": "k",
+              "value": "2"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "b",
+          "to": "e",
+          "kind": "req",
+          "label": "B pings E (lost)",
+          "detail": "B pings E on A's behalf. E is crashed, so no ack comes back. If E were alive, B would forward E's ack to A.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "target",
+              "value": "E"
+            }
+          ],
+          "lost": true
+        },
+        {
+          "from": "c",
+          "to": "e",
+          "kind": "req",
+          "label": "C pings E (lost)",
+          "detail": "C does the same and gets no ack either.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "target",
+              "value": "E"
+            }
+          ],
+          "delay": 0,
+          "lost": true
+        },
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "period ends: suspect E",
+          "phase": "Suspicion",
+          "detail": "At the end of the protocol period A has received no ack, directly or through B or C. The basic SWIM protocol would now declare E failed. With the suspicion subprotocol A instead marks E as suspected, still with incarnation 0, and starts a suspicion timer (5000 ms here, illustrative; the paper calls it a prespecified time-out). Suspected members stay in the list and are still picked as ping targets.",
+          "wait": 800,
+          "data": {
+            "a": {
+              "title": "view of E",
+              "items": [
+                "E: suspect, inc 0",
+                "timer 5000 ms"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "b",
+          "kind": "req",
+          "label": "ping with Suspect E",
+          "detail": "A's next ping to B carries the news. SWIM sends no extra packets for dissemination: membership updates ride on the ping, ping-req and ack messages that the failure detector sends anyway (infection style). B marks E as suspect too.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Suspect E inc 0",
+              "note": "Piggybacked update"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "view of E",
+              "items": [
+                "E: suspect, inc 0"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "d",
+          "kind": "req",
+          "label": "ping with Suspect E",
+          "detail": "B repeats the update in its own next ping, to D, which also marks E suspect. C has not heard yet, because the news moves by random pings, not a broadcast.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Suspect E inc 0"
+            }
+          ],
+          "data": {
+            "d": {
+              "title": "view of E",
+              "items": [
+                "E: suspect, inc 0"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "suspicion timer ends: dead",
+          "phase": "Declared dead",
+          "detail": "Nobody refuted the suspicion with an Alive message before the timer ran out (see the refutation flow for the other outcome). A declares E faulty, removes it from its list and starts spreading Confirm E. A Confirm overrides any earlier Suspect or Alive message about E.",
+          "wait": 5000,
+          "data": {
+            "a": {
+              "title": "view of E",
+              "items": [
+                "E: dead"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "c",
+          "kind": "req",
+          "label": "ping with Confirm E",
+          "detail": "The Confirm travels on A's next ping. C had never heard of the suspicion and still listed E as alive; the Confirm overrides that and C removes E.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Confirm E",
+              "note": "Overrides Alive and Suspect"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "view of E",
+              "items": [
+                "E: dead"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "d",
+          "kind": "req",
+          "label": "ping with Confirm E",
+          "detail": "C passes it on to D, which was holding Suspect E, and D removes E too. B learns on a later ping. Everyone ends up agreeing that E is gone, but only eventually: membership is weakly consistent, and updates reach the group in a number of periods that grows slowly (logarithmically) with the group size.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Confirm E"
+            }
+          ],
+          "data": {
+            "d": {
+              "title": "view of E",
+              "items": [
+                "E: dead"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "swim-refute",
+      "title": "A node refutes suspicion",
+      "summary": "E is alive but was not heard in time. A suspects it, E hears about it, raises its incarnation number from 0 to 1 and the Alive message overrides the Suspect everywhere before the timer ends. Timer values are illustrative.",
+      "steps": [
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "A suspects E (inc 0)",
+          "phase": "Suspicion",
+          "detail": "Same start as before, but this time E is alive: it is slow or its replies were lost (illustrative). A found no ack from E in this period and marks it suspect with incarnation 0, with a suspicion timer of 5000 ms (illustrative). Incarnation numbers start at 0 when a member joins and only the member itself can raise its own.",
+          "state": {
+            "a": "Alive",
+            "b": "Alive",
+            "c": "Alive",
+            "d": "Alive",
+            "e": "Alive"
+          },
+          "data": {
+            "a": {
+              "title": "view of E",
+              "items": [
+                "E: suspect, inc 0",
+                "timer 5000 ms"
+              ],
+              "mark": [
+                0
+              ]
+            },
+            "b": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            },
+            "c": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            },
+            "d": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            },
+            "e": {
+              "title": "own entry",
+              "items": [
+                "E: alive, inc 0"
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "b",
+          "kind": "req",
+          "label": "ping with Suspect E",
+          "detail": "The suspicion is piggybacked on A's next ping.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Suspect E inc 0"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "view of E",
+              "items": [
+                "E: suspect, inc 0"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "e",
+          "kind": "req",
+          "label": "ping with Suspect E",
+          "detail": "B pings E and the piggybacked update reaches E itself. A member that learns it is suspected can fight back.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Suspect E inc 0"
+            }
+          ],
+          "data": {
+            "e": {
+              "title": "own entry",
+              "items": [
+                "E: alive, inc 0",
+                "told: Suspect inc 0"
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "e",
+          "kind": "local",
+          "label": "refute: inc 0 to 1",
+          "phase": "Refutation",
+          "detail": "E raises its own incarnation number from 0 to 1. Only E may do this, and only when it hears it is suspected in its current incarnation. It will now spread Alive E with incarnation 1.",
+          "data": {
+            "e": {
+              "title": "own entry",
+              "items": [
+                "E: alive, inc 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "e",
+          "to": "b",
+          "kind": "res",
+          "label": "ack with Alive E inc 1",
+          "detail": "The ack to B carries the refutation. Alive with a higher incarnation overrides Suspect: 1 is greater than 0, so B drops its suspicion.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ack"
+            },
+            {
+              "name": "gossip",
+              "value": "Alive E inc 1",
+              "note": "Beats Suspect inc 0"
+            }
+          ],
+          "data": {
+            "b": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "c",
+          "kind": "req",
+          "label": "ping with Suspect E (old)",
+          "phase": "Race",
+          "detail": "In the meantime A still carries the old Suspect E inc 0 in its buffer and sends it to C. C had E as alive with incarnation 0, and a Suspect overrides an Alive of the same or lower incarnation, so C now suspects E.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Suspect E inc 0"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "view of E",
+              "items": [
+                "E: suspect, inc 0"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "b",
+          "to": "c",
+          "kind": "req",
+          "label": "ping with Alive E inc 1",
+          "phase": "Spreading the refutation",
+          "detail": "B spreads the refutation to C. Alive inc 1 overrides Suspect inc 0 because the incarnation is higher, so C goes back to alive.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Alive E inc 1"
+            }
+          ],
+          "data": {
+            "c": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "a",
+          "kind": "req",
+          "label": "ping with Alive E inc 1",
+          "detail": "C passes it to A. A drops the suspicion and cancels its timer before it fires, so no Confirm is ever sent.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Alive E inc 1"
+            }
+          ],
+          "data": {
+            "a": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 1",
+                "timer cancelled"
+              ],
+              "mark": [
+                0,
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "c",
+          "to": "d",
+          "kind": "req",
+          "label": "ping with Alive E inc 1",
+          "detail": "D, which never heard of the suspicion, still listed E as alive with incarnation 0. The higher incarnation replaces it. Every member now holds E: alive with incarnation 1.",
+          "fields": [
+            {
+              "name": "type",
+              "value": "ping"
+            },
+            {
+              "name": "gossip",
+              "value": "Alive E inc 1",
+              "note": "Beats Alive inc 0"
+            }
+          ],
+          "data": {
+            "d": {
+              "title": "view of E",
+              "items": [
+                "E: alive, inc 1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "a",
+          "to": "a",
+          "kind": "local",
+          "label": "E stays: a stale Suspect loses",
+          "phase": "Settled",
+          "detail": "The old message Suspect E inc 0 can no longer harm E: a Suspect only overrides an Alive whose incarnation is the same or lower, and E is now at 1. If E is still unreachable later, someone raises Suspect E inc 1 and E must refute with incarnation 2. A Confirm, in contrast, overrides everything. This is how the suspicion mechanism lowers false positives, but it does not remove them: a member that cannot answer within the timeout is still declared dead."
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "a",
+      "kind": "scaling",
+      "text": "Why gossip scales: each node starts one exchange per round, so the work per node does not grow with the cluster, while the number of rounds needed to reach everyone grows with the logarithm of its size. Total traffic grows linearly with N, spread evenly, with no hot coordinator. SWIM keeps the same property for failure detection: its message load per member is constant and its failure detection time is constant in expectation."
+    },
+    {
+      "target": "e",
+      "kind": "tradeoff",
+      "text": "Membership by gossip is eventually consistent. Two nodes can disagree for several periods about whether a member is alive, and a decision made on a stale view (for example a request routed to a node that others already removed) has to be tolerated. The price of having no coordinator is that nobody holds the single authoritative list."
+    },
+    {
+      "target": "b",
+      "kind": "failure",
+      "text": "False positives: a slow or partitioned node looks the same as a dead one. SWIM reduces them in two ways. Indirect pings through k members avoid blaming a node for a bad path between two members, and the suspicion state gives the suspect a time-out in which to refute with a higher incarnation number. This lowers the rate of wrongly declared failures but does not eliminate it."
+    },
+    {
+      "target": "c",
+      "kind": "security",
+      "text": "Plain gossip trusts every message. A malicious or buggy member can inject Suspect or Confirm messages about healthy nodes, and a Confirm overrides everything, so unauthenticated gossip lets one node evict others. Real deployments authenticate and encrypt gossip with shared keys and keep untrusted nodes out of the membership."
+    },
+    {
+      "target": "d",
+      "kind": "note",
+      "text": "In practice: Apache Cassandra gossips every second, with every node exchanging state with random peers, and decides liveness with a Phi accrual failure detector. HashiCorp Consul and Serf use the memberlist library, a SWIM based protocol, whose LAN defaults are a probe every second with a 500 ms timeout, 3 indirect checks and gossip every 200 ms to 3 nodes."
+    }
+  ],
+  "questions": [
+    {
+      "id": "why-scales",
+      "topic": "scale",
+      "targets": [
+        "a"
+      ],
+      "q": "Why does gossip scale to thousands of nodes?",
+      "a": "Each node sends a constant number of messages per round, whatever the cluster size, and information spreads like an epidemic, so the rounds to reach everyone grow only with log N. There is no central node to overload, and losing any node or message only slows the spread slightly."
+    },
+    {
+      "id": "push-pull",
+      "topic": "performance",
+      "targets": [
+        "a",
+        "d"
+      ],
+      "q": "What is the difference between push, pull and push-pull anti-entropy?",
+      "a": "In push the initiator sends its state, in pull it asks for the partner's, and in push-pull both happen in one exchange so both nodes end up with the merge. Early in the epidemic push is fast, near the end pull finishes faster because the few nodes still missing an update ask for it. Push-pull gets both benefits at the cost of larger messages."
+    },
+    {
+      "id": "indirect",
+      "topic": "reliability",
+      "targets": [
+        "a",
+        "b",
+        "c"
+      ],
+      "q": "Why does SWIM probe indirectly before suspecting a node?",
+      "a": "A missing ack can be caused by the path between the two members, not by the target. Asking k other members to ping the target and relay the ack gives k more independent paths, so a healthy node is blamed only if all of them fail. It costs k extra messages only in the rare period where the direct ping fails."
+    },
+    {
+      "id": "suspicion",
+      "topic": "reliability",
+      "targets": [
+        "a",
+        "e"
+      ],
+      "q": "What does the suspicion state add, and how do incarnation numbers help?",
+      "a": "A suspected member stays in the list for a timeout, so a false alarm can be undone instead of forcing it out at once. The suspect refutes by raising its own incarnation number and spreading Alive with the higher value, which overrides the Suspect. Without incarnation numbers, a late Suspect could not be told apart from a new one."
+    },
+    {
+      "id": "override",
+      "topic": "data",
+      "targets": [
+        "a",
+        "b",
+        "e"
+      ],
+      "q": "In what order do Alive, Suspect and Confirm override each other?",
+      "a": "Alive with incarnation i overrides Suspect or Alive with a lower incarnation. Suspect with incarnation i overrides Suspect with a lower incarnation and Alive with an equal or lower one. Confirm overrides everything. So a Suspect inc 0 cannot undo an Alive inc 1, but a Confirm cannot be refuted."
+    },
+    {
+      "id": "consistency",
+      "topic": "consistency",
+      "targets": [
+        "a",
+        "c"
+      ],
+      "q": "What consistency does gossip give you, and when is it not enough?",
+      "a": "Eventual consistency: if the gossip keeps running every node converges on the same data, but at any moment views can differ and a node may act on a stale one. It fits membership and failure hints that can be corrected. It does not fit decisions that need agreement now, such as electing one leader, which need a consensus protocol like Raft."
+    }
+  ]
+}
