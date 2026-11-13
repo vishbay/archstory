@@ -31,7 +31,7 @@ describe('sections', () => {
   it('groups the real modules: Network, Security, then Distributed systems, each in meta.order', () => {
     const g = groupBySection(PROTOCOLS)
     expect(g.map(s => [s.section, s.designs.map(x => x.id)])).toEqual([
-      ['Network', ['dns', 'tcp', 'url', 'http', 'websocket', 'loadbalancing', 'nat']],
+      ['Network', ['dns', 'tcp', 'url', 'http', 'websocket', 'loadbalancing', 'nat', 'bgp', 'vpc']],
       ['Security', ['tls', 'oauth']],
       ['Distributed systems', ['hashring', 'raft', 'twopc', 'sagas', 'quorums', 'gossip']],
     ])

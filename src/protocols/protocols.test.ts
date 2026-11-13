@@ -10,8 +10,8 @@ const flowOf = (d: string, f: string): Flow => { const x = byId(d).flows.find(y 
 
 describe('protocol designs', () => {
   it('loads the protocol modules in order, all marked as protocols and kept out of the library', () => {
-    expect(PROTOCOLS.map(p => p.id)).toEqual(['dns', 'tcp', 'tls', 'url', 'http', 'websocket', 'loadbalancing', 'nat', 'oauth', 'hashring', 'raft', 'twopc', 'sagas', 'quorums', 'gossip'])
-    expect(PROTOCOLS.map(p => p.meta.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+    expect(PROTOCOLS.map(p => p.id)).toEqual(['dns', 'tcp', 'tls', 'url', 'http', 'websocket', 'loadbalancing', 'nat', 'oauth', 'hashring', 'raft', 'twopc', 'sagas', 'quorums', 'gossip', 'bgp', 'vpc'])
+    expect(PROTOCOLS.map(p => p.meta.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
     for (const p of PROTOCOLS) expect(isProtocol(p)).toBe(true)
     expect(LIBRARY.some(isProtocol)).toBe(false)
     const lib = new Set(LIBRARY.map(d => d.id))

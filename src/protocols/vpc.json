@@ -1,0 +1,1195 @@
+{
+  "schema": "archstory/v1",
+  "id": "vpc",
+  "meta": {
+    "title": "Cloud VPC networking",
+    "summary": "How a packet leaves and enters a cloud virtual network: route tables and longest prefix match, a NAT gateway that gives private instances outbound-only access, an internet gateway that maps a public address to a private one, and why a packet is blocked by a network ACL but not by a security group. Time model: hops inside the VPC are short and the internet hop long, so a round trip to the host is 1 RTT. Addresses and ports are illustrative.",
+    "tags": [
+      "networking",
+      "VPC",
+      "NAT gateway",
+      "security groups"
+    ],
+    "difficulty": "medium",
+    "source": "AWS VPC User Guide (docs.aws.amazon.com/vpc): route tables and route priority, internet gateways, NAT gateways, network ACLs, security groups. AWS behaviour is the reference here; other clouds are not compared. RFC 5737 (documentation addresses), RFC 1918 (private addresses), RFC 6298 (initial retransmission timeout)",
+    "kind": "protocol",
+    "order": 17,
+    "section": "Network"
+  },
+  "requirements": {
+    "functional": [
+      "Sends each packet along the most specific matching route in the subnet route table: the local route for the VPC range, 0.0.0.0/0 to an internet gateway or a NAT gateway",
+      "Lets an instance in a private subnet start connections to the internet through a NAT gateway, and refuses connections that start outside",
+      "Lets an instance with a public IPv4 address in a public subnet be reached from the internet through an internet gateway, which maps the public address to the private one",
+      "Filters traffic twice: a stateful security group on the instance and a stateless network ACL on the subnet"
+    ],
+    "nonFunctional": [
+      "The instance only ever knows its private address: translation to and from the public address happens at the gateways",
+      "Security groups allow only, evaluate every rule and let replies through on their own; network ACLs allow and deny, evaluate rules in order from the lowest number, and need a rule for the replies",
+      "A NAT gateway is created in one Availability Zone: instances in other zones that share it lose internet access if that zone fails",
+      "Limits to plan around: 55,000 simultaneous connections per NAT gateway IPv4 address to one destination, and 5 Gbps of bandwidth scaling automatically up to 100 Gbps"
+    ],
+    "scale": [
+      {
+        "label": "NAT gateway ports",
+        "value": "1024 to 65535"
+      },
+      {
+        "label": "Connections per address",
+        "value": "55,000 per unique destination (up to 8 IPv4 addresses per gateway)"
+      },
+      {
+        "label": "NAT gateway bandwidth",
+        "value": "5 Gbps, scales to 100 Gbps"
+      },
+      {
+        "label": "NACL rule numbers",
+        "value": "1 to 32766, lowest first"
+      },
+      {
+        "label": "Example ephemeral ports",
+        "value": "Linux 32768 to 61000, Windows Server 2008 and later 49152 to 65535"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "priv",
+      "label": "Private instance",
+      "kind": "service",
+      "description": "An instance in a private subnet, 10.0.1.25 (illustrative): no public address and no route to the internet gateway",
+      "cloud": {
+        "aws": "EC2 instance"
+      }
+    },
+    {
+      "id": "nat",
+      "label": "NAT gateway",
+      "kind": "nat_gateway",
+      "description": "A public NAT gateway in the public subnet with private address 10.0.0.12 and an Elastic IP. Stands for the gateway and the route table entry that points at it",
+      "cloud": {
+        "aws": "NAT gateway"
+      }
+    },
+    {
+      "id": "pub",
+      "label": "Public instance",
+      "kind": "service",
+      "description": "An instance in a public subnet with private address 10.0.0.30 and public IPv4 address 203.0.113.77 (illustrative)",
+      "cloud": {
+        "aws": "EC2 instance"
+      }
+    },
+    {
+      "id": "igw",
+      "label": "Internet gateway",
+      "kind": "internet_gateway",
+      "description": "The VPC door to the internet: a route target that also does the one-to-one NAT between public and private addresses",
+      "cloud": {
+        "aws": "Internet gateway"
+      }
+    },
+    {
+      "id": "host",
+      "label": "Internet host",
+      "kind": "external_api",
+      "description": "A host on the internet, 198.51.100.20 (a documentation address), acting as server and as client"
+    }
+  ],
+  "edges": [
+    {
+      "from": "priv",
+      "to": "nat",
+      "label": "route 0.0.0.0/0",
+      "protocol": "IP"
+    },
+    {
+      "from": "nat",
+      "to": "igw",
+      "label": "route 0.0.0.0/0",
+      "protocol": "IP"
+    },
+    {
+      "from": "pub",
+      "to": "igw",
+      "label": "route 0.0.0.0/0",
+      "protocol": "IP"
+    },
+    {
+      "from": "igw",
+      "to": "host",
+      "label": "internet",
+      "protocol": "IP"
+    }
+  ],
+  "flows": [
+    {
+      "id": "private-out",
+      "title": "Private instance out via NAT gateway",
+      "summary": "A private instance reaches the internet through a NAT gateway and an Elastic IP; a connection from the internet has no table entry and is dropped. Illustrative addresses and ports.",
+      "steps": [
+        {
+          "from": "priv",
+          "to": "priv",
+          "kind": "local",
+          "phase": "Route",
+          "label": "Route lookup: 0.0.0.0/0",
+          "detail": "The instance 10.0.1.25 sits in a private subnet and wants to open a connection to 198.51.100.20 on port 443. The subnet route table has two routes: the local route for the VPC range, and 0.0.0.0/0 pointing at the NAT gateway. A route table picks the most specific route that matches the destination (the longest prefix). 198.51.100.20 is not inside 10.0.0.0/16, so only 0.0.0.0/0 matches. Every address and port here is illustrative: public addresses come from the documentation blocks (RFC 5737), private ones from 10.0.0.0/16 (RFC 1918).",
+          "state": {
+            "priv": "CLOSED",
+            "nat": "No mapping",
+            "host": "LISTEN"
+          },
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.20"
+            },
+            {
+              "name": "matching routes",
+              "value": "0.0.0.0/0 only"
+            },
+            {
+              "name": "target",
+              "value": "nat-gw"
+            }
+          ],
+          "data": {
+            "priv": {
+              "title": "private subnet routes",
+              "items": [
+                "10.0.0.0/16 local",
+                "0.0.0.0/0 nat-gw"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "priv",
+          "to": "nat",
+          "kind": "req",
+          "phase": "Outbound",
+          "label": "SYN to 198.51.100.20:443",
+          "detail": "The instance sends its SYN with its own private address as the source and an ephemeral source port. The security group on the instance must allow the outbound traffic; a security group allows all outbound traffic by default. The NAT gateway receives the packet because the route table said so.",
+          "state": {
+            "priv": "SYN_SENT"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "10.0.1.25:41000"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "instance address",
+              "value": "10.0.1.25",
+              "note": "private only: no public address"
+            }
+          ],
+          "delay": 0.05
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "Source NAT: new mapping",
+          "detail": "The NAT gateway lives in a public subnet and keeps a translation table. For a new connection it records the private address and port, and picks a source port of its own (the gateway uses ports 1024 to 65535). It replaces the source with its own private address and that port: 10.0.1.25:41000 becomes 10.0.0.12:1031 (illustrative). A NAT gateway cannot have a security group; the instances control their own traffic.",
+          "state": {
+            "nat": "Mapping added"
+          },
+          "fields": [
+            {
+              "name": "private endpoint",
+              "value": "10.0.1.25:41000"
+            },
+            {
+              "name": "NAT gateway private IP",
+              "value": "10.0.0.12",
+              "note": "illustrative"
+            },
+            {
+              "name": "gateway port",
+              "value": "1031",
+              "note": "illustrative: the gateway chooses"
+            }
+          ],
+          "data": {
+            "nat": {
+              "title": "NAT table",
+              "items": [
+                "10.0.1.25:41000",
+                "as 10.0.0.12:1031"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "nat",
+          "to": "igw",
+          "kind": "req",
+          "label": "SYN from 10.0.0.12:1031",
+          "detail": "The NAT gateway subnet is public: its route table sends 0.0.0.0/0 to the internet gateway. The packet leaves the NAT gateway with the gateway private address and goes to the internet gateway.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "10.0.0.12:1031"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "route in the public subnet",
+              "value": "0.0.0.0/0 to igw"
+            }
+          ],
+          "delay": 0.05
+        },
+        {
+          "from": "igw",
+          "to": "igw",
+          "kind": "local",
+          "label": "EIP: 10.0.0.12 to 203.0.113.10",
+          "detail": "The internet gateway performs the second translation. A public NAT gateway has an Elastic IP address associated with it, and the internet gateway maps the NAT gateway private address to that Elastic IP address, here 203.0.113.10 (illustrative). Only now does the source address become one that the internet can route back.",
+          "fields": [
+            {
+              "name": "NAT gateway private IP",
+              "value": "10.0.0.12"
+            },
+            {
+              "name": "Elastic IP",
+              "value": "203.0.113.10",
+              "note": "illustrative"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "igw": {
+              "title": "EIP mapping",
+              "items": [
+                "private 10.0.0.12",
+                "public 203.0.113.10"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "igw",
+          "to": "host",
+          "kind": "req",
+          "label": "SYN from 203.0.113.10:1031",
+          "detail": "The internet host sees a connection from 203.0.113.10, port 1031. It never learns the instance address or the NAT gateway private address, and every instance behind this gateway shows up as the same Elastic IP.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "203.0.113.10:1031"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "host",
+          "to": "igw",
+          "kind": "res",
+          "phase": "Return path",
+          "label": "SYN, ACK to 203.0.113.10:1031",
+          "detail": "The reply is addressed to the Elastic IP and the gateway port. It reaches the internet gateway first, since the Elastic IP is associated with the NAT gateway in this VPC.",
+          "state": {
+            "host": "SYN_RCVD"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.10:1031"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "igw",
+          "to": "igw",
+          "kind": "local",
+          "label": "Destination to 10.0.0.12",
+          "detail": "The internet gateway reverses its own mapping: a packet for the Elastic IP is given the NAT gateway private address as destination and handed over inside the VPC.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "203.0.113.10 becomes 10.0.0.12"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "igw",
+          "to": "nat",
+          "kind": "res",
+          "label": "SYN, ACK to 10.0.0.12:1031",
+          "detail": "The packet goes to the NAT gateway. Its destination port, 1031, is the key to the translation table.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.0.12:1031"
+            }
+          ],
+          "delay": 0.05
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "Lookup: back to 10.0.1.25",
+          "detail": "The NAT gateway finds the entry for port 1031 and translates the destination back to the original source: 10.0.0.12:1031 becomes 10.0.1.25:41000. The instance gets the reply as if it had talked to the host directly.",
+          "fields": [
+            {
+              "name": "lookup",
+              "value": "port 1031"
+            },
+            {
+              "name": "result",
+              "value": "10.0.1.25:41000"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "nat",
+          "to": "priv",
+          "kind": "res",
+          "label": "SYN, ACK to 10.0.1.25:41000",
+          "detail": "The instance receives the SYN, ACK and the connection is established; the final ACK and all the data travel the same way. A security group on the instance is stateful, so this reply is allowed whatever the inbound rules say.",
+          "state": {
+            "priv": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.1.25:41000"
+            }
+          ],
+          "delay": 0.05
+        },
+        {
+          "from": "host",
+          "to": "igw",
+          "kind": "req",
+          "phase": "Why no inbound",
+          "label": "Unsolicited SYN to the EIP",
+          "detail": "Now the internet host tries to open a connection of its own to 203.0.113.10, port 443. The internet gateway translates the destination to the NAT gateway private address as before.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.10:443"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "igw",
+          "to": "nat",
+          "kind": "req",
+          "label": "SYN to 10.0.0.12:443",
+          "detail": "The packet arrives at the NAT gateway, which looks up port 443 in its table.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.0.12:443"
+            }
+          ],
+          "delay": 0.05
+        },
+        {
+          "from": "nat",
+          "to": "nat",
+          "kind": "local",
+          "label": "No mapping: dropped",
+          "detail": "There is no entry for port 443. Entries are created only by connections that start inside the VPC, so the gateway has no instance to give the packet to, and drops it. This is the whole reason a NAT gateway gives outbound-only access: instances in the private subnet cannot receive unsolicited inbound connections from the internet.",
+          "fields": [
+            {
+              "name": "lookup",
+              "value": "port 443"
+            },
+            {
+              "name": "result",
+              "value": "no entry: dropped"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "public-igw",
+      "title": "Public instance and the internet gateway",
+      "summary": "An instance with a public IPv4 address goes out and is reached through one-to-one NAT at the internet gateway, and never sees the public address. Illustrative addresses and ports.",
+      "steps": [
+        {
+          "from": "pub",
+          "to": "pub",
+          "kind": "local",
+          "phase": "Outbound",
+          "label": "Route lookup: 0.0.0.0/0 to igw",
+          "detail": "This instance, 10.0.0.30, is in a public subnet: its route table has a route to the internet gateway, which is what makes a subnet public. The instance also has a public IPv4 address, 203.0.113.77 (illustrative). Both are needed: a private subnet has no route to the internet gateway, so an instance there cannot reach the internet even if it has a public address.",
+          "state": {
+            "pub": "CLOSED",
+            "host": "LISTEN"
+          },
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.20"
+            },
+            {
+              "name": "matching routes",
+              "value": "0.0.0.0/0 only"
+            },
+            {
+              "name": "target",
+              "value": "igw"
+            }
+          ],
+          "data": {
+            "pub": {
+              "title": "public subnet routes",
+              "items": [
+                "10.0.0.0/16 local",
+                "0.0.0.0/0 igw"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "pub",
+          "to": "igw",
+          "kind": "req",
+          "label": "SYN to 198.51.100.20:443",
+          "detail": "The instance sends the SYN with its private address as the source, because that is the only address it knows. The route table sends it to the internet gateway.",
+          "state": {
+            "pub": "SYN_SENT"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "10.0.0.30:38000"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "address on the instance",
+              "value": "10.0.0.30",
+              "note": "the public IPv4 is not configured on the instance"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "igw",
+          "to": "igw",
+          "kind": "local",
+          "label": "One-to-one NAT: to public IP",
+          "detail": "The internet gateway performs one-to-one NAT on behalf of the instance. For traffic leaving the VPC it rewrites the source from the private address to the public IPv4 address (or Elastic IP) of the instance. It is a fixed pairing of two addresses, not a table of ports: the same pairing serves every connection to and from this instance.",
+          "fields": [
+            {
+              "name": "private",
+              "value": "10.0.0.30"
+            },
+            {
+              "name": "public",
+              "value": "203.0.113.77",
+              "note": "illustrative"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "igw": {
+              "title": "public IPv4 mapping",
+              "items": [
+                "private 10.0.0.30",
+                "public 203.0.113.77"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "igw",
+          "to": "host",
+          "kind": "req",
+          "label": "SYN from 203.0.113.77:38000",
+          "detail": "The host sees the public address. The instance address, 10.0.0.30, never leaves the VPC.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "203.0.113.77:38000"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:443"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "host",
+          "to": "igw",
+          "kind": "res",
+          "phase": "Return path",
+          "label": "SYN, ACK to 203.0.113.77:38000",
+          "detail": "The reply is addressed to the public address. It arrives at the internet gateway, which owns the translation for it.",
+          "state": {
+            "host": "SYN_RCVD"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.77:38000"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "igw",
+          "to": "igw",
+          "kind": "local",
+          "label": "Destination to 10.0.0.30",
+          "detail": "Traffic destined for the public IPv4 address of the instance has its destination address translated into the private IPv4 address before it is delivered into the VPC.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "203.0.113.77 becomes 10.0.0.30"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "igw",
+          "to": "pub",
+          "kind": "res",
+          "label": "SYN, ACK to 10.0.0.30:38000",
+          "detail": "The instance gets the reply addressed to its private address. Its network interface carries only the private address; the translation is invisible to it.",
+          "state": {
+            "pub": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:443"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.0.30:38000"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "host",
+          "to": "igw",
+          "kind": "req",
+          "phase": "Inbound",
+          "label": "SYN to 203.0.113.77:443",
+          "detail": "Unlike with a NAT gateway, the internet can start a connection to this instance, because the public address is paired with it for good. The packet is delivered only if the rules allow it: the subnet route table needs the internet gateway route for the replies, and the security group and network ACL must allow port 443 in.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.77:443"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "igw",
+          "to": "igw",
+          "kind": "local",
+          "label": "Destination to 10.0.0.30",
+          "detail": "The same pairing, in the same direction as for the reply earlier: the public destination becomes the private one.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "203.0.113.77 becomes 10.0.0.30"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "igw",
+          "to": "pub",
+          "kind": "req",
+          "label": "SYN to 10.0.0.30:443",
+          "detail": "The instance receives a SYN addressed to 10.0.0.30. Software on it that listens on a specific address, or that checks the destination address, sees the private one: the public address exists only at the gateway.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.0.30:443"
+            },
+            {
+              "name": "address on the instance",
+              "value": "10.0.0.30",
+              "note": "the public IPv4 is not configured on the instance"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "pub",
+          "to": "igw",
+          "kind": "res",
+          "label": "SYN, ACK from 10.0.0.30:443",
+          "detail": "The reply leaves with the private address as the source. The security group does not need an outbound rule for it: security groups are stateful.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "10.0.0.30:443"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:52000"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "igw",
+          "to": "igw",
+          "kind": "local",
+          "label": "Source to 203.0.113.77",
+          "detail": "On the way out the source is rewritten from the private address to the public one.",
+          "fields": [
+            {
+              "name": "source",
+              "value": "10.0.0.30 becomes 203.0.113.77"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "igw",
+          "to": "host",
+          "kind": "res",
+          "label": "SYN, ACK from 203.0.113.77:443",
+          "detail": "The host receives the reply from the address it connected to. The connection is established from its side, and the instance is reachable from the internet.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "203.0.113.77:443"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:52000"
+            }
+          ],
+          "delay": 0.9
+        }
+      ]
+    },
+    {
+      "id": "blocked",
+      "title": "Blocked: security group vs network ACL",
+      "summary": "The same reply is allowed by the stateful security group and dropped by the stateless network ACL until an ephemeral port rule is added; rule numbers decide order. Illustrative addresses and ports.",
+      "steps": [
+        {
+          "from": "pub",
+          "to": "pub",
+          "kind": "local",
+          "phase": "Rules",
+          "label": "Rules in place",
+          "detail": "The instance 10.0.0.30 serves HTTPS. Its security group allows port 443 in and, as an example of a tight outbound rule, port 443 out. The subnet has a custom network ACL, which denies everything that no numbered rule allows; a network ACL rule set has inbound and outbound rules, each with a number, and the rule with the lowest number that matches is applied. The outbound rule written here is the common mistake: it allows port 443 as a destination port, but a reply goes to the client port. Illustrative addresses.",
+          "state": {
+            "pub": "LISTEN",
+            "host": "CLOSED"
+          },
+          "fields": [
+            {
+              "name": "NACL in 100",
+              "value": "ALLOW tcp 443 from 0.0.0.0/0"
+            },
+            {
+              "name": "NACL in *",
+              "value": "DENY all from 0.0.0.0/0",
+              "note": "the rule that cannot be removed"
+            },
+            {
+              "name": "NACL out 100",
+              "value": "ALLOW tcp 443 to 0.0.0.0/0"
+            },
+            {
+              "name": "NACL out *",
+              "value": "DENY all to 0.0.0.0/0"
+            }
+          ],
+          "data": {
+            "pub": {
+              "title": "Security group",
+              "items": [
+                "in tcp 443 0.0.0.0/0",
+                "out tcp 443 0.0.0.0/0"
+              ]
+            }
+          }
+        },
+        {
+          "from": "host",
+          "to": "igw",
+          "kind": "req",
+          "phase": "Inbound",
+          "label": "SYN to 203.0.113.77:443",
+          "detail": "A client on the internet connects to the public address of the instance. The client picks the source port, here 52000, from its operating system ephemeral range (illustrative; Windows Server 2008 and later use 49152 to 65535).",
+          "state": {
+            "host": "SYN_SENT"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.77:443"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "igw",
+          "to": "pub",
+          "kind": "req",
+          "label": "SYN to 10.0.0.30:443",
+          "detail": "The internet gateway translates the destination to the private address (flow 2). Before the packet enters the subnet the network ACL evaluates it: rules are checked in order starting with the lowest number, and the first match decides. Rule 100 matches tcp 443 and allows it.",
+          "state": {
+            "pub": "SYN_RCVD"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.0.30:443"
+            },
+            {
+              "name": "NACL in verdict",
+              "value": "ALLOW by rule 100"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "pub",
+          "to": "pub",
+          "kind": "local",
+          "label": "Security group: 443 in allowed",
+          "detail": "The security group evaluates all its rules, not an ordered list, and a security group has allow rules only. Inbound tcp 443 from anywhere matches, so the packet is delivered, and the connection is recorded.",
+          "fields": [
+            {
+              "name": "security group in",
+              "value": "ALLOW tcp 443 from 0.0.0.0/0"
+            }
+          ]
+        },
+        {
+          "from": "pub",
+          "to": "pub",
+          "kind": "local",
+          "label": "Security group: reply allowed",
+          "detail": "The SYN, ACK goes to port 52000. No outbound rule of the security group allows that port: the only one is tcp 443. It is allowed anyway, because security groups are stateful: a response to traffic the group allowed in is allowed out whatever the outbound rules say.",
+          "fields": [
+            {
+              "name": "reply",
+              "value": "10.0.0.30:443 to 198.51.100.20:52000"
+            },
+            {
+              "name": "outbound rule matches",
+              "value": "none"
+            },
+            {
+              "name": "result",
+              "value": "ALLOWED: response to an allowed connection"
+            }
+          ]
+        },
+        {
+          "from": "pub",
+          "to": "igw",
+          "kind": "res",
+          "label": "SYN, ACK dropped by the NACL",
+          "detail": "Network ACLs are stateless: they keep no record of the connection, and the reply is checked against the outbound rules like any new packet. It is addressed to destination port 52000. Rule 100 allows only port 443, nothing else matches, and the catch-all rule * denies it. The reply is dropped as it leaves the subnet.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "10.0.0.30:443"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "NACL out verdict",
+              "value": "DENY by rule *"
+            }
+          ],
+          "lost": true
+        },
+        {
+          "from": "host",
+          "to": "host",
+          "kind": "local",
+          "label": "No reply: SYN retransmitted",
+          "detail": "The client gets nothing back. It keeps its SYN timer and sends the SYN again after the initial retransmission timeout (RFC 6298 sets 1 second); to the user the site simply hangs. Nothing tells the client, or the server log, that a network ACL did it.",
+          "wait": 1000
+        },
+        {
+          "from": "pub",
+          "to": "pub",
+          "kind": "local",
+          "label": "Add NACL outbound rule 110",
+          "detail": "The fix is an outbound rule for the ephemeral ports. The client chooses its source port, so the range depends on the client operating system: many Linux kernels use 32768 to 61000, Windows Server 2008 and later 49152 to 65535, and requests that come through Elastic Load Balancing, NAT gateways or Lambda use 1024 to 65535. Opening 1024 to 65535 covers all of them.",
+          "fields": [
+            {
+              "name": "NACL out 110",
+              "value": "ALLOW tcp 1024-65535 to 0.0.0.0/0"
+            }
+          ]
+        },
+        {
+          "from": "host",
+          "to": "igw",
+          "kind": "req",
+          "label": "SYN (retransmission)",
+          "detail": "The retransmitted SYN takes the same path as the first.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "203.0.113.77:443"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "igw",
+          "to": "pub",
+          "kind": "req",
+          "label": "SYN to 10.0.0.30:443",
+          "detail": "Inbound, the same rule 100 allows it.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "src",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "dst",
+              "value": "10.0.0.30:443"
+            },
+            {
+              "name": "NACL in verdict",
+              "value": "ALLOW by rule 100"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "pub",
+          "to": "igw",
+          "kind": "res",
+          "label": "SYN, ACK to client :52000",
+          "detail": "This time the outbound rules are checked in order: rule 100 does not match (the destination port is 52000, not 443), rule 110 does, and it allows the reply.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "10.0.0.30:443"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:52000"
+            },
+            {
+              "name": "NACL out verdict",
+              "value": "ALLOW by rule 110"
+            }
+          ],
+          "delay": 0.1
+        },
+        {
+          "from": "igw",
+          "to": "host",
+          "kind": "res",
+          "label": "SYN, ACK from 203.0.113.77:443",
+          "detail": "The internet gateway rewrites the source to the public address and the connection is established.",
+          "state": {
+            "host": "ESTABLISHED"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "src",
+              "value": "203.0.113.77:443"
+            },
+            {
+              "name": "dst",
+              "value": "198.51.100.20:52000"
+            }
+          ],
+          "delay": 0.9
+        },
+        {
+          "from": "pub",
+          "to": "pub",
+          "kind": "local",
+          "label": "Rule order: deny at rule 90",
+          "detail": "Order matters. To block one address while the wider allow stays, add a deny with a lower number than the allow, here rule 90. The same SYN from 198.51.100.20 now matches rule 90 first and is denied, although rule 100 would have allowed it. A deny numbered higher than the allow would never be reached. Security groups have no deny rules, so a single address can only be blocked with a network ACL.",
+          "fields": [
+            {
+              "name": "NACL in 90",
+              "value": "DENY tcp 443 from 198.51.100.20/32"
+            },
+            {
+              "name": "packet",
+              "value": "198.51.100.20:52000 to 10.0.0.30:443"
+            },
+            {
+              "name": "NACL in verdict",
+              "value": "DENY by rule 90",
+              "note": "rule 100 is never evaluated for this packet"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "nat",
+      "kind": "failure",
+      "text": "A NAT gateway lives in one Availability Zone and is redundant only inside it. If several zones share one gateway and its zone goes down, instances in the other zones lose internet access, so give each zone that needs internet access a gateway of its own and route each zone to its own. The cost is one gateway per zone instead of one in total."
+    },
+    {
+      "target": "nat",
+      "kind": "scaling",
+      "text": "Each IPv4 address on a NAT gateway supports up to 55,000 simultaneous connections to each unique destination (destination address, port and protocol), and a gateway supports 5 Gbps that scales automatically up to 100 Gbps. A fleet that opens many connections to one destination can run out of ports first; more addresses on the gateway (up to 8) raise that limit, and splitting instances across subnets with a gateway each raises bandwidth."
+    },
+    {
+      "target": "priv",
+      "kind": "security",
+      "text": "A NAT gateway gives outbound-only access, not outbound control: it does not look at where an instance connects. Any code running in the subnet can still send data out. Instances are protected from unsolicited inbound connections because there is no mapping for them, not because of any policy. Filtering by destination has to be added elsewhere, for example with security group and network ACL rules."
+    },
+    {
+      "target": "pub",
+      "kind": "security",
+      "text": "Use both filters. The security group is the main control: stateful, per instance, allow rules only. The network ACL is a backup layer at the subnet edge: it survives a mistake in a security group, and it is the only place to write a deny rule. The price is the stateless pitfall: every allowed connection needs a rule for the replies, and the ephemeral range depends on the client."
+    },
+    {
+      "target": "igw",
+      "kind": "tradeoff",
+      "text": "A public IPv4 address is a one-to-one NAT pairing, fixed for the instance, so the same address serves any number of connections but each public instance needs its own. A NAT gateway instead shares one Elastic IP across many instances by tracking ports, at the cost of a table, port limits and no inbound connections. Whether an instance can be reached from the internet is decided by its route, its address, the security group and the network ACL together."
+    }
+  ],
+  "questions": [
+    {
+      "id": "route-table",
+      "topic": "requirements",
+      "targets": [
+        "priv",
+        "nat"
+      ],
+      "q": "How does a VPC route table decide where a packet goes?",
+      "a": "It picks the most specific route that matches the destination, the longest prefix: a /32 beats a /24 beats 0.0.0.0/0. Every table has a local route for the VPC range, so traffic inside the VPC stays inside. A packet for 198.51.100.20 matches only 0.0.0.0/0, whose target is the NAT gateway or the internet gateway."
+    },
+    {
+      "id": "public-subnet",
+      "topic": "requirements",
+      "targets": [
+        "pub",
+        "igw"
+      ],
+      "q": "What makes a subnet public, and is that enough?",
+      "a": "A subnet is public when its route table has a route to an internet gateway; without one it is private. For IPv4 the instance also needs a public IPv4 or Elastic IP address. A private subnet cannot reach the internet even for an instance that has a public address."
+    },
+    {
+      "id": "no-inbound",
+      "topic": "security",
+      "targets": [
+        "nat",
+        "priv"
+      ],
+      "q": "Why can the internet not open a connection to an instance behind a NAT gateway?",
+      "a": "The gateway can only translate packets it has a mapping for, and a mapping is created by a connection that starts inside the VPC. An unsolicited SYN to the Elastic IP has no entry in the table, so the gateway drops it. Connections must always start from inside the VPC."
+    },
+    {
+      "id": "public-ip-seen",
+      "topic": "tradeoffs",
+      "targets": [
+        "pub",
+        "igw"
+      ],
+      "q": "Does an instance with a public IPv4 address know that address?",
+      "a": "No. Its interface carries only the private address, and the internet gateway does one-to-one NAT on its behalf: it rewrites the source to the public address on the way out and the destination to the private address on the way in. A packet reaching the instance is addressed to the private address."
+    },
+    {
+      "id": "sg-vs-nacl",
+      "topic": "security",
+      "targets": [
+        "pub"
+      ],
+      "q": "How do security groups and network ACLs differ?",
+      "a": "A security group works at the instance, has allow rules only, evaluates all of them and is stateful, so replies are allowed on their own. A network ACL works at the subnet, has allow and deny rules, evaluates them from the lowest number and stops at the first match, and is stateless, so replies need explicit rules. Together they give two layers."
+    },
+    {
+      "id": "nacl-hang",
+      "topic": "operations",
+      "targets": [
+        "pub",
+        "host"
+      ],
+      "q": "A web server in a subnet with a custom network ACL allows inbound 443 but clients hang. What is wrong?",
+      "a": "The network ACL is stateless: the reply goes to the client ephemeral port, and with only an outbound rule for port 443 it hits the catch-all deny. Add an outbound rule for the ephemeral range, commonly 1024 to 65535 to cover all client systems. Check the order too: a lower-numbered deny wins over a higher-numbered allow."
+    }
+  ]
+}

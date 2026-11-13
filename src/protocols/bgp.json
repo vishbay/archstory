@@ -1,0 +1,1168 @@
+{
+  "schema": "archstory/v1",
+  "id": "bgp",
+  "meta": {
+    "title": "BGP: routing between networks",
+    "summary": "How two autonomous systems bring up a BGP session, how a route spreads and how a router picks the best path, and how a more specific route from the wrong network pulls traffic away until origin validation stops it. Addresses, ports and timers are illustrative documentation values.",
+    "tags": [
+      "routing",
+      "BGP",
+      "internet",
+      "RPKI"
+    ],
+    "difficulty": "hard",
+    "source": "RFC 4271 (BGP-4: FSM section 8, hold time 4.2, decision process 9.1, MRAI 9.2.1.1), RFC 6811 (RPKI prefix origin validation), RFC 7454 (BGP operations and security), RFC 8212 (default eBGP route propagation behaviour), RFC 5398 (documentation AS numbers), RFC 5737 (documentation addresses)",
+    "kind": "protocol",
+    "order": 16,
+    "section": "Network"
+  },
+  "requirements": {
+    "functional": [
+      "Exchanges reachability between autonomous systems: each router tells its neighbours which prefixes it can reach and through which AS path",
+      "Runs a session as a state machine over TCP port 179: Idle, Connect, Active, OpenSent, OpenConfirm, Established",
+      "Chooses one best route per prefix from all the routes it hears, using local policy first and then a fixed list of tie-breakers",
+      "Prevents loops with the AS_PATH: a route whose path already contains the local AS is not used",
+      "Forwards on the most specific matching prefix, so a longer prefix always wins over a shorter one"
+    ],
+    "nonFunctional": [
+      "Detects a dead neighbour by the hold timer, since BGP does not use TCP keepalives; the keepalive interval is one third of the negotiated hold time",
+      "Scales by policy, not by topology: a route is accepted, preferred and passed on according to configured rules, which is also where mistakes enter",
+      "Trusts its neighbours: the protocol does not check that an origin is entitled to a prefix, so filters and RPKI origin validation sit on top",
+      "Converges slowly by design: advertisements for the same destination to one peer are rate limited by the MinRouteAdvertisementIntervalTimer"
+    ],
+    "scale": [
+      {
+        "label": "Transport",
+        "value": "TCP port 179"
+      },
+      {
+        "label": "Message size",
+        "value": "19 octets (a KEEPALIVE) up to 4096 octets"
+      },
+      {
+        "label": "Suggested timers",
+        "value": "hold 90 s, keepalive 30 s, ConnectRetry 120 s"
+      },
+      {
+        "label": "MRAI suggested defaults",
+        "value": "30 s on eBGP, 5 s on iBGP"
+      },
+      {
+        "label": "Negotiated hold time here",
+        "value": "min(180, 90) = 90 s, so keepalive 30 s (illustrative)"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "cust",
+      "label": "AS 64500",
+      "kind": "router",
+      "description": "The customer router, AS 64500 (a documentation AS number), with a session to each of two ISPs and BGP Identifier 192.0.2.1"
+    },
+    {
+      "id": "isp1",
+      "label": "AS 64501",
+      "kind": "router",
+      "description": "ISP 1, AS 64501: peers with the customer and with the origin. BGP Identifier 192.0.2.2"
+    },
+    {
+      "id": "isp2",
+      "label": "AS 64502",
+      "kind": "router",
+      "description": "ISP 2, AS 64502: peers with the customer, the origin and a third network. BGP Identifier 192.0.2.6"
+    },
+    {
+      "id": "origin",
+      "label": "AS 64503",
+      "kind": "router",
+      "description": "The network that owns and originates 198.51.100.0/24, AS 64503"
+    },
+    {
+      "id": "bad",
+      "label": "AS 64504",
+      "kind": "router",
+      "description": "A network that does not own 198.51.100.0/24 but announces part of it in the hijack scenario, AS 64504"
+    }
+  ],
+  "edges": [
+    {
+      "from": "cust",
+      "to": "isp1",
+      "label": "eBGP session",
+      "protocol": "BGP over TCP 179"
+    },
+    {
+      "from": "cust",
+      "to": "isp2",
+      "label": "eBGP session",
+      "protocol": "BGP over TCP 179"
+    },
+    {
+      "from": "isp1",
+      "to": "origin",
+      "label": "eBGP session",
+      "protocol": "BGP over TCP 179"
+    },
+    {
+      "from": "isp2",
+      "to": "origin",
+      "label": "eBGP session",
+      "protocol": "BGP over TCP 179"
+    },
+    {
+      "from": "isp2",
+      "to": "bad",
+      "label": "eBGP session",
+      "protocol": "BGP over TCP 179"
+    }
+  ],
+  "flows": [
+    {
+      "id": "session",
+      "title": "Bring up a session",
+      "summary": "TCP to port 179, OPEN and KEEPALIVE messages through the RFC 4271 states, hold time agreed as the smaller of the two, then the first UPDATE. Addresses, ports and timers are illustrative.",
+      "steps": [
+        {
+          "from": "cust",
+          "to": "cust",
+          "kind": "local",
+          "phase": "Start",
+          "label": "ManualStart: Idle to Connect",
+          "detail": "Every BGP session is a state machine, and a router starts it in Idle, where it refuses all incoming connections and holds no resources. A ManualStart (Event 1) makes the customer router initialise its resources, start the ConnectRetryTimer, initiate a TCP connection to the peer, listen for a connection from the peer as well, and move to Connect. Every address, port and timer in this module is illustrative: the AS numbers come from the documentation range 64496 to 64511 (RFC 5398) and the addresses from 192.0.2.0/24 (RFC 5737).",
+          "state": {
+            "cust": "Connect",
+            "isp1": "Idle"
+          },
+          "fields": [
+            {
+              "name": "event",
+              "value": "ManualStart (Event 1)",
+              "note": "RFC 4271 section 8.2.2, Idle state"
+            },
+            {
+              "name": "next state",
+              "value": "Connect"
+            }
+          ],
+          "data": {
+            "cust": {
+              "title": "session config",
+              "items": [
+                "peer AS 64501",
+                "hold time 180 s",
+                "BGP id 192.0.2.1",
+                "ConnectRetry 120 s"
+              ]
+            }
+          }
+        },
+        {
+          "from": "isp1",
+          "to": "isp1",
+          "kind": "local",
+          "phase": "Start",
+          "label": "Passive start: Idle to Active",
+          "detail": "The ISP router is configured to wait for the customer to call. A ManualStart with passive TCP establishment (Event 4) initialises the resources, starts the ConnectRetryTimer and listens for a connection, but does not open one itself, and the state becomes Active. In the RFC, Active means \"listening, not yet connected\"; it does not mean the session is up.",
+          "state": {
+            "isp1": "Active"
+          },
+          "fields": [
+            {
+              "name": "event",
+              "value": "ManualStart_with_PassiveTcpEstablishment (Event 4)"
+            },
+            {
+              "name": "next state",
+              "value": "Active"
+            }
+          ],
+          "data": {
+            "isp1": {
+              "title": "session config",
+              "items": [
+                "peer AS 64500",
+                "hold time 90 s",
+                "BGP id 192.0.2.2",
+                "listening on 179"
+              ]
+            }
+          }
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "phase": "TCP connection",
+          "label": "TCP SYN to port 179",
+          "detail": "BGP does not carry its own transport: it runs over a TCP connection and the passive side listens on TCP port 179. TCP supplies the acknowledgement, retransmission and ordering that BGP relies on, so BGP messages themselves have no sequence numbers. The customer picks an ephemeral source port (illustrative 49812) and connects to 179.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN"
+            },
+            {
+              "name": "source port",
+              "value": "49812",
+              "note": "illustrative ephemeral port"
+            },
+            {
+              "name": "destination port",
+              "value": "179",
+              "note": "BGP"
+            }
+          ]
+        },
+        {
+          "from": "isp1",
+          "to": "cust",
+          "kind": "res",
+          "label": "TCP SYN, ACK",
+          "detail": "The listening ISP router answers the SYN. The handshake itself is the one in the TCP module: three segments, one round trip before either side can send BGP data.",
+          "fields": [
+            {
+              "name": "flags",
+              "value": "SYN, ACK"
+            },
+            {
+              "name": "source port",
+              "value": "179"
+            },
+            {
+              "name": "destination port",
+              "value": "49812"
+            }
+          ]
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "label": "TCP ACK: connection is up",
+          "detail": "The handshake completes. For the customer the TCP connection it initiated has succeeded (Event 16, Tcp_CR_Acked); for the ISP the incoming connection is confirmed (Event 17, TcpConnectionConfirmed). Each router now sends its OPEN message, sets the HoldTimer to a large value (the RFC suggests 4 minutes) while it waits for the peer, and moves to OpenSent.",
+          "state": {
+            "cust": "OpenSent",
+            "isp1": "OpenSent"
+          },
+          "fields": [
+            {
+              "name": "flags",
+              "value": "ACK"
+            },
+            {
+              "name": "customer event",
+              "value": "Tcp_CR_Acked (Event 16)"
+            },
+            {
+              "name": "ISP event",
+              "value": "TcpConnectionConfirmed (Event 17)"
+            },
+            {
+              "name": "HoldTimer until OPEN",
+              "value": "4 minutes",
+              "note": "the RFC suggests this large value"
+            }
+          ]
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "phase": "OPEN and KEEPALIVE",
+          "label": "OPEN AS 64500 hold 180",
+          "detail": "The OPEN message says who the sender is and what it proposes: BGP version 4, its AS number, the hold time it proposes, and its BGP Identifier. On receiving a valid OPEN (Event 19) the ISP router sends a KEEPALIVE, sets its KeepaliveTimer, sets the HoldTimer to the negotiated value and moves to OpenConfirm. The negotiated Hold Time is the smaller of its own configured value and the one in the OPEN: min(90, 180) is 90 seconds.",
+          "state": {
+            "isp1": "OpenConfirm"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "OPEN (type 1)"
+            },
+            {
+              "name": "version",
+              "value": "4"
+            },
+            {
+              "name": "my autonomous system",
+              "value": "64500",
+              "note": "a 2-octet field in RFC 4271"
+            },
+            {
+              "name": "hold time",
+              "value": "180 s",
+              "note": "proposed; must be 0 or at least 3 seconds"
+            },
+            {
+              "name": "BGP identifier",
+              "value": "192.0.2.1"
+            },
+            {
+              "name": "length",
+              "value": "29 octets",
+              "note": "the smallest OPEN: 19 header plus 10, with no optional parameters"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "isp1": {
+              "title": "hold time",
+              "items": [
+                "peer proposes 180 s",
+                "my config 90 s",
+                "hold timer 90 s",
+                "keepalive 30 s"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "isp1",
+          "to": "cust",
+          "kind": "req",
+          "label": "OPEN AS 64501 hold 90",
+          "detail": "The ISP router sent its own OPEN as soon as the TCP connection was confirmed, so the two OPEN messages cross in flight. The customer does the same calculation: min(180, 90) is 90 seconds. Both routers reach the same value because each takes the smaller of the same two numbers. A hold time one side finds unacceptable is refused with a NOTIFICATION, Unacceptable Hold Time (the RFC says values of one or two seconds must be rejected).",
+          "state": {
+            "cust": "OpenConfirm"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "OPEN (type 1)"
+            },
+            {
+              "name": "version",
+              "value": "4"
+            },
+            {
+              "name": "my autonomous system",
+              "value": "64501"
+            },
+            {
+              "name": "hold time",
+              "value": "90 s"
+            },
+            {
+              "name": "BGP identifier",
+              "value": "192.0.2.2"
+            }
+          ],
+          "data": {
+            "cust": {
+              "title": "hold time",
+              "items": [
+                "peer proposes 90 s",
+                "my config 180 s",
+                "hold timer 90 s",
+                "keepalive 30 s"
+              ],
+              "mark": [
+                2,
+                3
+              ]
+            }
+          }
+        },
+        {
+          "from": "isp1",
+          "to": "cust",
+          "kind": "req",
+          "label": "KEEPALIVE",
+          "detail": "A KEEPALIVE is only the 19-byte message header and nothing else. Here it acknowledges the OPEN: the customer, in OpenConfirm, receives a KEEPALIVE (Event 26), restarts its HoldTimer and moves to Established.",
+          "state": {
+            "cust": "Established"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "KEEPALIVE (type 4)"
+            },
+            {
+              "name": "length",
+              "value": "19 octets",
+              "note": "header only"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "label": "KEEPALIVE",
+          "detail": "The customer acknowledges the ISP OPEN the same way, and the ISP moves to Established. Both routers have now agreed on the hold time and checked each other AS number and BGP Identifier; routes can flow.",
+          "state": {
+            "isp1": "Established"
+          },
+          "fields": [
+            {
+              "name": "message",
+              "value": "KEEPALIVE (type 4)"
+            },
+            {
+              "name": "length",
+              "value": "19 octets"
+            }
+          ]
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "phase": "First UPDATE",
+          "label": "UPDATE 203.0.113.0/24",
+          "detail": "An UPDATE announces routes: a list of prefixes (NLRI) that share one set of path attributes. This customer originates 203.0.113.0/24, so over an external session it sends an AS_PATH containing only its own AS, ORIGIN IGP, and a NEXT_HOP that is the address of its interface on this link. LOCAL_PREF is not sent to an external peer.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "203.0.113.0/24"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64500",
+              "note": "the originator puts its own AS, alone, in one AS_SEQUENCE"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.1",
+              "note": "the interface address used for the session"
+            }
+          ],
+          "delay": 0,
+          "data": {
+            "isp1": {
+              "title": "Adj-RIBs-In",
+              "items": [
+                "203.0.113.0/24",
+                "AS_PATH 64500",
+                "next hop 192.0.2.1",
+                "origin IGP"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "isp1",
+          "to": "isp1",
+          "kind": "local",
+          "label": "Install route in Loc-RIB",
+          "detail": "The ISP router runs its decision process: the route is the only one for this prefix, its AS_PATH does not contain AS 64501 and the NEXT_HOP is reachable, so it becomes the best route and goes into the Loc-RIB. A later phase decides which peers hear about it.",
+          "data": {
+            "isp1": {
+              "title": "Loc-RIB",
+              "items": [
+                "203.0.113.0/24",
+                "via 192.0.2.1",
+                "AS_PATH 64500"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "cust",
+          "to": "cust",
+          "kind": "local",
+          "phase": "Keepalives",
+          "label": "KeepaliveTimer: 30 s",
+          "detail": "BGP does not use TCP keepalives. Each side sends a KEEPALIVE often enough that the peer HoldTimer never expires; the RFC says a reasonable maximum interval is one third of the hold time, here 90 / 3 = 30 seconds (a wait that does not shrink with distance). If the negotiated hold time were 0, no KEEPALIVEs would be sent at all.",
+          "fields": [
+            {
+              "name": "hold time",
+              "value": "90 s"
+            },
+            {
+              "name": "keepalive time",
+              "value": "30 s",
+              "note": "one third of the hold time"
+            }
+          ],
+          "wait": 30000
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "label": "KEEPALIVE every 30 s",
+          "detail": "Any KEEPALIVE or UPDATE restarts the receiver HoldTimer. If 90 seconds pass with neither, the receiver sends a NOTIFICATION, Hold Timer Expired, closes the connection and falls back to Idle, withdrawing every route learned over the session. That is how BGP notices a dead peer or a silent path.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "KEEPALIVE (type 4)"
+            },
+            {
+              "name": "effect",
+              "value": "ISP HoldTimer reset to 90 s"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bestpath",
+      "title": "Propagate and pick the best path",
+      "summary": "A prefix spreads through two ISPs with each AS prepended, the origin ignores its own route coming back, and the customer chooses the shorter AS_PATH. Illustrative paths and addresses.",
+      "steps": [
+        {
+          "from": "origin",
+          "to": "origin",
+          "kind": "local",
+          "phase": "Origin",
+          "label": "Originate 198.51.100.0/24",
+          "detail": "AS 64503 owns 198.51.100.0/24 and has a BGP session Established with each of two ISPs, AS 64501 and AS 64502. The customer, AS 64500, has a session with each ISP too. Every address and path here is illustrative. The origin will announce the prefix on both sessions, and every AS on the way adds itself to the AS_PATH.",
+          "state": {
+            "origin": "Established",
+            "isp1": "Established",
+            "isp2": "Established",
+            "cust": "Established"
+          },
+          "data": {
+            "origin": {
+              "title": "Loc-RIB",
+              "items": [
+                "198.51.100.0/24",
+                "local, origin IGP"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "origin",
+          "to": "isp1",
+          "kind": "req",
+          "phase": "Advertise",
+          "label": "UPDATE path 64503",
+          "detail": "To an external peer an originating speaker puts its own AS number, alone, in the AS_PATH. NEXT_HOP is the address of the origin interface on this link (the default is the interface used for the session).",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/24"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64503"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.10"
+            }
+          ]
+        },
+        {
+          "from": "origin",
+          "to": "isp2",
+          "kind": "req",
+          "label": "UPDATE path 64503 64503",
+          "detail": "On this link the origin prepends its own AS twice. The RFC lets a speaker put more than one copy of its own AS in the path; it is controlled by local configuration. Operators use it to make one path longer, so that other networks prefer the other one.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/24"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64503 64503",
+              "note": "the origin AS twice: a deliberately longer path"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.14"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "isp1",
+          "to": "cust",
+          "kind": "req",
+          "phase": "Propagate",
+          "label": "UPDATE path 64501 64503",
+          "detail": "When a speaker passes a route to an external peer it prepends its own AS to the AS_PATH it received. ISP 64501 had 64503 and sends 64501 64503. The NEXT_HOP becomes its own interface address on the customer link, so the customer needs to reach only its direct neighbour.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/24"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64501 64503",
+              "note": "received 64503, prepended 64501"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.2"
+            }
+          ]
+        },
+        {
+          "from": "isp2",
+          "to": "cust",
+          "kind": "req",
+          "label": "UPDATE path 64502 64503 64503",
+          "detail": "ISP 64502 does the same to what it received: 64503 64503 becomes 64502 64503 64503. The customer now holds two routes to the same prefix, in two Adj-RIBs-In, and has to choose one.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/24"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64502 64503 64503",
+              "note": "received 64503 64503, prepended 64502"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.6"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "isp1",
+          "to": "origin",
+          "kind": "req",
+          "label": "UPDATE path 64501 64503",
+          "detail": "ISP 64501 also advertises the route to its other external peer, the origin itself. Many routers avoid sending a route back to the peer it came from, but the receiver must not depend on that: it checks the path.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/24"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64501 64503",
+              "note": "the origin gets its own prefix back"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.9"
+            }
+          ],
+          "delay": 0
+        },
+        {
+          "from": "origin",
+          "to": "origin",
+          "kind": "local",
+          "label": "Own AS in AS_PATH: ignore",
+          "detail": "Loop prevention is built into the AS_PATH. If the path contains the local AS number, the route has already passed through this AS, so it is excluded from the decision process. A path vector protocol needs no distance counting: a route that comes back to its origin carries the proof in its path.",
+          "fields": [
+            {
+              "name": "received AS_PATH",
+              "value": "64501 64503"
+            },
+            {
+              "name": "local AS",
+              "value": "64503",
+              "note": "already in the path"
+            },
+            {
+              "name": "result",
+              "value": "excluded from the decision (RFC 4271 section 9.1.2)"
+            }
+          ],
+          "data": {
+            "origin": {
+              "title": "Loc-RIB",
+              "items": [
+                "198.51.100.0/24",
+                "local, origin IGP",
+                "AS loop: dropped"
+              ],
+              "mark": [
+                2
+              ]
+            }
+          }
+        },
+        {
+          "from": "cust",
+          "to": "cust",
+          "kind": "local",
+          "label": "Choose between two paths",
+          "detail": "The decision runs per prefix, over every route in the Adj-RIBs-In. First the highest degree of preference (LOCAL_PREF, set by local policy; both are 100 here). Then the tie-breakers, in order, until one route is left: shortest AS_PATH, lowest ORIGIN, lowest MED (only compared between routes from the same neighbouring AS), an external route over an internal one, lowest IGP cost to the NEXT_HOP, lowest BGP Identifier, lowest peer address. Here the second step decides: 2 ASes beat 3. Had the paths been equal, the lowest BGP Identifier (192.0.2.2, ISP 64501) would win.",
+          "fields": [
+            {
+              "name": "decision order",
+              "value": "highest LOCAL_PREF; shortest AS_PATH; lowest ORIGIN; lowest MED (same neighbour AS); eBGP over iBGP; lowest IGP cost to NEXT_HOP; lowest BGP Identifier; lowest peer address",
+              "note": "RFC 4271 sections 9.1.2 and 9.1.2.2, applied in this order until one route remains"
+            },
+            {
+              "name": "BGP Identifier A, B",
+              "value": "192.0.2.2, 192.0.2.6",
+              "note": "only reached on a complete tie"
+            }
+          ],
+          "data": {
+            "cust": {
+              "title": "Adj-RIBs-In",
+              "items": [
+                "A 64501 64503",
+                "B 64502 64503 64503",
+                "LOCAL_PREF 100, 100",
+                "ORIGIN IGP, IGP",
+                "best A: path 2 < 3"
+              ],
+              "mark": [
+                4
+              ]
+            }
+          }
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "phase": "Forwarding",
+          "label": "Packet to 198.51.100.7",
+          "detail": "The route chosen by BGP is what the routers use to forward: the customer sends traffic for 198.51.100.7 to ISP 64501, the next hop of path A. The decision is per prefix and per router, so another router in another AS can choose differently.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.7"
+            },
+            {
+              "name": "next hop",
+              "value": "192.0.2.2",
+              "note": "the NEXT_HOP of route A"
+            }
+          ]
+        },
+        {
+          "from": "isp1",
+          "to": "origin",
+          "kind": "req",
+          "label": "Packet to 198.51.100.7",
+          "detail": "ISP 64501 has the route learned directly from the origin and passes the packet on. The packet reaches the AS that owns the prefix in two AS hops, as the path 64501 64503 said.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.7"
+            },
+            {
+              "name": "next hop",
+              "value": "192.0.2.10"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hijack",
+      "title": "A more specific hijack and RPKI",
+      "summary": "A /25 from the wrong AS beats the real /24 by longest prefix match and pulls half the prefix away, until route origin validation marks it Invalid. Illustrative ROA and addresses.",
+      "steps": [
+        {
+          "from": "cust",
+          "to": "cust",
+          "kind": "local",
+          "phase": "Before",
+          "label": "Routes before the hijack",
+          "detail": "The customer reaches 198.51.100.0/24 through ISP 64501 (path 64501 64503). AS 64504, a network that does not own the prefix, has a session with ISP 64502. For this scenario ISP 64502 applies no filter to what that neighbour sends, which is the mistake. All addresses are illustrative documentation addresses.",
+          "state": {
+            "cust": "Established",
+            "isp1": "Established",
+            "isp2": "Established",
+            "bad": "Established",
+            "origin": "Established"
+          },
+          "data": {
+            "cust": {
+              "title": "Routing table",
+              "items": [
+                "198.51.100.0/24 isp1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "bad",
+          "to": "isp2",
+          "kind": "req",
+          "phase": "The false route",
+          "label": "UPDATE 198.51.100.0/25",
+          "detail": "AS 64504 announces a prefix it does not own, and a more specific one: 198.51.100.0/25 is half of the /24. BGP has no way to check that the origin is entitled to the prefix; it only checks that the message is well formed. The /25 is a different destination from the /24, not a competing route to it.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/25"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64504",
+              "note": "the hijacker claims to be the origin"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.18"
+            }
+          ]
+        },
+        {
+          "from": "isp2",
+          "to": "isp2",
+          "kind": "local",
+          "label": "No filter: route accepted",
+          "detail": "RFC 7454 recommends that a network accept from a customer only the prefixes that customer is entitled to announce, and notes that IPv4 prefixes longer than /24 are generally neither announced nor accepted. ISP 64502 has neither filter here, so the route goes into its tables and is passed to its other peers.",
+          "fields": [
+            {
+              "name": "customer prefix filter",
+              "value": "none",
+              "note": "RFC 7454: accept only the customer prefixes"
+            },
+            {
+              "name": "prefix length filter",
+              "value": "none",
+              "note": "RFC 7454: IPv4 longer than /24 generally not accepted"
+            }
+          ]
+        },
+        {
+          "from": "isp2",
+          "to": "cust",
+          "kind": "req",
+          "label": "UPDATE path 64502 64504",
+          "detail": "ISP 64502 prepends its AS and advertises the /25 to the customer. The AS_PATH, 64502 64504, is short and looks ordinary.",
+          "fields": [
+            {
+              "name": "message",
+              "value": "UPDATE (type 2)"
+            },
+            {
+              "name": "NLRI",
+              "value": "198.51.100.0/25"
+            },
+            {
+              "name": "ORIGIN",
+              "value": "IGP (0)"
+            },
+            {
+              "name": "AS_PATH",
+              "value": "64502 64504",
+              "note": "received 64504, prepended 64502"
+            },
+            {
+              "name": "NEXT_HOP",
+              "value": "192.0.2.6"
+            }
+          ]
+        },
+        {
+          "from": "cust",
+          "to": "cust",
+          "kind": "local",
+          "label": "Longest prefix match wins",
+          "detail": "The customer now has two routes that overlap. They are different prefixes, so path length and the other tie-breakers do not compare them. RFC 4271 section 9.1.4: both are installed, and a lookup uses the most specific route that matches. Every destination from 198.51.100.0 to 198.51.100.127 follows the /25 towards AS 64504, and 198.51.100.128 to 198.51.100.255 still follows the /24.",
+          "fields": [
+            {
+              "name": "198.51.100.7",
+              "value": "matches the /24 and the /25: the /25 is longest, via isp2"
+            },
+            {
+              "name": "198.51.100.200",
+              "value": "matches only the /24: via isp1"
+            }
+          ],
+          "data": {
+            "cust": {
+              "title": "Routing table",
+              "items": [
+                "198.51.100.0/24 isp1",
+                "198.51.100.0/25 isp2"
+              ],
+              "mark": [
+                1
+              ]
+            }
+          }
+        },
+        {
+          "from": "cust",
+          "to": "isp2",
+          "kind": "req",
+          "phase": "Effect on traffic",
+          "label": "Packet to 198.51.100.7",
+          "detail": "Traffic for the lower half of the prefix now goes to the wrong network. The customer did nothing differently; the network around it changed what is reachable where.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.7"
+            },
+            {
+              "name": "next hop",
+              "value": "192.0.2.6"
+            }
+          ]
+        },
+        {
+          "from": "isp2",
+          "to": "bad",
+          "kind": "req",
+          "label": "Packet to 198.51.100.7",
+          "detail": "The packet ends at the hijacker. What it does with it is its choice: drop it (a black hole), read it, or answer pretending to be the owner. The real origin never sees these packets.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.7"
+            },
+            {
+              "name": "delivered to",
+              "value": "AS 64504",
+              "note": "not the owner"
+            }
+          ]
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "label": "Packet to 198.51.100.200",
+          "detail": "The upper half is unaffected: the /25 does not cover it, so the /24 is the longest match and the packet takes the correct path. That is why a partial hijack can go unnoticed for a while.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.200"
+            },
+            {
+              "name": "next hop",
+              "value": "192.0.2.2"
+            }
+          ]
+        },
+        {
+          "from": "cust",
+          "to": "cust",
+          "kind": "local",
+          "phase": "Origin validation",
+          "label": "ROV: the /25 is Invalid",
+          "detail": "Route origin validation (RFC 6811) compares a route with the validated ROA payloads from the RPKI. A VRP is a prefix, a maximum length and an origin AS. The owner has published (illustratively) 198.51.100.0/24, maxLength 24, AS 64503. The /25 is covered by that VRP but not matched: its length 25 exceeds the maximum, and its origin AS 64504 is not 64503. No VRP matches, so the state is Invalid. What to do with an Invalid route is local policy; here it is rejected, and the customer falls back to the /24.",
+          "fields": [
+            {
+              "name": "VRP (illustrative ROA)",
+              "value": "198.51.100.0/24, maxLength 24, AS 64503"
+            },
+            {
+              "name": "route",
+              "value": "198.51.100.0/25, origin AS 64504"
+            },
+            {
+              "name": "covered",
+              "value": "yes: VRP length 24 is at most 25 and the first 24 bits agree"
+            },
+            {
+              "name": "matched",
+              "value": "no: 25 is above maxLength 24, and 64504 is not 64503"
+            },
+            {
+              "name": "validation state",
+              "value": "Invalid",
+              "note": "Valid, Invalid or NotFound"
+            }
+          ],
+          "data": {
+            "cust": {
+              "title": "Routing table",
+              "items": [
+                "198.51.100.0/24 isp1"
+              ],
+              "mark": [
+                0
+              ]
+            }
+          }
+        },
+        {
+          "from": "cust",
+          "to": "isp1",
+          "kind": "req",
+          "label": "Packet to 198.51.100.7 again",
+          "detail": "With the /25 rejected, the longest match for 198.51.100.7 is the /24 again, through ISP 64501.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.7"
+            },
+            {
+              "name": "next hop",
+              "value": "192.0.2.2"
+            }
+          ]
+        },
+        {
+          "from": "isp1",
+          "to": "origin",
+          "kind": "req",
+          "label": "Delivered to the origin",
+          "detail": "The packet reaches AS 64503. ROV checks the origin AS only: RFC 6811 notes that an attacker who prepends the valid origin AS to a forged announcement is not caught, and that it gives no path validation. It stops mistakes and simple hijacks; it is not a complete defence.",
+          "fields": [
+            {
+              "name": "destination",
+              "value": "198.51.100.7"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "target": "cust",
+      "kind": "failure",
+      "text": "BGP uses no TCP keepalive: it detects a dead neighbour with its own hold timer. If no KEEPALIVE or UPDATE arrives within the hold time, the router sends a Hold Timer Expired NOTIFICATION, closes the TCP connection and drops every route learned from that peer. A short hold time finds failures sooner; a long one rides out a busy peer or a lossy path. The RFC allows a hold time of zero, which turns keepalives off."
+    },
+    {
+      "target": "isp1",
+      "kind": "tradeoff",
+      "text": "Convergence is slow on purpose. The MinRouteAdvertisementIntervalTimer limits how often updates for the same destination go to one peer (suggested 30 seconds on eBGP, 5 on iBGP), and if a route changes several times during the wait only the last one is sent. That damps churn and protects routers, at the price that a change crossing several ASes can wait one interval at each hop. This module does not put a number on total convergence time."
+    },
+    {
+      "target": "isp2",
+      "kind": "security",
+      "text": "BGP trusts its neighbours. RFC 7454 puts it plainly: BGP does not directly include mechanisms that control whether the routes exchanged conform to the guidelines. A neighbour can announce any prefix, and a more specific one wins everywhere it is accepted. The defences are operational: accept from a customer only its own prefixes, reject IPv4 prefixes more specific than /24, cap the number of prefixes per peer."
+    },
+    {
+      "target": "cust",
+      "kind": "security",
+      "text": "A route leak is a route passed beyond its intended scope, for example a customer re-advertising the routes of one ISP to another, which makes it a transit path for traffic it cannot carry. RFC 8212 removes the easy way to do it by accident: an external session with no explicit import policy accepts no routes, and with no explicit export policy it advertises none. Policy has to be written before anything flows."
+    },
+    {
+      "target": "bad",
+      "kind": "security",
+      "text": "Origin validation (RFC 6811) checks the prefix and the origin AS against signed ROAs. It does not validate the rest of the path: the RFC says an attacker who prepends the valid origin AS to a forged announcement defeats it, and that it is closer to protection against misconfiguration than strong security. A ROA with a loose maxLength also lets a more specific route from the right AS pass, so set maxLength as tight as the announcements really are."
+    }
+  ],
+  "questions": [
+    {
+      "id": "bgp-tcp",
+      "topic": "reliability",
+      "targets": [
+        "cust",
+        "isp1"
+      ],
+      "q": "BGP runs over TCP. Why does it still need its own keepalives?",
+      "a": "TCP gives reliable ordered delivery, so BGP has no sequence numbers or retransmission of its own. But TCP says nothing about a peer that is up and silent, or a path that has failed while the connection is idle. BGP sends KEEPALIVEs at one third of the hold time and tears the session down when the hold timer expires."
+    },
+    {
+      "id": "hold-time",
+      "topic": "operations",
+      "targets": [
+        "cust",
+        "isp1"
+      ],
+      "q": "How is the hold time agreed, and what follows from it?",
+      "a": "Each side proposes a value in its OPEN and both use the smaller one, so min(180, 90) is 90 seconds. A value of 0 means no keepalives, and the hold time must be 0 or at least 3 seconds. The keepalive interval is about one third of the result, here 30 seconds."
+    },
+    {
+      "id": "best-path",
+      "topic": "tradeoffs",
+      "targets": [
+        "cust"
+      ],
+      "q": "In what order does BGP choose between two routes to the same prefix?",
+      "a": "Highest LOCAL_PREF first, which is local policy. Then shortest AS_PATH, lowest ORIGIN, lowest MED between routes from the same neighbouring AS, an external route over an internal one, lowest IGP cost to the NEXT_HOP, lowest BGP Identifier and finally lowest peer address. Policy comes first, which is why path length is only a default preference."
+    },
+    {
+      "id": "loops",
+      "topic": "reliability",
+      "targets": [
+        "origin",
+        "isp1"
+      ],
+      "q": "How does BGP avoid routing loops between networks?",
+      "a": "It is a path vector protocol: every AS prepends its number to the AS_PATH when it passes a route to an external peer. A router that finds its own AS number in the path of a received route excludes it. There is no hop count to run away, and the check needs no knowledge of the topology."
+    },
+    {
+      "id": "more-specific",
+      "topic": "security",
+      "targets": [
+        "bad",
+        "cust",
+        "isp2"
+      ],
+      "q": "Why does a more specific prefix from the wrong AS win, and what stops it?",
+      "a": "Forwarding uses the longest matching prefix, and BGP installs both the /24 and the /25 as different destinations, so path length never gets compared. Filters stop it at the source: accept from a customer only its own prefixes and nothing more specific than /24. Route origin validation marks the /25 Invalid because the ROA gives maxLength 24 and a different origin AS."
+    },
+    {
+      "id": "default-deny",
+      "topic": "security",
+      "targets": [
+        "cust",
+        "isp1",
+        "isp2"
+      ],
+      "q": "What does RFC 8212 change about eBGP defaults?",
+      "a": "Many deployed speakers sent and accepted every route on a new eBGP session by default. RFC 8212 says routes received from an external peer are not eligible for the decision process without an explicit import policy, and none are added to what is sent without an explicit export policy. That removes a common cause of accidental route leaks: the operator must decide what a neighbour may send and hear."
+    }
+  ]
+}
