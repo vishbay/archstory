@@ -1,11 +1,13 @@
 // Practice mode: build your own answer to a library or imported problem on the same tier-band canvas, record request flows
 // by clicking components, then check it against the reference design.
+import { attemptReport } from '../practice/report'
+import { downloadText } from './files'
 import { CustomRequirements } from './CustomRequirements'
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { edgeId, TIERS, type Design } from '../model/schema'
 import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
-import { addNode, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
+import { addNode, addNote, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
 import { compareDesigns } from '../practice/compare'
 import { BandCanvas, type EditProps, type ZoneState } from './BandCanvas'
@@ -134,6 +136,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   const stopRecording = () => { setRecording(false); setRecFrom(null) }
   const stopConnecting = () => { setConnecting(false); setConnFrom(null) }
   const startConnecting = () => { stopRecording(); setConnecting(true); setConnFrom(null); setSelected(null); setPicked(null); leaveRef() }
+  const saveReport = () => downloadText(`archstory-${ref.id}-report.md`, attemptReport({ attempt, reference: ref, review, checks: result, at: new Date() }))
   const reset = async () => {
     if (!await askConfirm({ title: `Clear your answer for "${ref.meta.title}"?`, body: 'This cannot be undone.', confirm: 'Clear answer', danger: true })) return
     setAttempt(blankAttempt(ref)); setReview(null); setHints(0); setSelected(null); setPicked(null); stopRecording(); setFlowId('')
@@ -292,6 +295,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
               <div className="row wrap">
                 <button onClick={() => onViewJson(attempt)}>View JSON</button>
                 <button onClick={() => onExport(attempt)}>Export</button>
+                <button onClick={saveReport} title="Save your answer and its AI review as a readable Markdown file">Save report</button>
                 <button onClick={reset}>Reset</button>
               </div>
             </Section>
@@ -415,7 +419,9 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
                 recording={recording} onRecord={() => { stopConnecting(); setRecording(true); setRecFrom(null); setSelected(null); setPicked(null) }} onStopRecording={stopRecording}
                 result={result} reasoningOn={reasoningOn} onCompare={() => { setWhose(sideFits ? 'side' : 'ref'); takeHint(4) }}
                 hints={hints} onHint={takeHint}
-                reference={ref} review={review} onReview={setReview} timed={timed} />}
+                reference={ref} review={review} onReview={setReview} timed={timed}
+                onAddNote={(target, text) => { setAttempt(addNote(attempt, target, text)); setPicked(null); setSelected(target); setTab('build') }}
+                onSaveReport={saveReport} />}
         </aside>
       )}
     </>

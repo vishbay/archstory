@@ -1,3 +1,4 @@
+import { NodeNotes } from './NodeNotes'
 import { OutlineField } from './OutlineField'
 import { HA_MODES, STEP_KINDS, type Design, type Flow } from '../model/schema'
 import { KINDS, type Cloud, nameOf } from '../model/kinds'
@@ -39,6 +40,8 @@ export function PracticeInspector(p: {
   hints: number; onHint: (level: number) => void
   reference: Design; review: StoredReview | null; onReview: (r: StoredReview | null) => void
   timed: TimedControls
+  onAddNote: (target: string, text: string) => void
+  onSaveReport: () => void
 }) {
   const { attempt: d, setAttempt, cloud, tab } = p
   const [mode, setModeState] = useState<'timed' | 'ai'>(() => store.get('archstory.interviewMode', 'timed'))
@@ -103,6 +106,7 @@ export function PracticeInspector(p: {
             </div>
             <label className="field">Why it is here (optional)<textarea rows={3} value={node.description ?? ''}
               onChange={e => setAttempt(updateNode(d, node.id, { description: e.target.value || undefined }), `desc:${node.id}`)} /></label>
+            <NodeNotes design={d} node={node} setAttempt={setAttempt} />
             <button className="danger" onClick={() => { setAttempt(removeNode(d, node.id)); p.onSelect(null) }}>Delete component</button>
           </>
         )}
@@ -208,7 +212,7 @@ export function PracticeInspector(p: {
 
         {shownTab === 'review' && (
           <ReviewPanel attempt={d} reference={p.reference} checks={p.result.checks} stored={p.review} onStore={p.onReview}
-            onSelectNode={id => { p.onPick(null); p.onSelect(id) }} cloud={cloud} />
+            onSelectNode={id => { p.onPick(null); p.onSelect(id) }} cloud={cloud} onAddNote={p.onAddNote} onSaveReport={p.onSaveReport} />
         )}
 
         {shownTab === 'interview' && (

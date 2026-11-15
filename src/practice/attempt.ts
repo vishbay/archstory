@@ -1,6 +1,6 @@
 // A practice attempt is an ordinary archstory/v1 design that the learner builds up step by step.
 // These are pure edit operations so the UI stays thin and the rules are testable.
-import { findEdge, type Design, type Group, type DNode, type Flow, type Step, type StepKind } from '../model/schema'
+import { findEdge, NOTE_KINDS, type Design, type Group, type DNode, type Flow, type Step, type StepKind } from '../model/schema'
 import { kindInfo } from '../model/kinds'
 
 export const attemptId = (ref: Design) => `attempt-${ref.id}`
@@ -54,6 +54,18 @@ export function addNode(d: Design, kind: string): { design: Design; id: string }
 
 export const updateNode = (d: Design, id: string, patch: Partial<DNode>): Design =>
   ({ ...d, nodes: d.nodes.map(n => (n.id === id ? { ...n, ...patch } : n)) })
+
+export type NoteKind = (typeof NOTE_KINDS)[number]
+export const NOTE_KIND_LABELS: Record<NoteKind, string> = { tradeoff: 'Trade-off', scaling: 'Scaling', failure: 'Failure', security: 'Security', note: 'Note' }
+
+/** A written explanation attached to a component: the part of an answer a drawing cannot show. */
+export const addNote = (d: Design, target: string, text = '', kind: NoteKind = 'note'): Design =>
+  ({ ...d, notes: [...d.notes, { target, kind, text }] })
+export const updateNote = (d: Design, index: number, patch: { kind?: NoteKind; text?: string }): Design =>
+  ({ ...d, notes: d.notes.map((n, i) => (i === index ? { ...n, ...patch } : n)) })
+export const removeNote = (d: Design, index: number): Design => ({ ...d, notes: d.notes.filter((_, i) => i !== index) })
+/** The notes that say something (a note left blank is not part of the answer). */
+export const writtenNotes = (d: Design) => d.notes.filter(n => n.text.trim())
 
 /** Outlines (groups) are only drawn around components, so one with no components left is dropped. */
 export const pruneGroups = (d: Design): Design => {

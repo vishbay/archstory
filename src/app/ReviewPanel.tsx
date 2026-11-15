@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import type { Design } from '../model/schema'
 import { nameOf, type Cloud } from '../model/kinds'
 import type { Check } from '../practice/checks'
-import { DIMENSIONS, parseReview, reviewPrompt, signature, type Review } from '../practice/review'
+import { DIMENSIONS, FIX_LABEL, parseReview, reviewPrompt, signature, type Review } from '../practice/review'
 import { askForJson } from '../ai/ask'
 import { hostOf, isConfigured, providerLabel, forFeature, modelFor } from '../ai/providers'
 import { copyText, extractJson, fixRequest } from './prompts'
@@ -11,11 +11,15 @@ import { askConfirm } from './confirm'
 
 export interface StoredReview { review: Review; sig: string; warnings: string[] }
 
+const FIX_HINT = { draw: 'A component or connection to add or change on the canvas', configure: 'A setting on a component, such as instances, zone failure or outline', write: 'Something a drawing cannot show: write it as a note on a component or in your written reasoning' } as const
 const SEV_LABEL = { critical: 'Critical', major: 'Major', minor: 'Minor', praise: 'Done well' } as const
 
-export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSelectNode, cloud }: {
+export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSelectNode, cloud, onAddNote, onSaveReport }: {
   attempt: Design; reference: Design; checks: Check[]; stored: StoredReview | null
   onStore: (r: StoredReview | null) => void; onSelectNode: (id: string) => void; cloud: Cloud
+  /** Start a note on a component from a finding, so the candidate can put their answer in their own words. */
+  onAddNote: (target: string, text: string) => void
+  onSaveReport: () => void
 }) {
   const [includeRef, setIncludeRef] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -116,6 +120,7 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
           <div className="score">
             <span><b>{r.overall}</b> / 5 overall</span>
             <span className="row">
+              <button onClick={onSaveReport} title="Save your answer and this review as a Markdown file">Save report</button>
               <button onClick={() => { setPasting(true); setCopied(false) }}>New review</button>
               <button className="icon ghost" title="Clear review" onClick={async () => { if (await askConfirm({ title: 'Clear this review?', body: 'You can paste or request a new one afterwards.', confirm: 'Clear review', danger: true })) { onStore(null); setPasting(true) } }}>×</button>
             </span>
@@ -141,9 +146,11 @@ export function ReviewPanel({ attempt, reference, checks, stored, onStore, onSel
               <li key={i} className={`sev-${f.severity}`}>
                 <span className={`sev-pill sev-${f.severity}`}>{SEV_LABEL[f.severity]}</span>
                 {f.target && <button className="link" onClick={() => onSelectNode(f.target!)}>{label(f.target)}</button>}
+                {f.fix && <span className={`fix-pill fix-${f.fix}`} title={FIX_HINT[f.fix]}>{FIX_LABEL[f.fix]}</span>}
                 <b>{f.title}</b>
                 {f.detail && <p>{f.detail}</p>}
                 {f.suggestion && <p className="suggestion">→ {f.suggestion}</p>}
+                {f.fix === 'write' && f.target && <button className="small-btn" onClick={() => onAddNote(f.target!, f.suggestion ?? f.detail)} title="Starts a note on this component with the advice as a draft. Rewrite it in your own words.">Write a note on {label(f.target)}</button>}
               </li>
             ))}
           </ul>

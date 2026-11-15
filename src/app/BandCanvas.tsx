@@ -69,14 +69,14 @@ function ZoneNode({ data }: NodeProps) {
 type NodeData = {
   node: DNode; cloud: Cloud; state: State; selected: boolean; note?: string
   tag?: { text: string; level?: Level | 'role' }; failed?: boolean; compact?: boolean
-  editable?: boolean; flagged?: boolean; recordingFrom?: boolean; mark?: { count: number; severity: string }; gap?: Gap
+  editable?: boolean; notes?: number; flagged?: boolean; recordingFrom?: boolean; mark?: { count: number; severity: string }; gap?: Gap
   /** Monitoring layer: which telemetry this component emits, and whether it is a telemetry part itself. */
   signals?: { metrics: boolean; logs: boolean; traces: boolean }; telemetry?: boolean
 }
 const SIDES: [Side, Position][] = [['top', Position.Top], ['right', Position.Right], ['bottom', Position.Bottom], ['left', Position.Left]]
 
 function ComponentNode({ data }: NodeProps) {
-  const { node: n, cloud, state, selected, note, tag, failed, compact, editable, flagged, recordingFrom, mark, gap, signals, telemetry } = data as NodeData
+  const { node: n, cloud, state, selected, note, notes, tag, failed, compact, editable, flagged, recordingFrom, mark, gap, signals, telemetry } = data as NodeData
   const name = nameOf(n, cloud)
   const cls = [`node st-${state}`, selected && 'selected', failed && 'failed', compact && 'compact', editable && 'editable', flagged && 'flagged', recordingFrom && 'rec-from', gap && `mark-${gap}`, telemetry && 'telemetry']
   return (
@@ -84,6 +84,7 @@ function ComponentNode({ data }: NodeProps) {
       style={{ width: telemetry ? OBS_NODE_W : compact ? ZNODE_W : NODE_W }} title={compact ? name : undefined}>
       {note && <div className="node-note">{note}</div>}
       {tag && <span className={`node-tag tag-${tag.level ?? 'info'}`}>{tag.text}</span>}
+      {notes ? <span className="node-notecount" title={`${notes} note${notes > 1 ? 's' : ''} on this component`}>✎ {notes}</span> : null}
       {mark && <span className={`node-mark sev-${mark.severity}`} title={`${mark.count} review finding${mark.count > 1 ? 's' : ''}`}>{mark.count}</span>}
       <NodeIcon node={n} cloud={cloud} size={compact ? 22 : 28} />
       <div className="node-text">
@@ -337,7 +338,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
       ...design.nodes.map(n => ({
         id: n.id, type: 'component', position: L.pos[n.id], draggable: false,
         data: { node: n, cloud, state: nodeState(n.id), selected: selected === n.id, tag: tagFor(n), signals: mon ? emits(n.kind) : undefined,
-          editable: !!edit, flagged: edit?.flagged.has(n.id), recordingFrom: edit?.recordingFrom === n.id, mark: edit?.marks?.get(n.id),
+          editable: !!edit, notes: edit ? design.notes.filter(x => x.target === n.id && x.text.trim()).length : undefined, flagged: edit?.flagged.has(n.id), recordingFrom: edit?.recordingFrom === n.id, mark: edit?.marks?.get(n.id),
           gap: gaps?.ids.has(n.id) ? gaps.gap : undefined,
           note: cur?.kind === 'local' && cur.from === n.id ? cur.label : undefined } satisfies NodeData,
       })),

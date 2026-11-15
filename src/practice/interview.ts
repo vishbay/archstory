@@ -4,7 +4,7 @@
 import type { Design } from '../model/schema'
 import { noUsage, type Message, type Usage } from '../ai/providers'
 import type { Check } from './checks'
-import { customRequirements, extraRequirementsText } from './attempt'
+import { customRequirements, extraRequirementsText, writtenNotes } from './attempt'
 import { REASONING_TITLES, signature } from './review'
 
 export const MAX_TURNS = 20
@@ -81,6 +81,7 @@ export function designBrief(a: Design, ref?: Design): string {
     a.nodes.length ? `Components:\n${a.nodes.map(n => `- ${n.id}: ${n.label} (${n.kind})${n.replicas && n.replicas > 1 ? `, ${n.replicas} replicas` : ''}${n.group ? `, inside the outline "${a.groups.find(g => g.id === n.group)?.label ?? n.group}"` : ''}${n.description ? `, ${n.description}` : ''}`).join('\n')}` : 'Components: none yet',
     a.edges.length ? `Connections (caller -> callee):\n${a.edges.map(e => `- ${e.from} -> ${e.to}${e.async ? ' (async)' : ''}`).join('\n')}` : 'Connections: none yet',
     a.flows.length ? `Request flows they recorded:\n${a.flows.map(f => `- ${f.title}: ${f.steps.map(s => `${s.from} -> ${s.to} ${s.label}`).join(' | ') || '(no steps yet)'}`).join('\n')}` : 'Request flows: none recorded yet',
+    ...(writtenNotes(a).length ? [`Notes they attached to components:\n${writtenNotes(a).map(n => `- ${n.target ? `${a.nodes.find(x => x.id === n.target)?.label ?? n.target}: ` : ''}[${n.kind}] ${n.text.trim()}`).join('\n')}`] : []),
     ...(reasoning.length ? [`Their written notes:\n${reasoning.map(([k, v]) => `${REASONING_TITLES[k] ?? k}: ${v.trim()}`).join('\n')}`] : []),
   ]
   return `Candidate's current design:\n${lines.join('\n\n')}`

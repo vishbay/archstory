@@ -1,6 +1,6 @@
 // AI review by copy and paste: a prompt that asks any assistant for a structured review, and a parser for its answer.
 // The same prompt and format will back an optional API integration later.
-import { extraRequirementsText } from './attempt'
+import { extraRequirementsText, writtenNotes } from './attempt'
 import { z } from 'zod'
 import type { Design } from '../model/schema'
 import type { Check } from './checks'
@@ -16,6 +16,8 @@ export const DIMENSIONS = [
   { id: 'tradeoffs', title: 'Trade-offs', rubric: 'explains choices and alternatives (from the written reasoning if present, otherwise judged from the design)' },
   { id: 'decisions', title: 'Decision quality', rubric: 'for each big choice the candidate names the options considered, why one was picked and what it costs (score it only when the candidate wrote key decisions, otherwise leave this dimension out)' },
 ] as const
+export const FIXES = ['draw', 'configure', 'write'] as const
+export const FIX_LABEL: Record<(typeof FIXES)[number], string> = { draw: 'Draw it', configure: 'Set a field', write: 'Write it' }
 export const SEVERITIES = ['critical', 'major', 'minor', 'praise'] as const
 
 const Score = z.coerce.number().min(1).max(5)
@@ -31,6 +33,8 @@ export const ReviewSchema = z.object({
     title: z.string().optional(),
     detail: z.string().default(''),
     suggestion: z.string().optional(),
+    /** What kind of change would address it: draw something, set a field on a component, or write a sentence. */
+    fix: z.enum(FIXES).optional().catch(undefined),
   }).transform(f => ({ ...f, title: f.title?.trim() || f.detail.split(/(?<=[.!?])\s/)[0].slice(0, 90) || 'Finding' }))).default([]),
   followUps: z.array(z.string()).default([]),
 })
@@ -55,7 +59,7 @@ export function parseReview(json: unknown, attempt: Design): ReviewParse {
 
 /** Cheap fingerprint of an answer, to tell when a stored review no longer matches it. */
 export function signature(d: Design): string {
-  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : []), ...(d.groups.length ? [d.groups] : [])])   // old answers keep their signature
+  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : []), ...(d.groups.length ? [d.groups] : []), ...(writtenNotes(d).length ? [writtenNotes(d)] : [])])   // old answers keep their signature
   let h = 5381
   for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i)
   return (h >>> 0).toString(36)
@@ -72,7 +76,7 @@ const EXAMPLE: Review = {
   summary: 'Two or three sentences on the overall quality and the single most important improvement.',
   scores: DIMENSIONS.map(d => ({ dimension: d.id, score: 3, comment: `One sentence on ${d.title.toLowerCase()}.` })),
   findings: [
-    { target: '<component id>', severity: 'major', title: 'Short headline', detail: 'What is wrong and why it matters at this scale.', suggestion: 'Concretely what to change.' },
+    { target: '<component id>', severity: 'major', title: 'Short headline', detail: 'What is wrong and why it matters at this scale.', suggestion: 'Concretely what to change.', fix: 'draw' },
     { target: null, severity: 'praise', title: 'Short headline', detail: 'What is done well.' },
   ],
   followUps: ['A question the interviewer would ask next'],
@@ -81,7 +85,7 @@ const EXAMPLE: Review = {
 export function reviewPrompt(attempt: Design, ref: Design, checks: Check[], includeReference: boolean): string {
   const r = ref.requirements
   const list = (xs: string[]) => xs.map(x => `- ${x}`).join('\n')
-  const answer = { nodes: attempt.nodes, ...(attempt.groups.length && { groups: attempt.groups }), edges: attempt.edges, flows: attempt.flows, notes: attempt.notes, ...(attempt.regions && { regions: attempt.regions }) }
+  const answer = { nodes: attempt.nodes, ...(attempt.groups.length && { groups: attempt.groups }), edges: attempt.edges, flows: attempt.flows, notes: writtenNotes(attempt), ...(attempt.regions && { regions: attempt.regions }) }
   const multiRegion = !!(ref.regions || attempt.regions)
   const reasoning = Object.entries(attempt.reasoning ?? {}).filter(([, v]) => v.trim())
   const found = checks.filter(c => c.level === 'fail' || c.level === 'warn')
@@ -146,6 +150,8 @@ ${JSON.stringify(EXAMPLE, null, 2)}
 
 Rules:
 - "target" in each finding is one of these component ids, or null for a design-wide finding: ${ids}.
+- "fix" says what kind of change would address a non-praise finding, so the candidate knows where to do it: "draw" (a component or connection is missing or wrong), "configure" (a setting on a component that exists: its instance count, zone failure behaviour or outline) or "write" (a property a drawing cannot show, such as how isolation is enforced or why a choice was made; it belongs in a note on a component, a flow step or the written reasoning). Omit "fix" on praise.
+- The candidate's notes, component descriptions and written reasoning are their explanations. Credit what they say, and only call something missing when it is neither drawn nor written.
 - "severity" is one of "critical", "major", "minor" or "praise". Include 2 to 4 "praise" findings for what is done well.
 - Give 4 to 10 findings, most important first. Each non-praise finding has a concrete "suggestion".
 - "scores" may leave out "security" and "decisions" when they do not apply; every other dimension is always scored.
