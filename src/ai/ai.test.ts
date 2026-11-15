@@ -92,6 +92,20 @@ describe('parseReply', () => {
   })
 })
 
+describe('empty replies', () => {
+  const gem = { ...emptyConfig(), provider: 'gemini' as const, keys: { ...emptyConfig().keys, gemini: 'k-12345678' } }
+  const reply = (body: unknown) => (async () => new Response(JSON.stringify(body))) as typeof fetch
+  it('explains a thinking model that spent the whole limit before answering', async () => {
+    const body = { candidates: [{ content: { parts: [] }, finishReason: 'MAX_TOKENS' }], usageMetadata: { thoughtsTokenCount: 2000 } }
+    await expect(sendChat(gem, [{ role: 'user', content: 'hi' }], { fetchImpl: reply(body) })).rejects.toMatchObject({ kind: 'truncated', message: expect.stringContaining('reasoning') })
+  })
+  it('names the stop reason for other empty answers and reports a blocked prompt', async () => {
+    const empty = { candidates: [{ finishReason: 'SAFETY' }] }
+    await expect(sendChat(gem, [{ role: 'user', content: 'hi' }], { fetchImpl: reply(empty) })).rejects.toThrow('SAFETY')
+    await expect(sendChat(gem, [{ role: 'user', content: 'hi' }], { fetchImpl: reply({ promptFeedback: { blockReason: 'OTHER' } }) })).rejects.toThrow('blocked')
+  })
+})
+
 describe('errors', () => {
   it('explains common HTTP failures in plain words and never repeats the key', () => {
     const c = cfg({ provider: 'openai' })

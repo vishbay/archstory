@@ -115,7 +115,7 @@ export function buildRequest(c: AiConfig, messages: Message[], maxTokens: number
     { model, messages: extras.system ? [{ role: 'system', content: extras.system }, ...messages] : messages })
 }
 
-export interface Reply { text: string; truncated: boolean; usage: Usage | null }
+export interface Reply { text: string; truncated: boolean; usage: Usage | null; /** Why the provider stopped, in its own words (for example STOP, SAFETY, length), when it says. */ finish?: string }
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 /** The reply text, whether the provider stopped because it hit the length limit (the answer would be cut off), and tokens used. */
@@ -126,7 +126,7 @@ export function parseReply(provider: ProviderId, json: unknown): Reply | null {
     if (!Array.isArray(j.content)) return null
     const u = j.usage
     return {
-      text: j.content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join(''), truncated: j.stop_reason === 'max_tokens',
+      text: j.content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join(''), truncated: j.stop_reason === 'max_tokens', finish: j.stop_reason,
       usage: u ? { input: num(u.input_tokens), output: num(u.output_tokens), cacheRead: num(u.cache_read_input_tokens), cacheWrite: num(u.cache_creation_input_tokens) } : null,
     }
   }
@@ -135,7 +135,7 @@ export function parseReply(provider: ProviderId, json: unknown): Reply | null {
     if (!cand) return null
     const u = j.usageMetadata
     return {
-      text: (cand.content?.parts ?? []).map((p: any) => p?.text ?? '').join(''), truncated: cand.finishReason === 'MAX_TOKENS',
+      text: (cand.content?.parts ?? []).map((p: any) => (p?.thought ? '' : p?.text ?? '')).join(''), truncated: cand.finishReason === 'MAX_TOKENS', finish: cand.finishReason,
       usage: u ? { input: Math.max(0, num(u.promptTokenCount) - num(u.cachedContentTokenCount)), output: num(u.candidatesTokenCount) + num(u.thoughtsTokenCount), cacheRead: num(u.cachedContentTokenCount), cacheWrite: 0 } : null,
     }
   }
@@ -143,7 +143,7 @@ export function parseReply(provider: ProviderId, json: unknown): Reply | null {
   if (!choice) return null
   const u = j.usage, cached = num(u?.prompt_tokens_details?.cached_tokens) || num(u?.prompt_cache_hit_tokens)   // DeepSeek reports cache hits its own way
   return {
-    text: choice.message?.content ?? '', truncated: choice.finish_reason === 'length',
+    text: choice.message?.content ?? '', truncated: choice.finish_reason === 'length', finish: choice.finish_reason ?? undefined,
     usage: u ? { input: Math.max(0, num(u.prompt_tokens) - cached), output: num(u.completion_tokens), cacheRead: cached, cacheWrite: 0 } : null,
   }
 }
@@ -177,6 +177,14 @@ export function describeNetworkError(c: AiConfig): AiError {
   return new AiError(`Could not reach ${host}.${hint}`, 'network')
 }
 
+/** A reply with no text is not an answer. Say why, since the usual cause is a thinking model using up the length limit on its reasoning. */
+export function emptyReply(c: AiConfig, r: Reply): AiError {
+  const who = providerLabel(c)
+  if (r.truncated) return new AiError(`${who} used the whole length limit on its reasoning before writing an answer. Try again, or choose a faster model in the AI settings (thinking models spend part of the limit thinking).`, 'truncated')
+  const why = r.finish && !/^(stop|end_turn)$/i.test(r.finish) ? ` It stopped with "${r.finish}", which often means a safety filter.` : ''
+  return new AiError(`${who} sent back an empty answer.${why} Try again, or reword the question.`, 'format')
+}
+
 export interface SendOptions extends RequestExtras { maxTokens?: number; signal?: AbortSignal; timeoutMs?: number; fetchImpl?: typeof fetch }
 
 /** Send a conversation and return the reply text. Throws AiError with a message that is safe to show. */
@@ -199,8 +207,11 @@ export async function sendChat(c: AiConfig, messages: Message[], opts: SendOptio
     if (!res.ok) throw describeHttpError(c, res.status, body)
     let json: unknown
     try { json = JSON.parse(body) } catch { throw new AiError(`${providerLabel(c)} sent a reply that is not JSON.`, 'format') }
+    const blocked = (json as any)?.promptFeedback?.blockReason
+    if (c.provider === 'gemini' && blocked) throw new AiError(`Gemini blocked this request (${blocked}). Try rewording the question.`, 'http')
     const reply = parseReply(c.provider, json)
     if (!reply) throw new AiError(`${providerLabel(c)} sent a reply in a shape ArchStory does not recognise.`, 'format')
+    if (!reply.text.trim()) throw emptyReply(c, reply)
     return reply
   } finally {
     clearTimeout(timer)

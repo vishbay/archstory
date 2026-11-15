@@ -56,7 +56,7 @@ export function AiInterviewer({ attempt, reference, checks, cloud, onSelectNode 
   const ask = async (s: InterviewState, finishing = false) => {
     setBusy(true); setError(null); ctl.current = new AbortController()
     try {
-      const r = await sendChat(forFeature(ai, 'interview'), apiMessages(s.turns), { system: s.system, cache: true, maxTokens: finishing ? 900 : 600, signal: ctl.current.signal, timeoutMs: 120_000 })
+      const r = await sendChat(forFeature(ai, 'interview'), apiMessages(s.turns), { system: s.system, cache: true, maxTokens: finishing ? 4000 : 3000, signal: ctl.current.signal, timeoutMs: 120_000 })
       const next = { ...s, turns: [...s.turns, { role: 'assistant' as const, text: r.text.trim() || '(no reply)' }], usage: addUsage(s.usage, r.usage), finished: s.finished || finishing }
       save(next); speak(r.text)
     } catch (e) {

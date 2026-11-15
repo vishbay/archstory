@@ -39,7 +39,7 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
     ctl.current?.abort(); ctl.current = new AbortController()
     setTest({ state: 'running', text: `Contacting ${hostOf(draft)}…` })
     try {
-      const r = await sendChat(draft, [{ role: 'user', content: 'Reply with the single word OK.' }], { maxTokens: 20, signal: ctl.current.signal, timeoutMs: 30_000 })
+      const r = await sendChat(draft, [{ role: 'user', content: 'Reply with the single word OK.' }], { maxTokens: 1000, signal: ctl.current.signal, timeoutMs: 30_000 })
       setTest({ state: 'ok', text: `Connected. ${p.label} replied: ${r.text.trim().slice(0, 40) || '(empty)'}` })
     } catch (e) {
       if (e instanceof AiError && e.kind === 'cancelled') return

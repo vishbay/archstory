@@ -39,7 +39,7 @@ export function DiscussDialog({ design, flowId, onClose }: { design: Design; flo
     setBusy(true); setError(null); ctl.current = new AbortController()
     const wire: Message[] = thread.map((t, i) => ({ role: t.role, content: i === 0 ? first.current : t.text }))
     try {
-      const r = await sendChat(forFeature(ai, 'review'), wire, { cache: true, maxTokens: 2000, signal: ctl.current.signal, timeoutMs: 120_000 })
+      const r = await sendChat(forFeature(ai, 'review'), wire, { cache: true, maxTokens: 8000, signal: ctl.current.signal, timeoutMs: 120_000 })
       setTurns([...thread, { role: 'assistant', text: r.text.trim() || '(no reply)' }])
     } catch (e) {
       const err = e instanceof AiError ? e : new AiError('Something went wrong while contacting the provider.', 'http')
