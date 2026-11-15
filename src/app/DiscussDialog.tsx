@@ -64,8 +64,8 @@ export function DiscussDialog({ design, flowId, onClose }: { design: Design; flo
 
   const options = (
     <>
-      <label className="check-row"><input type="checkbox" checked={answers} disabled={started} onChange={e => { setAnswers(e.target.checked); setCopied(null) }} /> Include the model answers <span className="muted small">(leave off if you want to be quizzed first)</span></label>
-      <label className="check-row"><input type="checkbox" checked={json} disabled={started} onChange={e => { setJson(e.target.checked); setCopied(null) }} /> Also include the exact JSON <span className="muted small">(longer; the walkthrough already has everything)</span></label>
+      <label className="check-row"><input type="checkbox" checked={answers} onChange={e => { setAnswers(e.target.checked); setCopied(null) }} /> Include the model answers <span className="muted small">(leave off if you want to be quizzed first)</span></label>
+      <label className="check-row"><input type="checkbox" checked={json} onChange={e => { setJson(e.target.checked); setCopied(null) }} /> Also include the exact JSON <span className="muted small">(longer; the walkthrough already has everything)</span></label>
       <details className="prompt-preview">
         <summary>Preview prompt ({Math.round(prompt.length / 1000)}k characters, about {Math.round(prompt.length / 4000)}k tokens)</summary>
         <textarea ref={preview} readOnly value={prompt} spellCheck={false} />
