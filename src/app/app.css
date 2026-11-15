@@ -839,6 +839,25 @@ dialog.quick-add { height: auto; min-height: 0; max-height: min(460px, 80vh); }
 .iv-msg.assistant { background: var(--surface-2); border: 1px solid var(--border); justify-self: start; }
 .iv-msg.user { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); justify-self: end; }
 .iv-msg.pending p { color: var(--muted); animation: blink 1.2s infinite; }
+.ask-step { animation: ask-in .22s ease both; }
+.ask-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.ask-card { display: grid; gap: 6px; align-content: start; text-align: left; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer;
+  animation: ask-in .26s ease both; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.ask-card:hover, .ask-card:focus-visible { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 6px 18px #0002; }
+.ask-card-title { font-weight: 700; font-size: 15px; }
+.ask-card-sub { color: var(--accent-text); font-size: 12.5px; }
+.ask-card ul { margin: 4px 0 6px; padding-left: 18px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.ask-card-go { font-weight: 600; font-size: 13px; color: var(--accent-text); transition: transform .15s ease; justify-self: start; }
+.ask-card:hover .ask-card-go { transform: translateX(3px); }
+.ask-back { margin-bottom: 8px; }
+.ask-notice { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.ask-notice p { margin: 0; line-height: 1.5; }
+.ask-more { margin-top: 4px; }
+.ask-close { margin-top: 14px; }
+.ask-thread .iv-msg { animation: ask-in .2s ease both; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ask-step, .ask-card, .ask-thread .iv-msg { animation: none; } .ask-card { transition: none; } }
+@media (max-width: 560px) { .ask-choices { grid-template-columns: 1fr; } }
 .md { display: grid; gap: 8px; min-width: 0; }
 .md > *, .md li > div { min-width: 0; }
 .md p { margin: 0; white-space: normal; overflow-wrap: anywhere; }
