@@ -87,10 +87,10 @@ export function PracticeInspector(p: {
             </label>
             <OutlineField design={d} node={node} setAttempt={setAttempt} />
             <div className="field-row">
-              <label className="field">AWS product<input type="text" placeholder="e.g. ElastiCache Redis" value={node.cloud?.aws ?? ''}
-                onChange={e => setAttempt(updateNode(d, node.id, { cloud: { ...node.cloud, aws: e.target.value || undefined } }), `aws:${node.id}`)} /></label>
-              <label className="field">GCP product<input type="text" placeholder="e.g. Memorystore Redis" value={node.cloud?.gcp ?? ''}
-                onChange={e => setAttempt(updateNode(d, node.id, { cloud: { ...node.cloud, gcp: e.target.value || undefined } }), `gcp:${node.id}`)} /></label>
+              <label className="field">AWS product<textarea rows={2} placeholder="e.g. ElastiCache Redis" value={node.cloud?.aws ?? ''}
+                onChange={e => setAttempt(updateNode(d, node.id, { cloud: { ...node.cloud, aws: e.target.value.replace(/\s*\n\s*/g, ' ') || undefined } }), `aws:${node.id}`)} /></label>
+              <label className="field">GCP product<textarea rows={2} placeholder="e.g. Memorystore Redis" value={node.cloud?.gcp ?? ''}
+                onChange={e => setAttempt(updateNode(d, node.id, { cloud: { ...node.cloud, gcp: e.target.value.replace(/\s*\n\s*/g, ' ') || undefined } }), `gcp:${node.id}`)} /></label>
             </div>
             <div className="field-row">
               <label className="field">Replicas<input type="number" min={1} value={node.replicas ?? ''} placeholder="1"

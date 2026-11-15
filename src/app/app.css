@@ -307,7 +307,9 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .errors-inline { color: var(--hard-t); }
 
 /* ---------- practice mode ---------- */
-.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.field-row > .field { min-width: 0; }
+.field-row select, .field-row input, .field-row textarea { width: 100%; min-width: 0; }
 .field select, .field textarea { font-weight: 400; }
 .field textarea { padding: 8px 10px; resize: vertical; }
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 8px 0; cursor: pointer; }
