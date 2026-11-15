@@ -207,3 +207,49 @@ export async function sendChat(c: AiConfig, messages: Message[], opts: SendOptio
     opts.signal?.removeEventListener('abort', onAbort)
   }
 }
+
+/** The request that lists the models this key can use. */
+export function buildModelsRequest(c: AiConfig): { url: string; headers: Record<string, string> } {
+  const key = c.keys[c.provider].trim()
+  if (c.provider === 'anthropic') {
+    return { url: 'https://api.anthropic.com/v1/models?limit=1000', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' } }
+  }
+  if (c.provider === 'gemini') return { url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', headers: { 'x-goog-api-key': key } }
+  const base = c.provider === 'openai' ? 'https://api.openai.com/v1' : c.provider === 'deepseek' ? 'https://api.deepseek.com' : c.baseUrl.trim().replace(/\/+$/, '')
+  return { url: `${base}/models`, headers: key ? { authorization: `Bearer ${key}` } : {} }
+}
+
+// OpenAI lists every model it has; these cannot answer a chat, so they are left out of the picker.
+const NOT_CHAT = /embed|whisper|tts|transcribe|dall-e|moderation|image|audio|realtime|davinci|babbage|sora|search/i
+
+/** Model ids that can chat, newest-looking names first. Empty when the reply is not a model list. */
+export function parseModels(provider: ProviderId, json: unknown): string[] {
+  const j = json as Record<string, any> | null
+  if (!j || typeof j !== 'object') return []
+  let ids: string[]
+  if (provider === 'gemini') {
+    ids = (Array.isArray(j.models) ? j.models : [])
+      .filter((m: any) => Array.isArray(m?.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map((m: any) => String(m.name ?? '').replace(/^models\//, ''))
+  } else {
+    ids = (Array.isArray(j.data) ? j.data : []).map((m: any) => String(m?.id ?? ''))
+    if (provider === 'openai') ids = ids.filter(id => !NOT_CHAT.test(id))
+  }
+  return [...new Set(ids.filter(Boolean))].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+}
+
+/** Ask the provider which models this key can use. Throws AiError with a message that is safe to show. */
+export async function listModels(c: AiConfig, opts: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {}): Promise<string[]> {
+  const { url, headers } = buildModelsRequest(c)
+  let res: Response
+  try { res = await (opts.fetchImpl ?? fetch)(url, { headers, signal: opts.signal, credentials: 'omit', referrerPolicy: 'no-referrer' }) }
+  catch { if (opts.signal?.aborted) throw new AiError('Cancelled.', 'cancelled'); throw describeNetworkError(c) }
+  const body = await res.text()
+  if (res.status === 404) throw new AiError(`${providerLabel(c)} has no model list at this address. Type the model name instead.`, 'http')
+  if (!res.ok) throw describeHttpError(c, res.status, body)
+  let json: unknown
+  try { json = JSON.parse(body) } catch { throw new AiError(`${providerLabel(c)} sent a reply that is not JSON.`, 'format') }
+  const ids = parseModels(c.provider, json)
+  if (!ids.length) throw new AiError(`${providerLabel(c)} returned no models this key can chat with. Type the model name instead.`, 'format')
+  return ids
+}

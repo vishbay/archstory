@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { askForJson } from './ask'
-import { AiError, buildRequest, describeHttpError, emptyConfig, forFeature, hostOf, isConfigured, modelFor, parseReply, sendChat, type AiConfig } from './providers'
+import { AiError, buildModelsRequest, buildRequest, listModels, parseModels, describeHttpError, emptyConfig, forFeature, hostOf, isConfigured, modelFor, parseReply, sendChat, type AiConfig } from './providers'
 import { AI_STORAGE_KEY, clearConfig, loadConfig, normalise, saveConfig } from './settings'
 
 const cfg = (over: Partial<AiConfig> = {}, key = 'sk-test-1234567890'): AiConfig => {
@@ -211,5 +211,34 @@ describe('askForJson', () => {
     const bodies: string[] = []
     const r = await asked([json(200, { content: [{ type: 'text', text: '{"good"' }], stop_reason: 'max_tokens' })], bodies)
     expect(r).toMatchObject({ ok: false, kind: 'invalid' }); expect(bodies).toHaveLength(1)
+  })
+})
+
+describe('model list', () => {
+  const cfg = (provider: AiConfig['provider']): AiConfig => ({ ...emptyConfig(), provider, keys: { ...emptyConfig().keys, [provider]: 'k-12345678' }, baseUrl: 'http://localhost:11434/v1/' })
+  it('builds a list request per provider', () => {
+    expect(buildModelsRequest(cfg('gemini'))).toEqual({ url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000', headers: { 'x-goog-api-key': 'k-12345678' } })
+    expect(buildModelsRequest(cfg('anthropic')).headers['x-api-key']).toBe('k-12345678')
+    expect(buildModelsRequest(cfg('openai')).url).toBe('https://api.openai.com/v1/models')
+    expect(buildModelsRequest(cfg('custom')).url).toBe('http://localhost:11434/v1/models')
+  })
+  it('keeps only Gemini models that can generate content, without the models/ prefix', () => {
+    const json = { models: [
+      { name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+      { name: 'models/text-embedding-9', supportedGenerationMethods: ['embedContent'] },
+    ] }
+    expect(parseModels('gemini', json)).toEqual(['gemini-4-hydrogen'])
+  })
+  it('drops OpenAI models that cannot chat and sorts newest first', () => {
+    const json = { data: [{ id: 'gpt-5' }, { id: 'text-embedding-3-small' }, { id: 'whisper-1' }, { id: 'gpt-10' }] }
+    expect(parseModels('openai', json)).toEqual(['gpt-10', 'gpt-5'])
+    expect(parseModels('anthropic', { data: [{ id: 'claude-a' }] })).toEqual(['claude-a'])
+    expect(parseModels('gemini', null)).toEqual([])
+  })
+  it('lists models through fetch and explains failures', async () => {
+    const ok = (async () => new Response(JSON.stringify({ data: [{ id: 'm1' }] }))) as typeof fetch
+    expect(await listModels(cfg('deepseek'), { fetchImpl: ok })).toEqual(['m1'])
+    const denied = (async () => new Response('{}', { status: 401 })) as typeof fetch
+    await expect(listModels(cfg('openai'), { fetchImpl: denied })).rejects.toMatchObject({ kind: 'auth' })
   })
 })

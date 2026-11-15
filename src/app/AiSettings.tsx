@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AiError, DEFAULT_BASE_URL, FEATURES, hostOf, isConfigured, PROVIDERS, PROVIDER_IDS, sendChat, type AiConfig, type Feature, type ProviderId } from '../ai/providers'
+import { AiError, DEFAULT_BASE_URL, FEATURES, hostOf, isConfigured, listModels, PROVIDERS, PROVIDER_IDS, sendChat, type AiConfig, type Feature, type ProviderId } from '../ai/providers'
 import { forgetAiKeys, getAiConfig, setAiConfig } from './useAiConfig'
 
 /** Connect your own API key. Optional: every AI step also works by copy and paste. */
@@ -8,15 +8,32 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState<AiConfig>(() => structuredClone(getAiConfig()))
   const [test, setTest] = useState<{ state: 'idle' | 'running' | 'ok' | 'fail'; text: string }>({ state: 'idle', text: '' })
   const [storageFailed, setStorageFailed] = useState(false)
+  // Models the provider says this key can use, per provider. Dropped when the key or server address changes.
+  const [lists, setLists] = useState<Partial<Record<ProviderId, string[]>>>({})
+  const [listing, setListing] = useState<{ state: 'idle' | 'running' | 'fail'; text: string }>({ state: 'idle', text: '' })
+  const models = lists[draft.provider] ?? null
   const ctl = useRef<AbortController | null>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
 
   const p = PROVIDERS[draft.provider]
   const set = (patch: Partial<AiConfig>) => { setDraft(d => ({ ...d, ...patch })); setTest({ state: 'idle', text: '' }) }
-  const setKey = (v: string) => set({ keys: { ...draft.keys, [draft.provider]: v } })
+  const setKey = (v: string) => { setLists(l => ({ ...l, [draft.provider]: undefined })); set({ keys: { ...draft.keys, [draft.provider]: v } }) }
   const setModel = (v: string) => set({ models: { ...draft.models, [draft.provider]: v } })
   const setFeatureModel = (f: Feature, v: string) => set({ featureModels: { ...draft.featureModels, [draft.provider]: { ...draft.featureModels[draft.provider], [f]: v } } })
   const anyFeature = FEATURES.some(f => draft.featureModels[draft.provider][f.id].trim())
+
+  const loadModels = async () => {
+    ctl.current?.abort(); ctl.current = new AbortController()
+    setListing({ state: 'running', text: '' })
+    try {
+      const ids = await listModels(draft, { signal: ctl.current.signal })
+      setLists(l => ({ ...l, [draft.provider]: ids })); setListing({ state: 'idle', text: '' })
+    } catch (e) {
+      if (e instanceof AiError && e.kind === 'cancelled') return
+      setListing({ state: 'fail', text: e instanceof AiError ? e.message : 'Could not load the model list.' })
+    }
+  }
+  const canList = (!p.needsKey || !!draft.keys[draft.provider].trim()) && (draft.provider !== 'custom' || !!draft.baseUrl.trim())
 
   const runTest = async () => {
     ctl.current?.abort(); ctl.current = new AbortController()
@@ -48,7 +65,7 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
 
       {draft.provider === 'custom' && (
         <label className="field">Server address
-          <input type="text" value={draft.baseUrl} spellCheck={false} placeholder={DEFAULT_BASE_URL} onChange={e => set({ baseUrl: e.target.value })} />
+          <input type="text" value={draft.baseUrl} spellCheck={false} placeholder={DEFAULT_BASE_URL} onChange={e => { setLists(l => ({ ...l, custom: undefined })); set({ baseUrl: e.target.value }) }} />
           <span className="muted small">Any server that speaks the OpenAI chat API, such as Ollama or LM Studio. It must allow requests from this page (for Ollama, set <code>OLLAMA_ORIGINS</code>).</span>
         </label>
       )}
@@ -59,17 +76,22 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
       </label>
 
       <label className="field">Model
-        <input type="text" value={draft.models[draft.provider]} spellCheck={false} onChange={e => setModel(e.target.value)} />
-        <span className="muted small">Used for everything unless you choose a model per feature below. Change it if your account uses a different model.</span>
+        <ModelPicker value={draft.models[draft.provider]} models={models} onChange={setModel} />
+        <span className="muted small">Used for everything unless you choose a model per feature below.</span>
       </label>
+      <div className="row">
+        <button onClick={loadModels} disabled={!canList || listing.state === 'running'}>{listing.state === 'running' ? 'Loading…' : models ? 'Reload models' : 'Load my models'}</button>
+        <span className="muted small">{models ? `${models.length} models this key can use.` : 'Asks the provider which models your key can use, so you can pick one instead of typing it.'}</span>
+      </div>
+      {listing.state === 'fail' && <p className="small errors-inline" role="alert">{listing.text}</p>}
 
       <details className="ai-features" open={anyFeature}>
         <summary>Use a different model for each feature</summary>
         <p className="muted small">Leave a box empty to use the main model. A common mix: a strong model for reviews and making designs, and a faster, cheaper one for the interviewer.</p>
         {FEATURES.map(f => (
           <label key={f.id} className="field ai-feature">{f.label} <span className="muted small">({f.hint})</span>
-            <input type="text" spellCheck={false} value={draft.featureModels[draft.provider][f.id]} placeholder={draft.models[draft.provider] || p.defaultModel}
-              onChange={e => setFeatureModel(f.id, e.target.value)} />
+            <ModelPicker value={draft.featureModels[draft.provider][f.id]} models={models} emptyLabel={`Main model (${draft.models[draft.provider] || p.defaultModel})`}
+              placeholder={draft.models[draft.provider] || p.defaultModel} onChange={v => setFeatureModel(f.id, v)} />
           </label>
         ))}
       </details>
@@ -106,5 +128,19 @@ export function AiSettings({ onClose }: { onClose: () => void }) {
         <button className="primary" onClick={save} disabled={!isConfigured(draft)}>Save</button>
       </div>
     </dialog>
+  )
+}
+
+/** A model name box that turns into a drop-down once the provider's model list is loaded. A saved name that is not in the list stays selectable. */
+function ModelPicker({ value, models, onChange, emptyLabel, placeholder }: {
+  value: string; models: string[] | null; onChange: (v: string) => void; emptyLabel?: string; placeholder?: string
+}) {
+  if (!models) return <input type="text" value={value} spellCheck={false} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
+  const options = value && !models.includes(value) ? [value, ...models] : models
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}>
+      {(emptyLabel !== undefined || !value) && <option value="">{emptyLabel ?? 'Choose a model'}</option>}
+      {options.map(id => <option key={id} value={id}>{id}{models.includes(id) ? '' : ' (not in the list)'}</option>)}
+    </select>
   )
 }
