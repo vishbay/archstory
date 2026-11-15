@@ -656,9 +656,8 @@ dialog.picker::backdrop { background: #0006; }
   font-weight: 700; font-size: 16px; color: var(--accent-text); border-radius: 999px; }
 .scn-heading .scn-btn:hover, .scn-heading .scn-btn[aria-expanded="true"] { background: var(--surface-2); border-color: var(--border); }
 .scn-bar .scn-btn { height: 30px; padding: 0 10px; max-width: 240px; font-size: 13px; }
-.scn-panel { position: absolute; z-index: 40; left: -10px; right: -10px; top: calc(100% + 6px); max-height: min(360px, 60vh); overflow: auto; margin: 0; padding: 6px; list-style: none;
+.scn-panel { position: fixed; z-index: 300; overflow: auto; margin: 0; padding: 6px; list-style: none;
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px #0003; }
-.scn-bar .scn-panel { left: 0; right: auto; width: min(360px, 90vw); top: auto; bottom: calc(100% + 8px); }
 .scn-panel li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
 .scn-panel li.hl { background: var(--surface-2); }
 .scn-panel li.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }

@@ -832,6 +832,11 @@
       "target": "waf",
       "kind": "security",
       "text": "Bots are the main threat to an on-sale. The web ACL on the CDN runs bot control, rate rules per IP and per account, and managed rule sets before the waiting room; admission tokens are signed and bound to one account; the barcode signing key never leaves KMS, so a stolen database dump cannot mint tickets."
+    },
+    {
+      "target": "room",
+      "kind": "security",
+      "text": "Fans sign in before they can join the line, so every admission token is bound to a real account. The room checks the sign-in once, then issues the signed admission token; booking trusts the account id the room forwards (X-Fan-Id) and never handles passwords. Signing in ahead of the on-sale keeps login traffic out of the spike, and one account per person is what makes the per account rate rules and ticket limits mean something."
     }
   ],
   "network": {

@@ -1098,6 +1098,11 @@
       "target": "lb",
       "kind": "note",
       "text": "The router's rules are the migration's feature flags: which paths and what share go to the cloud live in the rule set, changed by a reviewed script or the alarm's function, never by hand in the console, and every change is logged so a bad routing change can be traced and undone. A config service or feature-flag tool is only needed once routing depends on who the shopper is rather than on the path."
+    },
+    {
+      "target": "lb",
+      "kind": "security",
+      "text": "Sign-in is shared state, so settle it before the first migrated path. The monolith owns login at the start and keeps a server side session (the JSESSIONID cookie the legacy paths use), which a new service cannot read. Either have the monolith issue a short lived signed token at login that new services check with a public key, with no call back to the data centre, or share the session through a store both sides can read. Move login itself late, so shoppers are never signed out during a cutover, and keep cookie names and sticky routing stable across the router."
     }
   ],
   "questions": [

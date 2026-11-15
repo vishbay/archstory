@@ -403,6 +403,17 @@
       }
     },
     {
+      "id": "silo_cache",
+      "label": "Acme Dedicated Cache",
+      "kind": "cache",
+      "group": "silo",
+      "description": "One enterprise tenant; its own cache cluster, so nothing is shared with the pool. Keys still carry the tenant id",
+      "cloud": {
+        "aws": "ElastiCache Redis",
+        "gcp": "Memorystore Redis"
+      }
+    },
+    {
       "id": "silo_db",
       "label": "Acme Dedicated DB",
       "kind": "sql_db",
@@ -514,6 +525,10 @@
     {
       "from": "app",
       "to": "silo_db"
+    },
+    {
+      "from": "app",
+      "to": "silo_cache"
     },
     {
       "from": "app",
@@ -732,7 +747,7 @@
     {
       "id": "silo",
       "title": "Request from an enterprise tenant",
-      "summary": "Same code path; the catalog entry, carried in the signed context, routes Acme to its dedicated database, queue and workers.",
+      "summary": "Same code path; the catalog entry, carried in the signed context, routes Acme to its dedicated cache, database, queue and workers.",
       "steps": [
         {
           "from": "client",
@@ -809,6 +824,22 @@
           "kind": "req",
           "phase": "Handle request",
           "label": "to a healthy instance"
+        },
+        {
+          "from": "app",
+          "to": "silo_cache",
+          "kind": "req",
+          "phase": "Handle request",
+          "label": "GET acme:export-settings",
+          "detail": "tier=silo in the context selects Acme's own cache, the same way it selects Acme's own database and queue. Every key still starts with the tenant id, so the app's tenant guard works unchanged, but no entry, eviction or hot key is shared with pooled tenants."
+        },
+        {
+          "from": "silo_cache",
+          "to": "app",
+          "kind": "res",
+          "phase": "Handle request",
+          "label": "hit: csv, 40 columns",
+          "detail": "A hit skips a database read. On a miss the app reads Acme's database and fills this cache."
         },
         {
           "from": "app",
@@ -1065,6 +1096,11 @@
     {
       "kind": "security",
       "text": "Data stores sit in the private data subnet, reachable only from the app subnet. The managed pieces outside the VPC (queues, catalog, key service) are reached through VPC endpoints, so tenant data never crosses the internet. Silo databases are encrypted with the customer's own key in the cloud key service (AWS KMS / Cloud KMS), used by the database service itself, so no request path calls it; the gateway's context-signing key lives in the secrets manager and is rotated with an overlap window."
+    },
+    {
+      "target": "silo_cache",
+      "kind": "tradeoff",
+      "text": "Acme gets its own cache for the same reason it gets its own database: a shared Redis holds copies of Acme's records behind nothing but a key prefix, and a pooled tenant's evictions or hot keys could slow Acme (or the other way round). The price is an always-on cluster per enterprise tenant, so it belongs in the enterprise plan. A cheaper variant is a dedicated keyspace on shared nodes, which fixes the key boundary but not the shared memory."
     }
   ],
   "questions": [
@@ -1104,7 +1140,7 @@
     {
       "id": "silo-migration",
       "q": "A pooled tenant upgrades to the enterprise tier. How do you move them to a dedicated database without downtime?",
-      "a": "Copy their rows to the new database, then stream ongoing changes until it catches up. Fence the old copy so it rejects that tenant's writes, let the last changes arrive, verify, and flip the catalog entry. Gateways may still route to the old copy for up to the 60 s cache TTL, where writes fail with a retryable error instead of landing in the wrong place, so the tenant sees about a minute of retries. Keep the old copy until you are confident, then delete it.",
+      "a": "Copy their rows to the new database, then stream ongoing changes until it catches up. Fence the old copy so it rejects that tenant's writes, let the last changes arrive, verify, and flip the catalog entry. Gateways may still route to the old copy for up to the 60 s cache TTL, where writes fail with a retryable error instead of landing in the wrong place, so the tenant sees about a minute of retries. Keep the old copy until you are confident, then delete it. The tenant's new cache starts empty, so expect extra reads on the new database for a few minutes after the flip.",
       "topic": "operations",
       "targets": [
         "catalog",
