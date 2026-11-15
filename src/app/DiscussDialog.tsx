@@ -159,7 +159,7 @@ export function DiscussDialog({ design, flowId, onClose }: { design: Design; flo
         </div>
       )}
 
-      {mode === 'long' && (
+      {mode === 'long' && copied !== true && (
         <div className="ask-step" key="long">
           {changeWay}
           <p className="muted small">
@@ -175,12 +175,36 @@ export function DiscussDialog({ design, flowId, onClose }: { design: Design; flo
           {copied === false && <p className="small errors-inline">Could not reach the clipboard. The prompt is selected above: copy it with ⌘C / Ctrl+C.</p>}
           <div className="row end">
             <span className="spacer" />
-            <button className="primary" onClick={copy}>{copied ? 'Copied ✓ Now paste it into your assistant' : 'Copy prompt'}</button>
+            <button className="primary" onClick={copy}>Copy prompt</button>
           </div>
         </div>
       )}
 
-      <div className="row end ask-close"><button onClick={() => dialog.current?.close()}>Close</button></div>
+      {mode === 'long' && copied === true && (
+        <div className="ask-step ask-done" key="done">
+          <div className="ask-chat" aria-hidden="true">
+            <div className="ask-bubble you" style={{ animationDelay: '200ms' }}>Pasted: the whole {thing}, ready to discuss</div>
+            <div className="ask-bubble ai" style={{ animationDelay: '1100ms' }}>I have read it. What would you like to ask?</div>
+            <div className="ask-bubble you" style={{ animationDelay: '2100ms' }}>{question.trim() || 'Your question…'}</div>
+            <div className="ask-bubble ai typing" style={{ animationDelay: '3000ms' }}><i /><i /><i /></div>
+          </div>
+          <h4 className="ask-done-title">Prompt copied ✓ Continue in your chat app</h4>
+          <ol className="ask-done-steps">
+            <li>Open a new chat in <a href="https://chatgpt.com" target="_blank" rel="noreferrer noopener">ChatGPT</a>, <a href="https://claude.ai/new" target="_blank" rel="noreferrer noopener">Claude</a> or <a href="https://gemini.google.com/app" target="_blank" rel="noreferrer noopener">Gemini</a>.</li>
+            <li>Paste with ⌘V (Ctrl+V on Windows) and send.</li>
+            <li>{question.trim() ? 'It answers your question, then keep asking follow-ups there.' : 'It confirms it has read the ' + thing + '. Then ask your questions there.'}</li>
+          </ol>
+          <p className="muted small">You can close this window now. The conversation continues in that app, where a paid plan keeps your history.</p>
+          <div className="row wrap">
+            <button className="primary" onClick={() => dialog.current?.close()}>Done, close this window</button>
+            <button onClick={copy}>Copy again</button>
+            <span className="spacer" />
+            <button className="link" onClick={() => setCopied(null)}>← Back to options</button>
+          </div>
+        </div>
+      )}
+
+      {!(mode === 'long' && copied === true) && <div className="row end ask-close"><button onClick={() => dialog.current?.close()}>Close</button></div>}
     </dialog>
   )
 }
