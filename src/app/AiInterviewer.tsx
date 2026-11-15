@@ -72,15 +72,15 @@ export function AiInterviewer({ attempt, reference, checks, cloud, onSelectNode 
     save({ ...s, turns: s.turns.slice(0, -1) }); if (!last.hidden && last.text) setText(last.text); setError(null)
   }
   const start = () => {
-    const base = emptyInterview(interviewSystem(reference, includeRef, checks))
-    const { turn, sentSig } = nextTurn(base, 'start', '', attempt)
+    const base = emptyInterview(interviewSystem(reference, includeRef, checks, attempt))
+    const { turn, sentSig } = nextTurn(base, 'start', '', attempt, reference)
     const s = { ...base, turns: [turn], sentSig }
     save(s); ask(s)
   }
   const send = (kind: 'answer' | 'finish') => {
     if (!st || busy || (kind === 'answer' && !text.trim())) return
     rec.current?.stop(); if (canSpeak) speechSynthesis.cancel()
-    const { turn, sentSig } = nextTurn(st, kind, text, attempt)
+    const { turn, sentSig } = nextTurn(st, kind, text, attempt, reference)
     const s = { ...st, turns: [...st.turns, turn], sentSig }
     save(s); setText(''); ask(s, kind === 'finish')
   }

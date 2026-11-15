@@ -4,6 +4,7 @@
 import type { Design } from '../model/schema'
 import { noUsage, type Message, type Usage } from '../ai/providers'
 import type { Check } from './checks'
+import { customRequirements, extraRequirementsText } from './attempt'
 import { REASONING_TITLES, signature } from './review'
 
 export const MAX_TURNS = 20
@@ -28,7 +29,7 @@ export interface InterviewState {
 export const FINISH_REQUEST = 'I would like to stop here. Please end the interview now and give me feedback: what went well, what was weak, and three things to study next. Keep it under 250 words.'
 const START_REQUEST = 'I am ready. Please begin the interview.'
 
-export function interviewSystem(ref: Design, includeReference: boolean, checks: Check[]): string {
+export function interviewSystem(ref: Design, includeReference: boolean, checks: Check[], attempt?: Design): string {
   const r = ref.requirements
   const list = (xs: string[]) => xs.map(x => `- ${x}`).join('\n') || '- (none given)'
   const found = checks.filter(c => c.level === 'fail' || c.level === 'warn')
@@ -52,7 +53,7 @@ ${list(r.nonFunctional)}
 Scale:
 ${list(r.scale.map(s => `${s.label}: ${s.value}`))}
 
-# How to run the interview
+${attempt ? extraRequirementsText(attempt, ref) : ''}# How to run the interview
 - Ask one question at a time and keep each message under 80 words. Do not lecture and do not give the solution.
 - Open by asking the candidate to walk you through their approach so far. Then follow what they say: probe requirements they skipped, capacity estimates, bottlenecks, failure modes (a cache, a database or a whole availability zone going down), consistency, the data model, monitoring, and trade-offs.
 - Push back politely when an answer is vague. Acknowledge a good point in a few words, then move on.
@@ -72,10 +73,12 @@ ${list(found.map(c => `${c.title}${c.detail ? `: ${c.detail}` : ''}`))}
 }
 
 /** The learner's design in a compact text form for the interviewer. */
-export function designBrief(a: Design): string {
+export function designBrief(a: Design, ref?: Design): string {
   const reasoning = Object.entries(a.reasoning ?? {}).filter(([, v]) => v.trim())
+  const own = ref ? customRequirements(a, ref) : null
   const lines = [
-    a.nodes.length ? `Components:\n${a.nodes.map(n => `- ${n.id}: ${n.label} (${n.kind})${n.replicas && n.replicas > 1 ? `, ${n.replicas} replicas` : ''}${n.description ? `, ${n.description}` : ''}`).join('\n')}` : 'Components: none yet',
+    ...(own && (own.functional.length || own.nonFunctional.length) ? [`Requirements they added themselves:\n${[...own.functional.map(x => `- Functional: ${x}`), ...own.nonFunctional.map(x => `- Non-functional: ${x}`)].join('\n')}`] : []),
+    a.nodes.length ? `Components:\n${a.nodes.map(n => `- ${n.id}: ${n.label} (${n.kind})${n.replicas && n.replicas > 1 ? `, ${n.replicas} replicas` : ''}${n.group ? `, inside the outline "${a.groups.find(g => g.id === n.group)?.label ?? n.group}"` : ''}${n.description ? `, ${n.description}` : ''}`).join('\n')}` : 'Components: none yet',
     a.edges.length ? `Connections (caller -> callee):\n${a.edges.map(e => `- ${e.from} -> ${e.to}${e.async ? ' (async)' : ''}`).join('\n')}` : 'Connections: none yet',
     a.flows.length ? `Request flows they recorded:\n${a.flows.map(f => `- ${f.title}: ${f.steps.map(s => `${s.from} -> ${s.to} ${s.label}`).join(' | ') || '(no steps yet)'}`).join('\n')}` : 'Request flows: none recorded yet',
     ...(reasoning.length ? [`Their written notes:\n${reasoning.map(([k, v]) => `${REASONING_TITLES[k] ?? k}: ${v.trim()}`).join('\n')}`] : []),
@@ -89,10 +92,11 @@ export const emptyInterview = (system: string): InterviewState => ({ system, tur
 export const candidateTurns = (s: InterviewState) => s.turns.filter(t => t.role === 'user' && !t.hidden).length
 
 /** The next message from the learner, with the design attached only if it changed since the last one sent. */
-export function nextTurn(s: InterviewState, kind: 'start' | 'answer' | 'finish', text: string, design: Design): { turn: Turn; sentSig: string } {
-  const sig = signature(design), changed = sig !== s.sentSig
+export function nextTurn(s: InterviewState, kind: 'start' | 'answer' | 'finish', text: string, design: Design, ref?: Design): { turn: Turn; sentSig: string } {
+  const own = ref ? customRequirements(design, ref) : null
+  const sig = signature(design) + (own && (own.functional.length || own.nonFunctional.length) ? JSON.stringify(own) : ''), changed = sig !== s.sentSig
   const body = kind === 'start' ? START_REQUEST : kind === 'finish' ? FINISH_REQUEST : text.trim()
-  return { turn: { role: 'user', text: body, hidden: kind === 'start', attachment: changed ? designBrief(design) : undefined }, sentSig: sig }
+  return { turn: { role: 'user', text: body, hidden: kind === 'start', attachment: changed ? designBrief(design, ref) : undefined }, sentSig: sig }
 }
 
 /** The conversation as the provider sees it. */

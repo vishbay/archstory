@@ -152,6 +152,20 @@ aside.right { justify-self: end; width: 360px; margin: 10px 10px 10px 0; }
 .tag, .diff { font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
 .diff-easy { color: var(--easy-t); } .diff-medium { color: var(--medium-t); } .diff-hard { color: var(--hard-t); }
 details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summary { cursor: pointer; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.outline-field { display: grid; gap: 6px; }
+.outline-field > label { display: grid; gap: 4px; }
+.outline-new { display: grid; gap: 6px; }
+.outline-new input, .outline-new select { width: 100%; min-width: 0; }
+.req-own { margin-top: 8px; display: grid; gap: 6px; }
+.req-mine { list-style: none; margin-left: -18px; padding-right: 22px; position: relative; color: var(--text); }
+.req-tag { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 0 6px; margin-right: 2px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); }
+.req-x { position: absolute; right: 0; top: 0; padding: 0 4px; color: var(--muted); }
+.req-add { display: grid; gap: 6px; }
+.req-add .seg { display: flex; }
+.req-add .seg > button { flex: 1; font-size: 12.5px; }
+.req-add textarea { width: 100%; min-width: 0; font: inherit; font-size: 12.5px; }
+.req-add textarea { height: auto; min-height: 0; margin: 0; padding: 8px 10px; line-height: 1.45; resize: vertical; }
+.req-add-row { display: flex; align-items: center; gap: 8px; }
 .reqs { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); } .reqs li { margin: 3px 0; }
 .kv { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0; }
 .kv th { text-align: left; font-weight: 500; color: var(--muted); padding: 3px 8px 3px 0; white-space: nowrap; vertical-align: top; }
@@ -274,7 +288,8 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 .node.compact .node-name { font-size: 12px; }
 
 /* ---------- collapsible sidebar sections ---------- */
-.section { margin-top: 14px; }
+.section { margin-top: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.section:last-child { padding-bottom: 0; border-bottom: 0; }
 .section-head { width: 100%; justify-content: flex-start; gap: 6px; border: 0; background: none; padding: 4px 0; border-radius: 6px;
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--accent-text); }
 .section-head:hover:not(:disabled) { background: none; color: var(--accent-text); filter: brightness(1.15); }

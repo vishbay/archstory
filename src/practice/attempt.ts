@@ -1,6 +1,6 @@
 // A practice attempt is an ordinary archstory/v1 design that the learner builds up step by step.
 // These are pure edit operations so the UI stays thin and the rules are testable.
-import { findEdge, type Design, type DNode, type Flow, type Step, type StepKind } from '../model/schema'
+import { findEdge, type Design, type Group, type DNode, type Flow, type Step, type StepKind } from '../model/schema'
 import { kindInfo } from '../model/kinds'
 
 export const attemptId = (ref: Design) => `attempt-${ref.id}`
@@ -12,6 +12,31 @@ export function blankAttempt(ref: Design): Design {
     requirements: ref.requirements, network: ref.network,
     nodes: [], groups: [], edges: [], flows: [], notes: [], questions: [], reasoning: {},
   }
+}
+
+export type ReqKind = 'functional' | 'nonFunctional'
+export const REQ_MAX = 200
+
+/** Add a requirement of the learner's own to their answer. Blank or repeated text changes nothing. */
+export function addRequirement(d: Design, kind: ReqKind, text: string): Design {
+  const t = text.trim().replace(/\s+/g, ' ').slice(0, REQ_MAX)
+  if (!t || d.requirements[kind].includes(t)) return d
+  return { ...d, requirements: { ...d.requirements, [kind]: [...d.requirements[kind], t] } }
+}
+export const removeRequirement = (d: Design, kind: ReqKind, text: string): Design =>
+  ({ ...d, requirements: { ...d.requirements, [kind]: d.requirements[kind].filter(x => x !== text) } })
+
+/** The requirements the learner added: in their answer but not in the problem. */
+export const customRequirements = (d: Design, ref: Design): Record<ReqKind, string[]> => ({
+  functional: d.requirements.functional.filter(x => !ref.requirements.functional.includes(x)),
+  nonFunctional: d.requirements.nonFunctional.filter(x => !ref.requirements.nonFunctional.includes(x)),
+})
+
+/** A prompt block listing the learner's own requirements, or nothing when they added none. */
+export function extraRequirementsText(d: Design, ref: Design): string {
+  const c = customRequirements(d, ref)
+  const lines = [...c.functional.map(x => `- Functional: ${x}`), ...c.nonFunctional.map(x => `- Non-functional: ${x}`)]
+  return lines.length ? `Requirements the candidate added themselves (the problem does not state them): judge the design against them too, and say so if one is unreasonable or conflicts with the stated ones:\n${lines.join('\n')}\n\n` : ''
 }
 
 const uniqueId = (taken: string[], base: string) => {
@@ -30,14 +55,40 @@ export function addNode(d: Design, kind: string): { design: Design; id: string }
 export const updateNode = (d: Design, id: string, patch: Partial<DNode>): Design =>
   ({ ...d, nodes: d.nodes.map(n => (n.id === id ? { ...n, ...patch } : n)) })
 
+/** Outlines (groups) are only drawn around components, so one with no components left is dropped. */
+export const pruneGroups = (d: Design): Design => {
+  const used = new Set(d.nodes.map(n => n.group))
+  return d.groups.every(g => used.has(g.id)) ? d : { ...d, groups: d.groups.filter(g => used.has(g.id)) }
+}
+
+/** The kinds of outline, tenant first because that is the one a design most often needs to draw. */
+export const OUTLINE_KINDS: { kind: Group['kind']; label: string }[] = [
+  { kind: 'tenant', label: 'Tenant (for example an enterprise silo)' }, { kind: 'region', label: 'Region' }, { kind: 'zone', label: 'Availability zone' },
+  { kind: 'network', label: 'Network' }, { kind: 'cluster', label: 'Cluster' }, { kind: 'boundary', label: 'Boundary (trust, team or other)' },
+]
+
+/** Add an outline and put one component in it. Further components join it with setNodeGroup. */
+export function addOutline(d: Design, nodeId: string, label: string, kind: Group['kind']): { design: Design; id: string } {
+  const name = label.trim().replace(/\s+/g, ' ') || 'Outline'
+  const id = uniqueId(d.groups.map(g => g.id), name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'outline')
+  return { design: pruneGroups({ ...d, groups: [...d.groups, { id, label: name, kind }], nodes: d.nodes.map(n => (n.id === nodeId ? { ...n, group: id } : n)) }), id }
+}
+
+/** Put a component inside an outline, or take it out (undefined). An outline left empty disappears. */
+export const setNodeGroup = (d: Design, nodeId: string, group: string | undefined): Design =>
+  pruneGroups({ ...d, nodes: d.nodes.map(n => (n.id === nodeId ? { ...n, group } : n)) })
+
+export const updateGroup = (d: Design, id: string, patch: Partial<Pick<Group, 'label' | 'kind'>>): Design =>
+  ({ ...d, groups: d.groups.map(g => (g.id === id ? { ...g, ...patch } : g)) })
+
 export function removeNode(d: Design, id: string): Design {
-  return {
+  return pruneGroups({
     ...d,
     nodes: d.nodes.filter(n => n.id !== id),
     edges: d.edges.filter(e => e.from !== id && e.to !== id),
     flows: d.flows.map(f => ({ ...f, steps: f.steps.filter(s => s.from !== id && s.to !== id) })),
     notes: d.notes.filter(n => n.target !== id),
-  }
+  })
 }
 
 /** Adds a connection unless it would be a self-loop or duplicates an existing one (in either direction). */

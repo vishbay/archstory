@@ -1,5 +1,6 @@
 // Practice mode: build your own answer to a library or imported problem on the same tier-band canvas, record request flows
 // by clicking components, then check it against the reference design.
+import { CustomRequirements } from './CustomRequirements'
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { edgeId, TIERS, type Design } from '../model/schema'
@@ -265,6 +266,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
               {ref.meta.summary && <p className="small">{ref.meta.summary}</p>}
               {r.functional.length > 0 && <details open><summary>Functional</summary><ul className="reqs">{r.functional.map(x => <li key={x}>{x}</li>)}</ul></details>}
               {r.nonFunctional.length > 0 && <details open><summary>Non-functional</summary><ul className="reqs">{r.nonFunctional.map(x => <li key={x}>{x}</li>)}</ul></details>}
+              <CustomRequirements attempt={attempt} reference={ref} onChange={d => setAttempt(d)} />
               <NumbersHint />
             </Section>
             <Section id="p-attempts" title="Attempts" count={snaps.length}>

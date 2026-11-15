@@ -1,3 +1,4 @@
+import { OutlineField } from './OutlineField'
 import { HA_MODES, STEP_KINDS, type Design, type Flow } from '../model/schema'
 import { KINDS, type Cloud, nameOf } from '../model/kinds'
 import { addFlow, flipEdge, removeEdge, removeFlow, removeNode, removeStep, renameFlow, setEdgeAsync, stepProblem, updateNode, updateStep } from '../practice/attempt'
@@ -81,6 +82,7 @@ export function PracticeInspector(p: {
                 {Object.entries(KINDS).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
               </select>
             </label>
+            <OutlineField design={d} node={node} setAttempt={setAttempt} />
             <div className="field-row">
               <label className="field">AWS product<input type="text" placeholder="e.g. ElastiCache Redis" value={node.cloud?.aws ?? ''}
                 onChange={e => setAttempt(updateNode(d, node.id, { cloud: { ...node.cloud, aws: e.target.value || undefined } }), `aws:${node.id}`)} /></label>

@@ -1,5 +1,6 @@
 // AI review by copy and paste: a prompt that asks any assistant for a structured review, and a parser for its answer.
 // The same prompt and format will back an optional API integration later.
+import { extraRequirementsText } from './attempt'
 import { z } from 'zod'
 import type { Design } from '../model/schema'
 import type { Check } from './checks'
@@ -54,7 +55,7 @@ export function parseReview(json: unknown, attempt: Design): ReviewParse {
 
 /** Cheap fingerprint of an answer, to tell when a stored review no longer matches it. */
 export function signature(d: Design): string {
-  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : [])])   // old answers keep their signature
+  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : []), ...(d.groups.length ? [d.groups] : [])])   // old answers keep their signature
   let h = 5381
   for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i)
   return (h >>> 0).toString(36)
@@ -80,7 +81,7 @@ const EXAMPLE: Review = {
 export function reviewPrompt(attempt: Design, ref: Design, checks: Check[], includeReference: boolean): string {
   const r = ref.requirements
   const list = (xs: string[]) => xs.map(x => `- ${x}`).join('\n')
-  const answer = { nodes: attempt.nodes, edges: attempt.edges, flows: attempt.flows, notes: attempt.notes, ...(attempt.regions && { regions: attempt.regions }) }
+  const answer = { nodes: attempt.nodes, ...(attempt.groups.length && { groups: attempt.groups }), edges: attempt.edges, flows: attempt.flows, notes: attempt.notes, ...(attempt.regions && { regions: attempt.regions }) }
   const multiRegion = !!(ref.regions || attempt.regions)
   const reasoning = Object.entries(attempt.reasoning ?? {}).filter(([, v]) => v.trim())
   const found = checks.filter(c => c.level === 'fail' || c.level === 'warn')
@@ -112,7 +113,7 @@ ${list(r.nonFunctional)}
 Scale:
 ${list(r.scale.map(s => `${s.label}: ${s.value}`))}
 
-# The candidate's design
+${extraRequirementsText(attempt, ref)}# The candidate's design
 JSON in the archstory/v1 format: nodes are components, edges point from caller to callee, and flows are request paths the candidate walked through step by step.
 \`\`\`json
 ${JSON.stringify(answer)}
