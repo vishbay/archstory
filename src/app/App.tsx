@@ -223,6 +223,7 @@ export function App() {
             ))}
           </div>
         )}
+        {mode === 'home' && <button className="ghost" onClick={() => setMode('guide')} title="How to approach a system design interview">Interview guide</button>}
         <AiTopButton />
         <button className="icon ghost" aria-label={`Theme: ${themeNow}. Switch to ${themeNext}`} title={`Theme: ${themeNow}. Click for ${themeNext}`} onClick={theme.toggle}>{themeIcon}</button>
         {!homeLike && !stacked && (

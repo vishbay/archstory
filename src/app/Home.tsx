@@ -121,7 +121,6 @@ export function Home({ library, mine, protocols = [], onWatch, onExplore, onPrac
               <button className="big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
               {protocols.length > 0 && <button className="big" onClick={() => onWatch?.(protocols[0].id)}>Under the hood</button>}
               <button className="link" onClick={onTour}>Take the 1-minute tour</button>
-              <button className="link" onClick={onGuide}>How to approach an interview</button>
             </div>
             <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span><span title="Nothing is collected: no analytics or trackers. Your work stays in this browser, and AI calls go only to the provider you connect.">✓ No tracking</span></p>
           </div>
