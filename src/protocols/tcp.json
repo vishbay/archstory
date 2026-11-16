@@ -415,12 +415,12 @@
           "kind": "local",
           "phase": "Round 1",
           "label": "cwnd = 10 segments",
-          "detail": "A new connection starts in slow start with an initial congestion window (cwnd) of 10 segments (RFC 6928). The sender may have at most min(cwnd, the receiver's window) bytes unacknowledged; we assume the receiver's window is large and is never the limit.",
+          "detail": "A new connection starts in slow start with an initial congestion window (cwnd) of 10 segments (RFC 6928 allows this; Linux uses it). The sender may have at most min(cwnd, the receiver's window) bytes unacknowledged; we assume the receiver's window is large and is never the limit.",
           "fields": [
             {
               "name": "cwnd",
               "value": "10 x MSS = 14,600 bytes",
-              "note": "RFC 6928: min(10 x MSS, max(2 x MSS, 14,600)) with an MSS of 1,460"
+              "note": "RFC 6928 allows up to min(10 x MSS, max(2 x MSS, 14,600)), which is 14,600 with an MSS of 1,460; it is optional, and Linux uses it"
             },
             {
               "name": "ssthresh",
@@ -685,7 +685,7 @@
           "kind": "local",
           "phase": "Send 9 segments",
           "label": "cwnd = 10 MSS, 9 segments to send",
-          "detail": "The connection is open and the client's 100-byte request (seq 1001 to 1100) has arrived, as in the first scenario. The response is 13,140 bytes: 9 full segments of 1,460 bytes, numbered from the server's ISN 5000, so the first byte is 5001. A fresh connection starts with a congestion window of 10 segments (RFC 6928), enough to send all nine at once. The clock starts here.",
+          "detail": "The connection is open and the client's 100-byte request (seq 1001 to 1100) has arrived, as in the first scenario. The response is 13,140 bytes: 9 full segments of 1,460 bytes, numbered from the server's ISN 5000, so the first byte is 5001. A fresh connection starts with a congestion window of 10 segments (RFC 6928 allows this; Linux uses it), enough to send all nine at once. The clock starts here.",
           "state": {
             "client": "ESTABLISHED",
             "server": "ESTABLISHED"
@@ -1409,7 +1409,7 @@
     },
     {
       "kind": "security",
-      "text": "Initial sequence numbers are hard to guess (RFC 6528), so an attacker who cannot see the traffic cannot inject data or resets into a connection by guessing where its numbers are."
+      "text": "Initial sequence numbers are hard to guess (RFC 6528), so an attacker who cannot see the traffic has a much harder time injecting data or resets into a connection by guessing where its numbers are. RFC 6528 reduces the chance of a correct guess; it does not remove it."
     }
   ],
   "questions": [
