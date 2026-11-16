@@ -1,11 +1,12 @@
 // A page on how to approach a system design interview: the flow, what to clarify, how to think, and how to step through it.
 // Its phases and minutes come from the timed practice mode, so the guide and the clock agree.
 import { useState } from 'react'
-import { EstimateChain, EvolveDiagram, LatencyScale, LoopRing, PhasePipeline, TierWalk } from './GuideVisuals'
-import { CLARIFY, GUIDE_PHASES, LOOP, MISTAKES, NUMBERS, PATTERNS, PRINCIPLES, TRICKS } from '../practice/guide'
+import { EstimateChain, EvolveDiagram, LatencyScale, LoopRing, PhasePipeline, ProcessSteps, TierWalk } from './GuideVisuals'
+import { AI_CAVEATS, CLARIFY, FRAMEWORKS, GUIDE_PHASES, LEVELS, LOOP, MISTAKES, NUMBERS, PATTERNS, PRINCIPLES, TRICKS } from '../practice/guide'
 
 const SECTIONS = [
   { id: 'g-shape', title: 'The shape of 45 minutes' },
+  { id: 'g-frameworks', title: 'Frameworks you will meet' },
   { id: 'g-think', title: 'How to think' },
   { id: 'g-clarify', title: 'What to clarify' },
   { id: 'g-steps', title: 'Step through it' },
@@ -14,6 +15,8 @@ const SECTIONS = [
   { id: 'g-numbers', title: 'Numbers to know' },
   { id: 'g-patterns', title: 'Patterns and their cost' },
   { id: 'g-tricks', title: 'Tricks that help' },
+  { id: 'g-levels', title: 'What is expected by level' },
+  { id: 'g-ai', title: 'How an AI approaches design' },
   { id: 'g-mistakes', title: 'Mistakes to avoid' },
   { id: 'g-practise', title: 'Practise it here' },
 ]
@@ -58,6 +61,19 @@ export function InterviewGuide({ onPractice, onExplore, onHome }: { onPractice: 
             <p className="muted small">{total} minutes in all. Click a phase to jump to what to do in it.</p>
             <h3 className="gv-sub">What each phase leaves you holding</h3>
             <PhasePipeline onPick={i => { setAt(i); go('g-steps') }} />
+          </section>
+
+          <section id="g-frameworks" className="guide-sec">
+            <h2>Frameworks you will meet elsewhere</h2>
+            <p>Most guides teach the same arc with different names. Here are two common ones lined up against the phases above. They are summaries from memory, and each source uses its own words.</p>
+            <div className="guide-table gv-fw" role="table" aria-label="Frameworks compared">
+              <div className="guide-tr head" role="row"><span role="columnheader">This guide</span><span role="columnheader">Four-step guides</span><span role="columnheader">Entities, API, design guides</span></div>
+              {FRAMEWORKS.map(f => {
+                const p = GUIDE_PHASES.find(x => x.id === f.phase)!
+                return <div key={f.phase} className="guide-tr" role="row"><b role="cell">{p.title} <em>{p.minutes} min</em></b><span role="cell">{f.fourStep}</span><span role="cell">{f.entityFirst}</span></div>
+              })}
+            </div>
+            <p className="muted small">Use whichever you find easiest to remember. Interviewers care that you have a clear order and say it, not which name it has.</p>
           </section>
 
           <section id="g-think" className="guide-sec">
@@ -170,6 +186,25 @@ export function InterviewGuide({ onPractice, onExplore, onHome }: { onPractice: 
                   <p>{t.body}</p>
                 </article>
               ))}
+            </div>
+          </section>
+
+          <section id="g-levels" className="guide-sec">
+            <h2>What is expected by level</h2>
+            <p>The same question is judged against a different bar depending on the role. These are rough bars, and titles and expectations differ between companies, so ask your recruiter what level the interview is for.</p>
+            <div className="guide-table gv-levels" role="table" aria-label="Expectations by level">
+              <div className="guide-tr head" role="row"><span role="columnheader">Level</span><span role="columnheader">What they look for</span><span role="columnheader">How you show it</span></div>
+              {LEVELS.map(l => <div key={l.level} className="guide-tr" role="row"><b role="cell">{l.level}</b><span role="cell">{l.looksFor}</span><span role="cell">{l.show}</span></div>)}
+            </div>
+          </section>
+
+          <section id="g-ai" className="guide-sec">
+            <h2>How an AI approaches system design questions</h2>
+            <p>This is the sequence an AI like Claude follows on a design problem, with the Ticket Booking design from the library as the example. It is a good process for a person too, because every step is something you can say out loud.</p>
+            <ProcessSteps />
+            <h3 className="gv-sub">What to take from it, and what to be careful of</h3>
+            <div className="guide-cards">
+              {AI_CAVEATS.map(c => <article key={c.title} className="guide-card"><h3>{c.title}</h3><p>{c.body}</p></article>)}
             </div>
           </section>
 

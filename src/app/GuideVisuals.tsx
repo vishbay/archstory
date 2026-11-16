@@ -1,7 +1,7 @@
 // Small pictures for the interview guide: a phase pipeline, a design growing in steps, the decision loop, a latency scale and an estimate chain.
 // All inline SVG or plain HTML, coloured by the page's theme variables, so they follow light and dark.
 import { TIER_INFO } from '../model/kinds'
-import { ESTIMATE_CHAIN, EVOLVE, GUIDE_PHASES, LATENCIES, LOOP, TIER_ORDER, TIER_WALK, type MiniStage } from '../practice/guide'
+import { ESTIMATE_CHAIN, EVOLVE, AI_STEPS, GUIDE_PHASES, LATENCIES, LOOP, TIER_ORDER, TIER_WALK, type MiniStage } from '../practice/guide'
 import { MINI, miniGeometry } from '../practice/guideLayout'
 
 /** What each phase leaves you holding, as a row of steps joined by arrows. */
@@ -131,5 +131,23 @@ export function TierWalk() {
         ))}
       </div>
     </div>
+  )
+}
+
+/** The seven steps of working through a design, each with what it looked like on the Ticket Booking problem. */
+export function ProcessSteps() {
+  return (
+    <ol className="gv-process" aria-label="How a design gets built">
+      {AI_STEPS.map((s, i) => (
+        <li key={s.title}>
+          <span className="gv-dot">{i + 1}</span>
+          <div>
+            <b>{s.title}</b>
+            <p>{s.text}</p>
+            <span className="gv-eg"><em>In Ticket Booking</em>{s.example}</span>
+          </div>
+        </li>
+      ))}
+    </ol>
   )
 }

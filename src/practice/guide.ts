@@ -177,3 +177,39 @@ export const TRICKS: Trick[] = [
   { title: 'Two options per decision', body: 'Name two real options before you pick one, even when one is clearly better. It shows judgement, not recall.' },
   { title: 'Summarise each phase in a sentence', body: 'Finish requirements, estimates and the design with one line: "So the key numbers are ...". It gives the interviewer a chance to correct you early.' },
 ]
+
+export interface Level { level: string; looksFor: string; show: string }
+/** Rough bars only: titles and expectations differ between companies. */
+export const LEVELS: Level[] = [
+  { level: 'Early career', looksFor: 'A working design built from standard parts, and a clear explanation of how it handles a request.', show: 'Clarify the problem, draw an end-to-end path, explain each box in plain words, and take hints well.' },
+  { level: 'Mid and senior', looksFor: 'Ownership of the conversation, numbers that drive choices, depth in one or two areas, trade-offs and failure handled without being asked.', show: 'Lead the phases, estimate and use the result, go deep where it matters, and say what each choice costs.' },
+  { level: 'Staff and above', looksFor: 'Judgement about an ambiguous problem: what to build first, what to leave out, and how it is run, rolled out and changed over years.', show: 'Challenge or reshape the requirements, weigh cost and operability, plan a migration, and choose where to spend the time.' },
+]
+
+export interface FrameworkRow { phase: string; fourStep: string; entityFirst: string }
+/** Widely shared step-by-step guides, lined up against the phases of the timer. Summaries, not quotations. */
+export const FRAMEWORKS: FrameworkRow[] = [
+  { phase: 'requirements', fourStep: '1. Understand the problem and set the scope', entityFirst: 'Requirements' },
+  { phase: 'estimates', fourStep: 'Inside steps 1 and 2: back-of-envelope numbers', entityFirst: 'Done when a number is needed' },
+  { phase: 'interface', fourStep: 'Inside step 2: API design and the data model', entityFirst: 'Core entities, then API' },
+  { phase: 'design', fourStep: '2. Propose a high-level design and get buy-in', entityFirst: 'High-level design' },
+  { phase: 'deep', fourStep: '3. Design deep dive', entityFirst: 'Deep dives' },
+  { phase: 'wrap', fourStep: '4. Wrap up', entityFirst: 'A closing summary' },
+]
+
+export interface AiStep { title: string; text: string; example: string }
+/** How an AI works through a design problem, with the Ticket Booking design as the running example. */
+export const AI_STEPS: AiStep[] = [
+  { title: 'Find the hard part', text: 'Every problem has one core tension. Name it first, and design around it.', example: 'Never sell the same seat twice while millions arrive at once.' },
+  { title: 'Turn requirements into numbers and rules that must never break', text: 'Write the load figures, and the invariants that no failure may violate.', example: '5 million fans for 50,000 seats, a hold in under 500 ms, and a seat sold at most once.' },
+  { title: 'List entities and access patterns before choosing storage', text: 'How data is looked up decides the datastore, not the other way round.', example: 'Seats by event and section, holds that expire, bookings by id: a relational store for seats and a cache for holds.' },
+  { title: 'Draw the smallest path, then walk a read and a write', text: 'Start with what must exist, and trace one request each way.', example: 'Fan, booking service, database. Walk "hold a seat" and "pay".' },
+  { title: 'Attack it', text: 'Try ten times the load, a failed part, two requests at once, abuse and cost. Fix only what breaks.', example: 'Two fans click the same seat. A cache failover loses a hold. The payment provider times out.' },
+  { title: 'Record each decision: need, options, pick, cost', text: 'Say what you chose, what you gave up, and how the cost is contained.', example: 'Holds in Redis are fast and expire on their own. A failover can lose one, so the seat row in the database still guarantees a single sale.' },
+  { title: 'Check the details you feel sure about', text: 'Look up or test any limit, default or feature you are relying on. A plausible detail that is wrong is how a good-looking design fails.', example: 'Confirm what a service really supports before you build on it.' },
+]
+export const AI_CAVEATS: Trick[] = [
+  { title: 'Copy the process, not the confidence', body: 'An AI recalls patterns quickly and follows a checklist without getting flustered, and it can also state a wrong specific in a confident tone. Verify numbers and limits, and say your assumptions out loud.' },
+  { title: 'Ask what an AI cannot know', body: 'It does not know your interviewer, your company or what they care about. Ask for their priority and their constraints, then design to those.' },
+  { title: 'Use an AI as a sparring partner', body: 'Ask it to interview you, challenge a choice, or find the weakest part of your design. ArchStory\'s Ask AI, AI interviewer and review do this with your own key.' },
+]

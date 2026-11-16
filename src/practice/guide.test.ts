@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { InterviewGuide } from '../app/InterviewGuide'
 import { TIER_INFO } from '../model/kinds'
-import { CLARIFY, ESTIMATE_CHAIN, EVOLVE, GUIDE_PHASES, LATENCIES, LOOP, MISTAKES, NUMBERS, PATTERNS, phaseGuide, PRINCIPLES, TIER_ORDER, TIER_WALK, TRICKS } from './guide'
+import { AI_CAVEATS, AI_STEPS, CLARIFY, ESTIMATE_CHAIN, FRAMEWORKS, LEVELS, EVOLVE, GUIDE_PHASES, LATENCIES, LOOP, MISTAKES, NUMBERS, PATTERNS, phaseGuide, PRINCIPLES, TIER_ORDER, TIER_WALK, TRICKS } from './guide'
 import { MINI, miniGeometry } from './guideLayout'
 import { PHASES } from './timed'
 
@@ -14,7 +14,7 @@ describe('interview guide content', () => {
     for (const p of PHASES) { const g = phaseGuide(p.id); expect(g.do.length, p.id).toBeGreaterThanOrEqual(3); expect(g.say, p.id).toBeTruthy(); expect(g.avoid, p.id).toBeTruthy() }
   })
   it('uses no em dashes anywhere', () => {
-    const all = JSON.stringify([PRINCIPLES, CLARIFY, GUIDE_PHASES, LOOP, NUMBERS, PATTERNS, MISTAKES, TIER_WALK, TRICKS])
+    const all = JSON.stringify([PRINCIPLES, CLARIFY, GUIDE_PHASES, LOOP, NUMBERS, PATTERNS, MISTAKES, TIER_WALK, TRICKS, LEVELS, FRAMEWORKS, AI_STEPS, AI_CAVEATS])
     expect(all).not.toContain('—')
   })
   it('asks questions that each say how the answer changes the design', () => {
@@ -45,6 +45,19 @@ describe('tiers and tricks', () => {
   })
 })
 
+describe('levels, frameworks and the AI process', () => {
+  it('lines the frameworks up with every timed phase, in order', () => {
+    expect(FRAMEWORKS.map(f => f.phase)).toEqual(PHASES.map(p => p.id))
+    for (const f of FRAMEWORKS) { expect(f.fourStep).toBeTruthy(); expect(f.entityFirst).toBeTruthy() }
+  })
+  it('has three levels and a seven step process, each step with an example', () => {
+    expect(LEVELS).toHaveLength(3)
+    expect(AI_STEPS).toHaveLength(7)
+    for (const s of AI_STEPS) { expect(s.text.length, s.title).toBeGreaterThan(20); expect(s.example.length, s.title).toBeGreaterThan(20) }
+    expect(AI_CAVEATS.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
 describe('interview guide page', () => {
   it('renders the sections, the phase steps and both practice buttons', () => {
     const html = renderToStaticMarkup(createElement(InterviewGuide, { onPractice: () => {}, onExplore: () => {}, onHome: () => {} }))
@@ -59,6 +72,8 @@ describe('interview guide page', () => {
     expect(html.match(/Back to home/g)).toHaveLength(2)
     expect(html).toContain('Walk the tiers')
     expect(html).toContain('Tricks that help')
+    for (const t of ['Frameworks you will meet elsewhere', 'What is expected by level', 'How an AI approaches system design questions']) expect(html).toContain(t)
+    expect(html.match(/In Ticket Booking/g)).toHaveLength(AI_STEPS.length)
     expect(html.match(/class="gv-tier-card"/g)).toHaveLength(TIER_ORDER.length)
     expect(html).not.toContain('—')
   })
