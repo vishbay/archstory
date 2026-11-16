@@ -286,7 +286,7 @@
           "kind": "req",
           "phase": "Ship",
           "label": "create shipment, order 7",
-          "detail": "Step 3 asks Shipping to create the shipment. Charging before shipping is deliberate: the step most likely to fail or to be hard to undo comes late, and steps that cannot be undone, such as handing a parcel to a carrier, should come after every step that can fail.",
+          "detail": "Step 3 asks Shipping to create the shipment. Charging before shipping is deliberate: the step that is hardest to undo comes late, and steps that cannot be undone, such as handing a parcel to a carrier, should come after every step that can fail.",
           "state": {
             "shipping": "Created"
           },

@@ -1611,7 +1611,7 @@
     {
       "target": "coord",
       "kind": "tradeoff",
-      "text": "Latency is dictated by the slowest of the R (or W) replicas that must answer (section 4.5), which is why R and W are usually below N. W = N makes writes slow and unavailable when any replica is down but lets R = 1 read the newest value; R = N does the opposite; W = 1 is always writeable but gives the thinnest durability window. The common Dynamo configuration reported in the paper is (N, R, W) = (3, 2, 2)."
+      "text": "Latency is dictated by the slowest of the R (or W) replicas that must answer (section 4.5), which is why R and W are usually below N. W = N makes writes slow and unavailable when any replica is down but lets R = 1 read the newest value; R = N does the opposite; W = 1 is always writeable but has the widest vulnerability window for durability. The common Dynamo configuration reported in the paper is (N, R, W) = (3, 2, 2)."
     },
     {
       "target": "r3",

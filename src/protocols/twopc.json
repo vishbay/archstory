@@ -967,7 +967,7 @@
     {
       "target": "pb",
       "kind": "note",
-      "text": "XA is the standard interface between a transaction manager (the coordinator) and resource managers such as databases and message queues, with calls for prepare, commit, rollback and recovery. A heuristic decision is when an operator or a timeout makes an in-doubt participant commit or roll back by itself. XA reports it with codes such as XA_HEURCOM (heuristically committed), XA_HEURRB (rolled back), XA_HEURMIX (part committed, part rolled back) and XA_HEURHAZ (outcome unknown). If the choice differs from the coordinator's decision, atomicity is broken and has to be repaired by hand."
+      "text": "XA is the standard interface between a transaction manager (the coordinator) and resource managers such as databases and message queues, with calls for prepare, commit, rollback and recovery. A heuristic decision is when an operator or a timeout makes an in-doubt participant commit or roll back by itself. XA reports it with codes such as XA_HEURCOM (heuristically committed), XA_HEURRB (rolled back), XA_HEURMIX (part committed, part rolled back) and XA_HEURHAZ (may have been heuristically completed, outcome unclear). If the choice differs from the coordinator's decision, atomicity is broken and has to be repaired by hand."
     },
     {
       "target": "pa",
@@ -1025,7 +1025,7 @@
         "pb"
       ],
       "q": "Why must participant handlers be idempotent?",
-      "a": "Messages can be lost, and the coordinator resends PREPARE and COMMIT until it hears back, so a participant can see the same message several times. A repeated COMMIT for a transaction it already committed must simply be acknowledged, and a repeated PREPARE must give the same vote. Without that, retries would corrupt data or deadlock recovery."
+      "a": "Messages can be lost, and the coordinator may retry PREPARE before it decides (or give up and abort) and resends COMMIT until every ACK arrives, so a participant can see the same message several times. A repeated COMMIT for a transaction it already committed must simply be acknowledged, and a repeated PREPARE must give the same vote. Without that, retries would corrupt data or deadlock recovery."
     },
     {
       "id": "vs-consensus",
