@@ -28,7 +28,7 @@
       "A TTL cannot be taken back: a changed record reaches users only as old copies expire, so lower the TTL well before a planned change",
       "Only the authoritative server sets AA; an answer from a resolver's cache is not authoritative",
       "Classic DNS over UDP is neither encrypted nor signed: anyone on the path can read the names, and a spoofer only has to guess the 16-bit ID and the source port (DNSSEC signs answers; DNS over TLS or HTTPS encrypts the hop to the resolver)",
-      "An answer too big for UDP comes back with TC (truncated) set and the client retries over TCP, which RFC 7766 requires every implementation to support"
+      "An answer too big for UDP comes back with TC (truncated) set and the client retries over TCP, which RFC 7766 requires every general-purpose implementation to support"
     ],
     "scale": [
       {
@@ -770,7 +770,7 @@
         "resolver"
       ],
       "q": "DNS uses UDP. When does it use TCP instead?",
-      "a": "When an answer does not fit in a UDP response, the server sets TC (truncated) and the client repeats the query over TCP; large DNSSEC responses and long record sets cause this. Zone transfers between name servers also use TCP, and RFC 7766 makes TCP support mandatory for all implementations. DNS over TLS runs on TCP too, on port 853."
+      "a": "When an answer does not fit in a UDP response, the server sets TC (truncated) and the client repeats the query over TCP; large DNSSEC responses and long record sets cause this. Zone transfers between name servers also use TCP, and RFC 7766 makes TCP support mandatory for all general-purpose implementations. DNS over TLS runs on TCP too, on port 853."
     },
     {
       "id": "fast",

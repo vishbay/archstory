@@ -1432,7 +1432,7 @@
         "c"
       ],
       "q": "Why does SWIM probe indirectly before suspecting a node?",
-      "a": "A missing ack can be caused by the path between the two members, not by the target. Asking k other members to ping the target and relay the ack gives k more independent paths, so a healthy node is blamed only if all of them fail. It costs k extra messages only in the rare period where the direct ping fails."
+      "a": "A missing ack can be caused by the path between the two members, not by the target. Asking k other members to ping the target and relay the ack gives k more independent paths, so a healthy node is blamed only if all of them fail. It costs extra messages (a ping-req, a ping and an ack per prober) only in a period where the direct ping fails."
     },
     {
       "id": "suspicion",

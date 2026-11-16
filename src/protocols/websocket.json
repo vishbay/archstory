@@ -145,7 +145,7 @@
             {
               "name": "Sec-WebSocket-Version",
               "value": "13",
-              "note": "The only version in use; a server that does not support it answers 426 with the versions it does"
+              "note": "The only version in use; a server that does not support it sends an HTTP error such as 426 with the versions it does support"
             },
             {
               "name": "Origin",

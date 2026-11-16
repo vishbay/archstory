@@ -611,7 +611,7 @@
           "to": "lb",
           "kind": "local",
           "label": "Drain B: in-flight work may finish",
-          "detail": "Requests B is already working on are allowed to finish, up to a drain timeout (AWS calls it the deregistration delay, 300 seconds by default). The same mechanism is what makes a deploy safe: deregister an instance, wait for it to drain, then stop it.",
+          "detail": "Requests B is already working on are allowed to finish, up to a drain timeout. AWS calls it the deregistration delay (300 seconds by default) and applies it when a target is deregistered; whether a target that merely failed its checks is drained is product specific. Deregistering is also what makes a deploy safe: deregister an instance, wait for it to drain, then stop it.",
           "state": {
             "b": "draining"
           },

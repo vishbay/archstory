@@ -279,7 +279,7 @@
           "kind": "req",
           "phase": "Walk clockwise",
           "label": "lookup position 53",
-          "detail": "The client sends the lookup to machine A, whichever machine it happens to reach. Some rings (Chord) find the owner by passing the request from successor to successor, as drawn here. Dynamo and Cassandra keep the whole ring on every machine and jump to the owner in one hop. The ownership rule is the same.",
+          "detail": "The client sends the lookup to machine A, whichever machine it happens to reach. Chord in its basic form finds the owner by passing the request from successor to successor, as drawn here (the full protocol adds finger tables to skip ahead). Dynamo and Cassandra keep the whole ring on every machine and jump to the owner in one hop. The ownership rule is the same.",
           "fields": [
             {
               "name": "position",
@@ -765,7 +765,7 @@
     {
       "id": "vnodes",
       "title": "Virtual nodes",
-      "summary": "Each machine owns three tokens, so load evens out, and when D fails its keys spread over two survivors instead of one.",
+      "summary": "Each machine owns three tokens, so load evens out, and when D is removed its keys spread over two survivors instead of one.",
       "steps": [
         {
           "from": "a",
@@ -1004,14 +1004,14 @@
           "to": "client",
           "kind": "res",
           "label": "k2 value from C",
-          "detail": "The lookup succeeds through a replica. With the ring updated, C is now the owner of k2.",
+          "detail": "The lookup succeeds through a replica. While D is down, C serves k2 as the next replica. If D were removed for good, C would become the owner.",
           "fields": [
             {
               "name": "key",
               "value": "k2"
             },
             {
-              "name": "owner now",
+              "name": "serves k2 now",
               "value": "C"
             }
           ]
@@ -1021,8 +1021,8 @@
           "to": "c",
           "kind": "local",
           "phase": "The cost",
-          "label": "D's 2 keys went to C and B, not to one machine",
-          "detail": "D owned k2 and k5. With its tokens gone, k2 passes to the next token clockwise, 35 (C), and k5 to the next after 58, which is 62 (B). So the load of one failed machine went to two different survivors. On the single-token ring it would all have gone to one: D's keys k6 and k7 would both pass to A, taking it from 2 keys to 4.",
+          "label": "If D is removed, its 2 keys go to C and B, not to one machine",
+          "detail": "D owned k2 and k5. If D's tokens were removed from the ring, k2 would pass to the next token clockwise, 35 (C), and k5 to the next after 58, which is 62 (B). So the load of one removed machine goes to two different survivors. On the single-token ring it would all have gone to one: D's keys k6 and k7 would both pass to A, taking it from 2 keys to 4.",
           "fields": [
             {
               "name": "with 3 tokens each",
@@ -1093,7 +1093,7 @@
     {
       "target": "d",
       "kind": "failure",
-      "text": "A failed machine's keys pass to the next machines clockwise. Data does not move by itself, so stores such as Dynamo and Cassandra replicate each key to the next several distinct machines (the preference list), and the successors already hold copies when they take over."
+      "text": "When a machine is removed, its keys pass to the next machines clockwise, and while it is only down those machines serve them as replicas (Dynamo treats most outages as transient and does not rebalance). Data does not move by itself, so stores such as Dynamo and Cassandra replicate each key to the next several distinct machines (the preference list), and the successors already hold copies when they take over."
     },
     {
       "target": "join",

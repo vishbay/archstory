@@ -721,7 +721,7 @@
     {
       "target": "nat",
       "kind": "failure",
-      "text": "A NAT gateway lives in one zone. If private subnets in every zone route through a single gateway, losing that zone cuts internet access for all of them, and cross-zone traffic costs extra; run one gateway per zone and route each zone's subnets to its own."
+      "text": "A zonal NAT gateway lives in one zone (AWS also offers a regional NAT gateway that spans zones). If private subnets in every zone route through a single gateway, losing that zone cuts internet access for all of them, and cross-zone traffic costs extra; run one gateway per zone and route each zone's subnets to its own."
     },
     {
       "target": "host",
