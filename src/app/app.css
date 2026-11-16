@@ -1277,15 +1277,16 @@ aside.left .tabs, aside.right .tabs { flex-wrap: wrap; overflow-x: visible; }
 .guide { max-width: 1120px; margin: 0 auto; padding: 24px 24px 72px; }
 .guide-back { margin-bottom: 14px; font-size: 13px; }
 .guide-head h1 { margin: 0 0 12px; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.02em; }
-.guide-lede { margin: 0 0 18px; font-size: 16px; line-height: 1.6; color: var(--muted); }
+.guide-lede { max-width: 90ch; margin: 0 0 18px; font-size: 16px; line-height: 1.6; color: var(--muted); }
 .guide-body { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 36px; margin-top: 28px; align-items: start; }
 .guide-toc { position: sticky; top: 76px; display: grid; gap: 2px; font-size: 13px; max-height: calc(100vh - 100px); overflow-y: auto; align-content: start; }
 .guide-toc b { margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
 .guide-toc .link { text-align: left; justify-content: flex-start; padding: 5px 0; }
 .guide-main { min-width: 0; }
 .guide-sec { margin-bottom: 48px; scroll-margin-top: 80px; }
-.guide-sec h2 { margin: 0 0 8px; font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -.01em; }
-.guide-sec > p { line-height: 1.6; }
+.guide-sec h2 { margin: 0 0 8px; font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -.01em; color: var(--accent-text); }
+.guide-sec > p { max-width: 90ch; line-height: 1.6; }   /* running text stays readable; cards, tables and callouts use the full column */
+.guide-sec > p.guide-callout { max-width: none; }
 .guide-bar { display: flex; gap: 4px; margin: 16px 0 8px; padding: 0; list-style: none; }
 .guide-bar li { min-width: 0; }
 .guide-bar button { white-space: normal; display: grid; gap: 2px; align-content: center; width: 100%; height: 66px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; text-align: center; color: var(--text);
@@ -1438,3 +1439,7 @@ aside.left .tabs, aside.right .tabs { flex-wrap: wrap; overflow-x: visible; }
 .gv-eg { display: block; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 13px; line-height: 1.5; }
 .gv-eg em { display: block; margin-bottom: 1px; font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-text); }
 @media (max-width: 900px) { .gv-fw .guide-tr, .gv-levels .guide-tr { grid-template-columns: minmax(0, 1fr); } }
+
+.gv-cross b { display: block; margin-bottom: 6px; font-size: 13.5px; line-height: 1.4; }
+.gv-cross ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.gv-cross li { font-size: 13px; line-height: 1.55; color: var(--muted); }

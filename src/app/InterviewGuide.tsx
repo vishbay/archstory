@@ -2,7 +2,7 @@
 // Its phases and minutes come from the timed practice mode, so the guide and the clock agree.
 import { useState } from 'react'
 import { EstimateChain, EvolveDiagram, LatencyScale, LoopRing, PhasePipeline, ProcessSteps, TierWalk } from './GuideVisuals'
-import { AI_CAVEATS, CLARIFY, FRAMEWORKS, GUIDE_PHASES, LEVELS, LOOP, MISTAKES, NUMBERS, PATTERNS, PRINCIPLES, TRICKS } from '../practice/guide'
+import { AI_CAVEATS, CLARIFY, CROSS_CUTTING, FRAMEWORKS, GUIDE_PHASES, LEVELS, LOOP, MISTAKES, NUMBERS, PATTERNS, PRINCIPLES, TRICKS } from '../practice/guide'
 
 const SECTIONS = [
   { id: 'g-shape', title: 'The shape of 45 minutes' },
@@ -136,6 +136,17 @@ export function InterviewGuide({ onPractice, onExplore, onHome }: { onPractice: 
             <h2>Walk the tiers</h2>
             <p>A request passes through the same layers in almost every system. ArchStory draws them as bands, from clients on the left to external services. Use the same list as a checklist when you design: ask one question per tier, and you will rarely forget a layer.</p>
             <TierWalk />
+            <h3 className="gv-sub">Three things that run through every tier</h3>
+            <p>Some concerns do not sit in one box. They cut across all of them, which is why they are the easiest to leave out. Check them after you have walked the tiers.</p>
+            <div className="guide-cards">
+              {CROSS_CUTTING.map(c => (
+                <article key={c.title} className="guide-card gv-cross">
+                  <h3>{c.title}</h3>
+                  <b>{c.ask}</b>
+                  <ul>{c.points.map(p => <li key={p}>{p}</li>)}</ul>
+                </article>
+              ))}
+            </div>
           </section>
 
           <section id="g-loop" className="guide-sec">

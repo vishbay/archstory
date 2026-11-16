@@ -32,11 +32,13 @@ export const CLARIFY: QuestionGroup[] = [
     { ask: 'How available must it be, and what does an hour of downtime cost?', changes: 'Decides replication across zones or regions, and how much failover you pay for.' },
     { ask: 'May a reader see slightly stale data, or must every read be the latest?', changes: 'Strong consistency limits caching and replication. Eventual consistency opens them up.' },
     { ask: 'Can we ever lose data, even a little?', changes: 'Decides write-ahead logs, synchronous replication and backup strategy.' },
+    { ask: 'If the network splits, should it refuse requests or serve data that may be stale?', changes: 'Chooses consistency or availability for that data (CP or AP), and in normal times trades latency against consistency (PACELC).' },
   ] },
   { title: 'Constraints', why: 'Real systems start from something.', questions: [
     { ask: 'Is it one region or global? Are there data residency rules?', changes: 'Brings in CDNs, regional deployments and the consistency problems that come with them.' },
     { ask: 'Is there an existing stack, a cloud already chosen, or a small team?', changes: 'Favours boring, managed pieces over clever ones.' },
     { ask: 'Does it handle payments or personal data?', changes: 'Adds audit, encryption, key management and compliance scope.' },
+    { ask: 'Which data is sensitive, where may it be stored, and who may see it?', changes: 'Adds field-level protection, tokenization, encryption with managed keys, retention and residency rules, and who can read what in debugging and analytics.' },
   ] },
 ]
 
@@ -59,7 +61,7 @@ const GUIDE: Record<string, PhaseGuide> = {
     say: '"A write goes to the service, is stored, and returns. The slow part goes on a queue, so the request stays fast."',
     avoid: 'Ten boxes before a single flow has been walked, or a component with no stated reason.' },
   deep: {
-    do: ['Ask what breaks first at ten times the load, and fix that.', 'Pick one or two areas and go deep: partitioning, replication, caching policy, ordering and duplicates, or a failed zone.', 'Say where data may be stale and why that is acceptable.', 'If the interviewer picks the topic, follow it.'],
+    do: ['Ask what breaks first at ten times the load, and fix that.', 'Pick one or two areas and go deep: partitioning, replication, caching policy, ordering and duplicates, or a failed zone.', 'Say where data may be stale and why that is acceptable.', 'For each datastore, say whether it favours consistency or availability if the network splits, and what the user sees.', 'If the interviewer picks the topic, follow it.'],
     say: '"At 10x the database write rate is the limit, so I would partition by user id. That makes cross-user queries hard, which I accept because they are rare."',
     avoid: 'Spreading thin across everything, or naming a technology (a queue, a log) without saying why it fits.' },
   wrap: {
@@ -139,6 +141,9 @@ export const PATTERNS: Pattern[] = [
   { need: 'Clients retry or send duplicates', reach: 'Idempotency keys', cost: 'Storing keys, and a unique constraint to enforce them' },
   { need: 'Users are far away', reach: 'A CDN, regional deployments', cost: 'Consistency across regions, cost, operational complexity' },
   { need: 'Many consumers need the same events', reach: 'A publish and subscribe stream', cost: 'Consumer lag, ordering only within a partition, schema changes' },
+  { need: 'Replicas can disagree, or the network can split', reach: 'Choose per datastore: consistent (a single leader or a quorum) or available (accept writes, reconcile later)', cost: 'Consistent refuses or slows requests during a split. Available can return stale or conflicting data and needs a way to merge' },
+  { need: 'You must find why a request was slow or failed', reach: 'A request id passed through every hop, metrics per tier, structured logs, traces, and SLOs with alerts on how fast the error budget burns', cost: 'Instrumentation work and storage cost, and noisy pages if thresholds are wrong' },
+  { need: 'Sensitive or regulated data', reach: 'Encryption in transit and at rest with managed keys, tokenization or isolation of personal data, least privilege, audit logs', cost: 'Key management, extra latency and lookups, and harder debugging and analytics' },
 ]
 
 export const MISTAKES: string[] = [
@@ -212,4 +217,21 @@ export const AI_CAVEATS: Trick[] = [
   { title: 'Copy the process, not the confidence', body: 'An AI recalls patterns quickly and follows a checklist without getting flustered, and it can also state a wrong specific in a confident tone. Verify numbers and limits, and say your assumptions out loud.' },
   { title: 'Ask what an AI cannot know', body: 'It does not know your interviewer, your company or what they care about. Ask for their priority and their constraints, then design to those.' },
   { title: 'Use an AI as a sparring partner', body: 'Ask it to interview you, challenge a choice, or find the weakest part of your design. ArchStory\'s Ask AI, AI interviewer and review do this with your own key.' },
+]
+
+export interface CrossCut { title: string; ask: string; points: string[] }
+/** Concerns that run through every tier rather than sitting in one, so they are easy to forget when drawing boxes. */
+export const CROSS_CUTTING: CrossCut[] = [
+  { title: 'Observability', ask: 'When this breaks at 3 a.m., how do you find out, and how do you find why?',
+    points: ['Give every request an id at the entry and pass it through each hop, into logs and traces, so one request can be followed across services.',
+      'Choose a few SLIs users feel (success rate, latency) and set SLOs on them. Alert when the error budget burns fast, not on every blip.',
+      'Watch each tier: queue depth and lag, cache hit rate, database connections, error rate per dependency.'] },
+  { title: 'Security and data', ask: 'Who is calling, what may they do, and what happens to the sensitive data?',
+    points: ['Authenticate at the entry, pass the verified identity inward, and authorise at the service. Rate limit per user or tenant, not only per address.',
+      'Encrypt in transit and at rest, with keys in a key management service. Tokenize or isolate personal data, and say where it may live.',
+      'Name the rules that apply (payments, privacy law, data residency) early, because they change the architecture.'] },
+  { title: 'Consistency under failure', ask: 'If the network splits or a replica lags, what does the user see?',
+    points: ['Say per datastore whether it favours consistency or availability during a split (CP or AP).',
+      'In normal operation the trade is latency against consistency (PACELC): waiting for more replicas is slower but fresher.',
+      'Name the model you need: linearizable where money or inventory is involved, eventual where a stale read is harmless.'] },
 ]

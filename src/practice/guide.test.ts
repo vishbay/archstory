@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { InterviewGuide } from '../app/InterviewGuide'
 import { TIER_INFO } from '../model/kinds'
-import { AI_CAVEATS, AI_STEPS, CLARIFY, ESTIMATE_CHAIN, FRAMEWORKS, LEVELS, EVOLVE, GUIDE_PHASES, LATENCIES, LOOP, MISTAKES, NUMBERS, PATTERNS, phaseGuide, PRINCIPLES, TIER_ORDER, TIER_WALK, TRICKS } from './guide'
+import { AI_CAVEATS, AI_STEPS, CLARIFY, ESTIMATE_CHAIN, FRAMEWORKS, LEVELS, EVOLVE, GUIDE_PHASES, LATENCIES, LOOP, CROSS_CUTTING, MISTAKES, NUMBERS, PATTERNS, phaseGuide, PRINCIPLES, TIER_ORDER, TIER_WALK, TRICKS } from './guide'
 import { MINI, miniGeometry } from './guideLayout'
 import { PHASES } from './timed'
 
@@ -14,7 +14,7 @@ describe('interview guide content', () => {
     for (const p of PHASES) { const g = phaseGuide(p.id); expect(g.do.length, p.id).toBeGreaterThanOrEqual(3); expect(g.say, p.id).toBeTruthy(); expect(g.avoid, p.id).toBeTruthy() }
   })
   it('uses no em dashes anywhere', () => {
-    const all = JSON.stringify([PRINCIPLES, CLARIFY, GUIDE_PHASES, LOOP, NUMBERS, PATTERNS, MISTAKES, TIER_WALK, TRICKS, LEVELS, FRAMEWORKS, AI_STEPS, AI_CAVEATS])
+    const all = JSON.stringify([PRINCIPLES, CLARIFY, GUIDE_PHASES, LOOP, NUMBERS, PATTERNS, MISTAKES, TIER_WALK, TRICKS, LEVELS, FRAMEWORKS, AI_STEPS, AI_CAVEATS, CROSS_CUTTING])
     expect(all).not.toContain('—')
   })
   it('asks questions that each say how the answer changes the design', () => {
@@ -45,6 +45,17 @@ describe('tiers and tricks', () => {
   })
 })
 
+describe('cross-cutting concerns', () => {
+  it('covers observability, security and consistency, and asks about them while clarifying', () => {
+    expect(CROSS_CUTTING.map(c => c.title)).toEqual(['Observability', 'Security and data', 'Consistency under failure'])
+    for (const c of CROSS_CUTTING) { expect(c.ask.endsWith('?'), c.title).toBe(true); expect(c.points.length, c.title).toBeGreaterThanOrEqual(3) }
+    const asks = CLARIFY.flatMap(g => g.questions.map(q => q.ask)).join(' ')
+    expect(asks).toContain('network splits')
+    expect(asks).toContain('sensitive')
+    expect(PATTERNS.map(p => p.need).join(' ')).toMatch(/split/)
+  })
+})
+
 describe('levels, frameworks and the AI process', () => {
   it('lines the frameworks up with every timed phase, in order', () => {
     expect(FRAMEWORKS.map(f => f.phase)).toEqual(PHASES.map(p => p.id))
@@ -72,6 +83,8 @@ describe('interview guide page', () => {
     expect(html.match(/Back to home/g)).toHaveLength(2)
     expect(html).toContain('Walk the tiers')
     expect(html).toContain('Tricks that help')
+    expect(html).toContain('Three things that run through every tier')
+    expect(html).toContain('PACELC')
     for (const t of ['Frameworks you will meet elsewhere', 'What is expected by level', 'How an AI approaches system design questions']) expect(html).toContain(t)
     expect(html.match(/In Ticket Booking/g)).toHaveLength(AI_STEPS.length)
     expect(html.match(/class="gv-tier-card"/g)).toHaveLength(TIER_ORDER.length)
