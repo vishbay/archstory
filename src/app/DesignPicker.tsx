@@ -2,6 +2,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
 import { groupBySection } from '../protocols/sections'
+import { byDifficulty } from './pickerOrder'
 
 export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClose, kind = 'system' }: {
   library: Design[]; mine: Design[]; currentId: string
@@ -20,9 +21,10 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
     const ofKind = (d: Design) => (d.meta.kind ?? 'system') === kind
     const hit = (d: Design) => !s || d.meta.title.toLowerCase().includes(s) || d.meta.tags.some(t => t.includes(s)) || (d.meta.summary ?? '').toLowerCase().includes(s)
     const found = [...library.filter(ofKind).filter(hit).map(d => ({ d, mine: false })), ...mine.filter(ofKind).filter(hit).map(d => ({ d, mine: true }))]
-    // Protocols are listed under their section headings, in the same order as on Home; the keyboard moves through them in that order.
-    if (kind !== 'protocol') return found.map(x => ({ ...x, head: undefined as string | undefined }))
-    return groupBySection(found.map(x => x.d)).flatMap(g => g.designs.map((d, i) => ({ d, mine: found.find(x => x.d === d)!.mine, head: i === 0 ? g.section : undefined })))
+    // Easiest first. The keyboard moves through the list in this order.
+    if (kind !== 'protocol') return byDifficulty(found, x => x.d).map(x => ({ ...x, head: undefined as string | undefined }))
+    // Protocols are listed under their section headings (the same sections as on Home), easiest first within each.
+    return groupBySection(found.map(x => x.d)).flatMap(g => byDifficulty(g.designs, d => d).map((d, i) => ({ d, mine: found.find(x => x.d === d)!.mine, head: i === 0 ? g.section : undefined })))
   }, [library, mine, q, kind])
   const noun = kind === 'protocol' ? 'protocols' : 'designs'
   const at = Math.min(idx, Math.max(0, items.length - 1))

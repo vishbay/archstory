@@ -84,11 +84,11 @@ function ProtocolCard({ d, onWatch }: { d: Design; onWatch: () => void }) {
   )
 }
 
-export function Home({ library, mine, protocols = [], onWatch, onExplore, onPractice, onImport, onGenerate, onTour }: {
+export function Home({ library, mine, protocols = [], onWatch, onExplore, onPractice, onGuide, onImport, onGenerate, onTour }: {
   library: Design[]; mine: Design[]
   /** Under the hood (labs): empty while the lab is locked, and then the section is not shown at all. */
   protocols?: Design[]; onWatch?: (id: string) => void
-  onExplore: (id: string) => void; onPractice: (id: string) => void
+  onExplore: (id: string) => void; onPractice: (id: string) => void; onGuide: () => void
   onImport: () => void; onGenerate: () => void; onTour: () => void
 }) {
   const [level, setLevel] = useState<'all' | 'easy' | 'medium' | 'hard'>('all')
@@ -121,6 +121,7 @@ export function Home({ library, mine, protocols = [], onWatch, onExplore, onPrac
               <button className="big" onClick={() => onExplore(first.id)}>Explore {first.meta.title}</button>
               {protocols.length > 0 && <button className="big" onClick={() => onWatch?.(protocols[0].id)}>Under the hood</button>}
               <button className="link" onClick={onTour}>Take the 1-minute tour</button>
+              <button className="link" onClick={onGuide}>How to approach an interview</button>
             </div>
             <p className="hero-trust"><span>✓ Free and open source</span><span>✓ No account</span><span>✓ Runs in your browser</span><span title="Nothing is collected: no analytics or trackers. Your work stays in this browser, and AI calls go only to the provider you connect.">✓ No tracking</span></p>
           </div>
@@ -136,6 +137,15 @@ export function Home({ library, mine, protocols = [], onWatch, onExplore, onPrac
             ['3', 'clouds: neutral names, AWS or GCP'],
             ['Any', 'AI: paste into your assistant or use your key'],
           ].map(([n, label]) => <div key={label} className="stat"><b>{n}</b><span>{label}</span></div>)}
+        </section>
+
+        <section className="guide-teaser">
+          <div>
+            <p className="eyebrow">New to system design interviews?</p>
+            <h2 className="section-title">Read the guide before you practise</h2>
+            <p className="muted">The 45 minute flow, what to ask, how to think, how to step through each phase, and the numbers and patterns worth knowing.</p>
+          </div>
+          <button className="primary big" onClick={onGuide}>Open the interview guide</button>
         </section>
 
         <section className="features">

@@ -34,6 +34,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { Numbers, NUMBERS_H } from './Numbers'
 import { ProfileCard } from './ProfileCard'
 import { DiscussDialog } from './DiscussDialog'
+import { InterviewGuide } from './InterviewGuide'
 
 type View = 'canvas' | 'timeline'
 const MINE_KEY = 'archstory.myDesigns'
@@ -44,7 +45,7 @@ const loadMine = (): Design[] =>
 const params = new URLSearchParams(location.search)
 // Under the hood is a labs feature: while it is locked, protocol links fall back like an unknown design.
 const protoAtStart = getLab('underhood') ? PROTOCOLS.find(p => p.id === params.get('d')) ?? (params.get('mode') === 'hood' ? PROTOCOLS[0] : undefined) : undefined
-type Mode = 'home' | 'explore' | 'practice' | 'hood'
+type Mode = 'home' | 'explore' | 'practice' | 'hood' | 'guide'
 
 export function App() {
   const theme = useTheme()
@@ -55,13 +56,14 @@ export function App() {
   const [protoId, setProtoId] = useState(() => protoAtStart?.id ?? PROTOCOLS[0]?.id ?? '')
   // A bare URL opens the home page; links with a design or a practice problem open that directly.
   const [rawMode, setMode] = useState<Mode>(() =>
-    params.get('mode') === 'practice' ? 'practice' : protoAtStart ? 'hood' : params.get('d') ? 'explore' : 'home')
+    params.get('mode') === 'practice' ? 'practice' : params.get('mode') === 'guide' ? 'guide' : protoAtStart ? 'hood' : params.get('d') ? 'explore' : 'home')
   // Switching the lab off while watching a protocol drops back to Explore.
   const mode: Mode = rawMode === 'hood' && (!hoodOn || !PROTOCOLS.length) ? 'explore' : rawMode
   const hood = mode === 'hood'
+  const homeLike = mode === 'home' || mode === 'guide'   // pages with no design on the canvas
   const [tour, setTour] = useState<'explore' | 'practice' | null>(null)
   useEffect(() => {
-    if (mode === 'home' || mode === 'hood' || store.get(`archstory.tour.${mode}`, false)) return
+    if (mode === 'home' || mode === 'guide' || mode === 'hood' || store.get(`archstory.tour.${mode}`, false)) return
     const t = setTimeout(() => setTour(mode), 700)   // let the canvas lay out before measuring targets
     return () => clearTimeout(t)
   }, [mode])
@@ -124,6 +126,7 @@ export function App() {
   useEffect(() => {
     const u = new URL(location.href)
     if (mode === 'home') { u.search = ''; u.hash = ''; history.replaceState(null, '', u); return }
+    if (mode === 'guide') { u.search = ''; u.hash = ''; u.searchParams.set('mode', 'guide'); history.replaceState(null, '', u); return }
     if (mode === 'practice') {
       u.search = ''; u.hash = ''
       u.searchParams.set('mode', 'practice'); u.searchParams.set('p', problemId)
@@ -150,11 +153,11 @@ export function App() {
   }, [design.id, flow, view, network, zonesView, regionsView, monitoring, mode, problemId])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && mode !== 'home') { e.preventDefault(); setPicking(true) }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !homeLike) { e.preventDefault(); setPicking(true) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mode])
+  }, [homeLike])
   useEffect(() => { store.set('archstory.cloud', cloud) }, [cloud])
   useEffect(() => { store.set('archstory.left', leftPref) }, [leftPref])
   useEffect(() => { store.set('archstory.right', rightPref) }, [rightPref])
@@ -186,21 +189,22 @@ export function App() {
   const themeNow = theme.pref === 'system' ? `following your system (${theme.resolved})` : theme.pref
 
   return (
-    <div className={mode === 'home' ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
+    <div className={homeLike ? 'app home-mode' : `app${leftOpen ? '' : ' no-left'}${rightOpen ? '' : ' no-right'}`}>
       <header className="topbar">
-        {mode === 'home' || stacked ? <span className="icon-slot" aria-hidden /> : (   // keeps the logo in the same place on every page
+        {homeLike || stacked ? <span className="icon-slot" aria-hidden /> : (   // keeps the logo in the same place on every page
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the requirements and palette panel' : 'Show or hide the requirements panel'} aria-expanded={leftOpen}
             title={`${leftOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'requirements and palette' : 'requirements'} panel`} onClick={() => setLeftOpen(o => !o)}>☰</button>
         )}
         <button className="brand" onClick={() => { setMode('home'); logoClick() }} title="Home"><img className="brand-mark" src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width="22" height="22" />Arch<span>Story</span></button>
-        {mode !== 'home' && <>
+        {mode === 'guide' && <><span className="sep" /><span className="crumb">Interview guide</span></>}
+        {!homeLike && <>
           <span className="sep" />
           <button className="title-btn" onClick={() => setPicking(true)} aria-haspopup="dialog"
             title={mode === 'practice' ? 'Switch problem (⌘K / Ctrl+K)' : hood ? 'Switch protocol (⌘K / Ctrl+K)' : 'Switch design (⌘K / Ctrl+K)'}>
             {mode === 'practice' ? (all.find(d => d.id === problemId) ?? LIBRARY[0]).meta.title : design.meta.title}<span className="chev-down" aria-hidden>▾</span>
           </button>
         </>}
-        {mode !== 'home' && (
+        {!homeLike && (
           <nav className="seg" aria-label="Mode">
             <button className={mode === 'explore' ? 'on' : ''} onClick={() => setMode('explore')}>Explore</button>
             <button className={mode === 'practice' ? 'on' : ''}
@@ -212,7 +216,7 @@ export function App() {
           </nav>
         )}
         <span className="spacer" />
-        {mode !== 'home' && !hood && (
+        {!homeLike && !hood && (
           <div className="seg" role="group" aria-label="Cloud">
             {(['neutral', 'aws', 'gcp'] as Cloud[]).map(c => (
               <button key={c} className={cloud === c ? 'on' : ''} onClick={() => setCloud(c)}>{c === 'neutral' ? 'Neutral' : c.toUpperCase()}</button>
@@ -221,18 +225,25 @@ export function App() {
         )}
         <AiTopButton />
         <button className="icon ghost" aria-label={`Theme: ${themeNow}. Switch to ${themeNext}`} title={`Theme: ${themeNow}. Click for ${themeNext}`} onClick={theme.toggle}>{themeIcon}</button>
-        {mode !== 'home' && !stacked && (
+        {!homeLike && !stacked && (
           <button className="icon ghost" aria-label={mode === 'practice' ? 'Show or hide the inspector' : 'Show or hide the flow inspector'} aria-expanded={rightOpen}
             title={`${rightOpen ? 'Hide' : 'Show'} the ${mode === 'practice' ? 'inspector' : 'flow, component and notes panel'}`} onClick={() => setRightOpen(o => !o)}>◫</button>
         )}
       </header>
 
-      {mode === 'home' ? (
+      {mode === 'guide' ? (
+        <main className="home-main">
+          <InterviewGuide onPractice={() => { setProblemId(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setMode('practice') }}
+            onExplore={() => { open(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setMode('explore') }}
+            onHome={() => setMode('home')} />
+        </main>
+      ) : mode === 'home' ? (
         <main className="home-main">
           <Home library={LIBRARY} mine={mine} protocols={hoodOn ? PROTOCOLS : []}
             onWatch={id => { openProto(id); setMode('hood') }}
             onExplore={id => { open(id); setMode('explore') }}
             onPractice={id => { setProblemId(id); setMode('practice') }}
+            onGuide={() => setMode('guide')}
             onImport={() => { setImportText(''); setImporting(true) }} onGenerate={() => setGenerating(true)}
             onTour={() => { store.set('archstory.tour.explore', false); open(LIBRARY.find(d => d.id === 'url-shortener')?.id ?? LIBRARY[0].id); setLeftOpen(true); setRightOpen(true); setMode('explore'); setTour('explore') }} />
         </main>
