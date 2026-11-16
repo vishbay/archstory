@@ -107,7 +107,7 @@ export function PracticeInspector(p: {
             <label className="field">Why it is here (optional)<textarea rows={3} value={node.description ?? ''}
               onChange={e => setAttempt(updateNode(d, node.id, { description: e.target.value || undefined }), `desc:${node.id}`)} /></label>
             <NodeNotes design={d} node={node} setAttempt={setAttempt} />
-            <button className="danger" onClick={() => { setAttempt(removeNode(d, node.id)); p.onSelect(null) }}>Delete component</button>
+            <button className="danger center-btn" onClick={() => { setAttempt(removeNode(d, node.id)); p.onSelect(null) }}>Delete component</button>
           </>
         )}
 

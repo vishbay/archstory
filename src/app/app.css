@@ -302,6 +302,10 @@ details { margin: 4px 0 16px; } details:last-child { margin-bottom: 4px; } summa
 /* ---------- generate ---------- */
 .field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 8px; font-size: 13px; font-weight: 600; }
 .field input { font-weight: 400; padding: 8px 10px; }
+/* one height for every single-line control in a form, so rows of inputs and drop-downs line up */
+.field input:not([type="checkbox"]):not([type="radio"]), .field select { height: 38px; box-sizing: border-box; padding: 0 10px; }
+.field textarea { box-sizing: border-box; }
+button.danger.center-btn { display: flex; width: fit-content; margin: 18px auto 6px; }
 .prompt-preview textarea { width: 100%; height: 220px; margin-top: 8px; font: 11.5px/1.5 var(--mono); resize: vertical; }
 .small-btn { margin-top: 8px; font-size: 12px; padding: 3px 9px; }
 .errors-inline { color: var(--hard-t); }
