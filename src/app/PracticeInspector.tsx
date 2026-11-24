@@ -1,8 +1,9 @@
+import { MonitoringEditor } from './MonitoringEditor'
 import { NodeNotes } from './NodeNotes'
 import { OutlineField } from './OutlineField'
 import { HA_MODES, STEP_KINDS, type Design, type Flow } from '../model/schema'
 import { KINDS, type Cloud, nameOf } from '../model/kinds'
-import { addFlow, flipEdge, removeEdge, removeFlow, removeNode, removeStep, renameFlow, setEdgeAsync, stepProblem, updateNode, updateStep } from '../practice/attempt'
+import { writtenMonitoring, addFlow, flipEdge, removeEdge, removeFlow, removeNode, removeStep, renameFlow, setEdgeAsync, stepProblem, updateNode, updateStep } from '../practice/attempt'
 import type { Check } from '../practice/checks'
 import { hintsFor, MAX_HINT } from '../practice/hints'
 import { ReviewPanel, type StoredReview } from './ReviewPanel'
@@ -15,7 +16,7 @@ import { useState } from 'react'
 import { store, useTabStrip } from './hooks'
 import { mmss, status } from '../practice/timed'
 
-export type PracticeTab = 'build' | 'flows' | 'check' | 'reasoning' | 'review' | 'interview'
+export type PracticeTab = 'build' | 'flows' | 'monitoring' | 'check' | 'reasoning' | 'review' | 'interview'
 
 const REASONING = [
   { key: 'requirements', title: 'Requirements and assumptions', hint: 'What is in and out of scope? Which numbers are you assuming?' },
@@ -40,6 +41,7 @@ export function PracticeInspector(p: {
   hints: number; onHint: (level: number) => void
   reference: Design; review: StoredReview | null; onReview: (r: StoredReview | null) => void
   timed: TimedControls
+  monitoringLayer: boolean; onMonitoringLayer: () => void
   onAddNote: (target: string, text: string) => void
   onSaveReport: () => void
 }) {
@@ -50,10 +52,11 @@ export function PracticeInspector(p: {
   const edge = p.picked ? d.edges.find(e => e.from === p.picked!.from && e.to === p.picked!.to) : undefined
   const label = (id: string) => { const n = d.nodes.find(x => x.id === id); return n ? nameOf(n, cloud) : id }
   // Interview first: it frames the whole session (a clock or the AI interviewer); Practice still opens on Build.
-  const tabs: PracticeTab[] = ['interview', 'build', 'flows', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review']
+  const tabs: PracticeTab[] = ['interview', 'build', 'flows', 'monitoring', 'check', ...(p.reasoningOn ? ['reasoning' as const] : []), 'review']
   const shownTab = tab === 'reasoning' && !p.reasoningOn ? 'build' : tab
   const tabStrip = useTabStrip(shownTab)
-  const tabName = { build: 'Build', flows: `Flows (${d.flows.length})`, check: p.result.total ? `Check ${p.result.passed}/${p.result.total}` : 'Check', reasoning: 'Reasoning', review: p.review ? `Review ${p.review.review.overall}/5` : 'Review',
+  const monCount = writtenMonitoring(d).slos.length + writtenMonitoring(d).alerts.length
+  const tabName = { build: 'Build', flows: `Flows (${d.flows.length})`, monitoring: monCount ? `Monitoring (${monCount})` : 'Monitoring', check: p.result.total ? `Check ${p.result.passed}/${p.result.total}` : 'Check', reasoning: 'Reasoning', review: p.review ? `Review ${p.review.review.overall}/5` : 'Review',
     interview: p.timed.session && p.timed.session.endedAt === null ? `Interview ${mmss(status(p.timed.session, p.timed.now).totalLeft)}` : 'Interview' }
 
   return (
@@ -170,6 +173,8 @@ export function PracticeInspector(p: {
             )}
           </>
         )}
+
+        {shownTab === 'monitoring' && <MonitoringEditor design={d} setAttempt={setAttempt} layerOn={p.monitoringLayer} onLayer={p.onMonitoringLayer} />}
 
         {shownTab === 'check' && (
           <>

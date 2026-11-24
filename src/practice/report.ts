@@ -1,6 +1,6 @@
 // A practice answer and its AI review as one readable Markdown file the learner can keep, share or study from later.
 import type { Design } from '../model/schema'
-import { customRequirements, writtenNotes, NOTE_KIND_LABELS, type NoteKind } from './attempt'
+import { customRequirements, writtenMonitoring, writtenNotes, NOTE_KIND_LABELS, type NoteKind } from './attempt'
 import { DIMENSIONS, FIX_LABEL, REASONING_TITLES, signature, type Review } from './review'
 
 export interface ReportInput {
@@ -37,6 +37,11 @@ export function attemptReport({ attempt: a, reference: ref, review, checks, at }
   section('My connections', list(a.edges.map(e => `${name(e.from)} to ${name(e.to)}${e.async ? ' (asynchronous)' : ''}`)))
   section('My request flows', a.flows.map(f => `**${f.title}**\n${f.steps.map((s, i) => `${i + 1}. ${s.from === s.to ? name(s.from) : `${name(s.from)} to ${name(s.to)}`}: ${s.label}`).join('\n')}`).join('\n\n'))
   section('My notes', list(writtenNotes(a).map(n => `${n.target ? `**${name(n.target)}** ` : ''}(${NOTE_KIND_LABELS[n.kind as NoteKind] ?? n.kind}): ${n.text.trim()}`)))
+  const wm = writtenMonitoring(a)
+  section('My monitoring plan', [
+    wm.slos.length ? `**Service level objectives**\n${list(wm.slos.map(x => `${x.name.trim() || x.kind} (${x.kind}): ${x.target}%${x.threshold ? ` within ${x.threshold}` : ''} over ${x.window} days${x.sli.trim() ? `. Measured as: ${x.sli.trim()}` : ''}`))}` : '',
+    wm.alerts.length ? `**Alerts**\n${list(wm.alerts.map(x => `${x.severity === 'page' ? 'Page' : 'Ticket'}: ${x.when.trim()}${x.why.trim() ? `. ${x.why.trim()}` : ''}${x.target ? ` (${name(x.target)})` : ''}`))}` : '',
+  ].filter(Boolean).join('\n\n'))
   section('My written reasoning', Object.entries(a.reasoning ?? {}).filter(([, v]) => v.trim()).map(([k, v]) => `### ${REASONING_TITLES[k] ?? k}\n\n${v.trim()}`).join('\n\n'))
 
   if (review) {

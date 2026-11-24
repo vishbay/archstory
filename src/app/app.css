@@ -1443,3 +1443,20 @@ aside.left .tabs, aside.right .tabs { flex-wrap: wrap; overflow-x: visible; }
 .gv-cross b { display: block; margin-bottom: 6px; font-size: 13.5px; line-height: 1.4; }
 .gv-cross ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 .gv-cross li { font-size: 13px; line-height: 1.55; color: var(--muted); }
+
+/* monitoring plan editor */
+.mon-card { display: grid; gap: 4px; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.mon-card .field { margin: 6px 0 2px; }
+.mon-card .row { align-items: flex-end; }
+.mon-grow { flex: 1; min-width: 0; }
+.mon-x { padding: 4px 6px; color: var(--muted); }
+.mon-card .seg { margin-top: 2px; }
+
+/* a toolbar line break: what follows starts a second row (Practice puts Layers and Connect there) */
+.tb-break { flex-basis: 100%; height: 0; }
+/* the second toolbar row is quieter: smaller switches and labels set it apart from the main row */
+.tb-break ~ .tb-switch { height: 24px; gap: 6px; padding: 0 10px 0 6px; font-size: 11.5px; }
+.tb-break ~ .tb-switch .sw { width: 22px; height: 13px; }
+.tb-break ~ .tb-switch .sw i { width: 9px; height: 9px; }
+.tb-break ~ .tb-switch.on .sw i { transform: translateX(9px); }
+.tb-break ~ .tb-group-label { font-size: 10px; }

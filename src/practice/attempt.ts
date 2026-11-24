@@ -1,6 +1,6 @@
 // A practice attempt is an ordinary archstory/v1 design that the learner builds up step by step.
 // These are pure edit operations so the UI stays thin and the rules are testable.
-import { findEdge, NOTE_KINDS, type Design, type Group, type DNode, type Flow, type Step, type StepKind } from '../model/schema'
+import { findEdge, NOTE_KINDS, type Alert, type Design, type Observability, type Slo, type Group, type DNode, type Flow, type Step, type StepKind } from '../model/schema'
 import { kindInfo } from '../model/kinds'
 
 export const attemptId = (ref: Design) => `attempt-${ref.id}`
@@ -67,6 +67,44 @@ export const removeNote = (d: Design, index: number): Design => ({ ...d, notes: 
 /** The notes that say something (a note left blank is not part of the answer). */
 export const writtenNotes = (d: Design) => d.notes.filter(n => n.text.trim())
 
+export const emptyObservability = (): Observability => ({ slos: [], alerts: [], signals: [], debug: [] })
+const keepObs = (d: Design, o: Observability): Design =>
+  ({ ...d, observability: o.slos.length || o.alerts.length || o.signals.length || o.debug.length ? o : undefined })
+const nextId = (taken: string[], base: string) => { let i = 1; while (taken.includes(`${base}_${i}`)) i++; return `${base}_${i}` }
+
+/** The learner's monitoring plan: service level objectives and the alerts that protect them. */
+export function addSlo(d: Design): Design {
+  const o = d.observability ?? emptyObservability()
+  const slo: Slo = { id: nextId(o.slos.map(x => x.id), 'slo'), name: '', kind: 'availability', sli: '', target: 99.9, window: 30 }
+  return keepObs(d, { ...o, slos: [...o.slos, slo] })
+}
+export function updateSlo(d: Design, id: string, patch: Partial<Omit<Slo, 'id'>>): Design {
+  const o = d.observability ?? emptyObservability()
+  return keepObs(d, { ...o, slos: o.slos.map(x => (x.id === id ? { ...x, ...patch } : x)) })
+}
+export function removeSlo(d: Design, id: string): Design {
+  const o = d.observability ?? emptyObservability()
+  return keepObs(d, { ...o, slos: o.slos.filter(x => x.id !== id), alerts: o.alerts.map(a => (a.slo === id ? { ...a, slo: undefined } : a)) })
+}
+export function addAlert(d: Design): Design {
+  const o = d.observability ?? emptyObservability()
+  const alert: Alert = { id: nextId(o.alerts.map(x => x.id), 'alert'), severity: 'page', when: '', why: '' }
+  return keepObs(d, { ...o, alerts: [...o.alerts, alert] })
+}
+export function updateAlert(d: Design, id: string, patch: Partial<Omit<Alert, 'id'>>): Design {
+  const o = d.observability ?? emptyObservability()
+  return keepObs(d, { ...o, alerts: o.alerts.map(x => (x.id === id ? { ...x, ...patch } : x)) })
+}
+export const removeAlert = (d: Design, id: string): Design => {
+  const o = d.observability ?? emptyObservability()
+  return keepObs(d, { ...o, alerts: o.alerts.filter(x => x.id !== id) })
+}
+/** The SLOs and alerts that say something (blank forms are not part of the answer). */
+export function writtenMonitoring(d: Design): { slos: Slo[]; alerts: Alert[] } {
+  const o = d.observability
+  return { slos: (o?.slos ?? []).filter(x => x.name.trim() || x.sli.trim()), alerts: (o?.alerts ?? []).filter(x => x.when.trim()) }
+}
+
 /** Outlines (groups) are only drawn around components, so one with no components left is dropped. */
 export const pruneGroups = (d: Design): Design => {
   const used = new Set(d.nodes.map(n => n.group))
@@ -100,12 +138,13 @@ export function removeNode(d: Design, id: string): Design {
     edges: d.edges.filter(e => e.from !== id && e.to !== id),
     flows: d.flows.map(f => ({ ...f, steps: f.steps.filter(s => s.from !== id && s.to !== id) })),
     notes: d.notes.filter(n => n.target !== id),
+    observability: d.observability && { ...d.observability, alerts: d.observability.alerts.map(a => (a.target === id ? { ...a, target: undefined } : a)), signals: d.observability.signals.filter(x => x.target !== id) },
   })
 }
 
 /** Adds a connection unless it would be a self-loop or duplicates an existing one (in either direction). */
 export function connect(d: Design, from: string, to: string): Design {
-  if (from === to || findEdge(d, from, to)) return d
+  if (from === to || findEdge(d, from, to) || !d.nodes.some(n => n.id === from) || !d.nodes.some(n => n.id === to)) return d
   return { ...d, edges: [...d.edges, { from, to }] }
 }
 

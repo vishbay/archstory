@@ -7,11 +7,11 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { edgeId, TIERS, type Design } from '../model/schema'
 import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
-import { addNode, addNote, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
+import { addNode, addNote, emptyObservability, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
 import { compareDesigns } from '../practice/compare'
 import { BandCanvas, type EditProps, type ZoneState } from './BandCanvas'
-import { ExportImageButton, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSep, ToolbarSpacer } from './CanvasToolbar'
+import { ExportImageButton, Seg, Toggle, Toolbar, ToolbarLabel, ToolbarSpacer } from './CanvasToolbar'
 import { Timeline } from './Timeline'
 import { PlayerBar } from './PlayerBar'
 import { Inspector, type InspectorTab } from './Inspector'
@@ -312,14 +312,6 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
             onChange={k => { if (k !== 'mine') takeHint(4); if (k === 'ref') { stopRecording(); stopConnecting(); setPicked(null) } setWhose(k); setSelected(null) }}
             options={[{ key: 'mine', label: 'Mine' }, { key: 'ref', label: 'Reference' },
               { key: 'side', label: 'Side by side', disabled: !sideFits, title: sideFits ? 'Your answer and the reference next to each other' : 'Side by side needs a wider window, or a side panel closed' }]} />
-          {view === 'canvas' && <>
-            <ToolbarSep />
-            <ToolbarLabel>Layers</ToolbarLabel>
-            <Toggle on={network && !!shown.network} disabled={!shown.network} onClick={() => setNetwork(v => !v)} title="Show VPC and subnets">Network</Toggle>
-            {showRef && ref.observability && (
-              <Toggle on={monitoring} onClick={() => { setMonitoring(v => !v); if (!monitoring) setRefTab('monitoring') }} title="Show the reference's SLOs, alerts and telemetry">Monitoring</Toggle>
-            )}
-          </>}
           <ToolbarSpacer />
           <ExportImageButton title={shown.meta.title} disabled={view !== 'canvas' || !shown.nodes.length} />
           {!showRef && <>
@@ -327,8 +319,22 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
             <button className="tb-btn" title="Undo (⌘Z / Ctrl+Z)" aria-label="Undo" disabled={!hist.past.length} onClick={() => setHist(undo)}><span aria-hidden>↶</span><span className="tb-txt"> Undo</span></button>
             <button className="tb-btn" title="Redo (⇧⌘Z / Ctrl+Y)" aria-label="Redo" disabled={!hist.future.length} onClick={() => setHist(redo)}><span aria-hidden>↷</span><span className="tb-txt"> Redo</span></button>
             <button className="tb-btn" title="Add a component by typing (/)" aria-label="Add a component" onClick={() => { stopRecording(); stopConnecting(); setQuickAdd(true) }}><span aria-hidden>+</span><span className="tb-txt"> Add</span></button>
-            <Toggle on={connecting} title="Connect mode (C): click a caller, then what it calls"
-              onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</Toggle>
+          </>}
+          {/* the second row: layers on the left, Connect on the right */}
+          {(view === 'canvas' || !showRef) && <>
+            <span className="tb-break" aria-hidden />
+            {view === 'canvas' && <>
+              <ToolbarLabel>Layers</ToolbarLabel>
+              <Toggle on={network && !!shown.network} disabled={!shown.network} onClick={() => setNetwork(v => !v)} title="Show VPC and subnets">Network</Toggle>
+              {showRef
+                ? ref.observability && <Toggle on={monitoring} onClick={() => { setMonitoring(v => !v); if (!monitoring) setRefTab('monitoring') }} title="Show the reference's SLOs, alerts and telemetry">Monitoring</Toggle>
+                : <Toggle on={monitoring} disabled={side} onClick={() => { setMonitoring(v => !v); if (!monitoring) setTab('monitoring') }} title="Show what each of your components emits, and your SLOs and alerts">Monitoring</Toggle>}
+            </>}
+            <ToolbarSpacer />
+            {!showRef && (
+              <Toggle on={connecting} title="Connect mode (C): click a caller, then what it calls"
+                onClick={() => (connecting ? stopConnecting() : startConnecting())}>Connect</Toggle>
+            )}
           </>}
         </Toolbar>
         {phoneNote && viewport <= 600 && (
@@ -379,8 +385,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
                   </div>
                   <p className="side-legend">Outlined on the reference: kinds of component your answer does not have yet. Outlined on yours: extras the reference does without.</p>
                 </div>
-              : <BandCanvas design={shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
-                  monitoring={showRef && monitoring} zonesView={false} zone={NO_ZONES} insets={{ ...insets, top: insets.top + (timerTop ?? 0) }} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
+              : <BandCanvas design={!showRef && monitoring && !shown.observability ? { ...shown, observability: emptyObservability() } : shown} flow={flow?.steps.length ? flow : undefined} player={player} cloud={cloud} network={network}
+                  monitoring={monitoring} zonesView={false} zone={NO_ZONES} insets={{ ...insets, top: insets.top + (timerTop ?? 0) }} captionDetail={!rightOpen || viewport <= 900} selected={selected} onSelect={onNode} colorMode={colorMode}
                   edit={edit} />}
           {!showRef && !side && attempt.nodes.length === 0 && (
             <div className="empty-hint">
@@ -421,6 +427,7 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
                 hints={hints} onHint={takeHint}
                 reference={ref} review={review} onReview={setReview} timed={timed}
                 onAddNote={(target, text) => { setAttempt(addNote(attempt, target, text)); setPicked(null); setSelected(target); setTab('build') }}
+                monitoringLayer={monitoring} onMonitoringLayer={() => setMonitoring(v => !v)}
                 onSaveReport={saveReport} />}
         </aside>
       )}

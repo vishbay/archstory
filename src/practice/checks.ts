@@ -3,7 +3,7 @@
 import type { Design, DNode } from '../model/schema'
 import { onRequestPath, resilience } from '../model/availability'
 import { footprintOf, holdsData, replicationOf, STRATEGY_TEXT } from '../model/regions'
-import { stepProblem } from './attempt'
+import { stepProblem, writtenMonitoring } from './attempt'
 
 export type Level = 'pass' | 'fail' | 'warn' | 'info'
 export interface Check { id: string; level: Level; title: string; detail?: string; nodes?: string[] }
@@ -111,10 +111,11 @@ export function runChecks(att: Design, ref: Design): { checks: Check[]; passed: 
   // 7b. Monitoring: asked for when the reference has it. A telemetry component, written reasoning, or an
   // observability section all count as having said something.
   if (ref.observability) {
-    const said = !!att.observability || att.nodes.some(n => TELEMETRY_KINDS.has(n.kind)) || !!att.reasoning?.monitoring?.trim()
+    const wm = writtenMonitoring(att)
+    const said = wm.slos.length > 0 || wm.alerts.length > 0 || att.nodes.some(n => TELEMETRY_KINDS.has(n.kind)) || !!att.reasoning?.monitoring?.trim()
     add(said
       ? { id: 'monitoring', level: 'pass', title: 'Says how it would be monitored' }
-      : { id: 'monitoring', level: 'warn', title: 'No monitoring yet', detail: `Say how you would know it is healthy: SLIs and SLOs, what pages someone, how you would trace a slow request. The reference tracks: ${ref.observability.slos.map(s => s.name).join(', ')}. Add a monitoring component or write it under Reasoning.` })
+      : { id: 'monitoring', level: 'warn', title: 'No monitoring yet', detail: `Say how you would know it is healthy: SLIs and SLOs, what pages someone, how you would trace a slow request. The reference tracks: ${ref.observability.slos.map(s => s.name).join(', ')}. Add SLOs and alerts in the Monitoring tab, add a monitoring component, or write it under Reasoning.` })
   }
 
   // 7c. Regions: asked for when the reference is multi-region. A regions section or written reasoning both count.

@@ -1,6 +1,6 @@
 // AI review by copy and paste: a prompt that asks any assistant for a structured review, and a parser for its answer.
 // The same prompt and format will back an optional API integration later.
-import { extraRequirementsText, writtenNotes } from './attempt'
+import { extraRequirementsText, writtenMonitoring, writtenNotes } from './attempt'
 import { z } from 'zod'
 import type { Design } from '../model/schema'
 import type { Check } from './checks'
@@ -11,7 +11,7 @@ export const DIMENSIONS = [
   { id: 'data', title: 'Data', rubric: 'storage choices, data model, caching and consistency' },
   { id: 'scale', title: 'Scalability', rubric: 'handles the stated load; names bottlenecks; partitioning and replication' },
   { id: 'reliability', title: 'Reliability', rubric: 'no single points of failure; failure handling; meets availability targets' },
-  { id: 'operations', title: 'Monitoring', rubric: 'how it would be run: SLIs and SLOs tied to the requirements, alerts on symptoms users feel, tracing and logging to find a cause (from the written reasoning or monitoring components if present, otherwise say it was not addressed)' },
+  { id: 'operations', title: 'Monitoring', rubric: 'how it would be run: SLIs and SLOs tied to the requirements, alerts on symptoms users feel, tracing and logging to find a cause (from the written reasoning, the SLOs and alerts in their monitoring plan, or monitoring components if present, otherwise say it was not addressed)' },
   { id: 'security', title: 'Security and compliance', rubric: 'authn and authz, secrets and keys, encryption in transit and at rest, network isolation, and any rules that apply such as PCI, GDPR or data residency (from the written reasoning or the design; score it when the candidate wrote about it or the problem clearly needs it, otherwise leave this dimension out)' },
   { id: 'tradeoffs', title: 'Trade-offs', rubric: 'explains choices and alternatives (from the written reasoning if present, otherwise judged from the design)' },
   { id: 'decisions', title: 'Decision quality', rubric: 'for each big choice the candidate names the options considered, why one was picked and what it costs (score it only when the candidate wrote key decisions, otherwise leave this dimension out)' },
@@ -59,7 +59,7 @@ export function parseReview(json: unknown, attempt: Design): ReviewParse {
 
 /** Cheap fingerprint of an answer, to tell when a stored review no longer matches it. */
 export function signature(d: Design): string {
-  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : []), ...(d.groups.length ? [d.groups] : []), ...(writtenNotes(d).length ? [writtenNotes(d)] : [])])   // old answers keep their signature
+  const s = JSON.stringify([d.nodes, d.edges, d.flows, d.reasoning, ...(d.regions ? [d.regions] : []), ...(d.groups.length ? [d.groups] : []), ...(writtenNotes(d).length ? [writtenNotes(d)] : []), ...(writtenMonitoring(d).slos.length || writtenMonitoring(d).alerts.length ? [writtenMonitoring(d)] : [])])   // old answers keep their signature
   let h = 5381
   for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i)
   return (h >>> 0).toString(36)
@@ -85,7 +85,8 @@ const EXAMPLE: Review = {
 export function reviewPrompt(attempt: Design, ref: Design, checks: Check[], includeReference: boolean): string {
   const r = ref.requirements
   const list = (xs: string[]) => xs.map(x => `- ${x}`).join('\n')
-  const answer = { nodes: attempt.nodes, ...(attempt.groups.length && { groups: attempt.groups }), edges: attempt.edges, flows: attempt.flows, notes: writtenNotes(attempt), ...(attempt.regions && { regions: attempt.regions }) }
+  const monitoring = writtenMonitoring(attempt)
+  const answer = { nodes: attempt.nodes, ...(attempt.groups.length && { groups: attempt.groups }), edges: attempt.edges, flows: attempt.flows, notes: writtenNotes(attempt), ...(monitoring.slos.length || monitoring.alerts.length ? { monitoring } : {}), ...(attempt.regions && { regions: attempt.regions }) }
   const multiRegion = !!(ref.regions || attempt.regions)
   const reasoning = Object.entries(attempt.reasoning ?? {}).filter(([, v]) => v.trim())
   const found = checks.filter(c => c.level === 'fail' || c.level === 'warn')
