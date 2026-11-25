@@ -1,8 +1,7 @@
 import type { Design } from '../model/schema'
 import { nameOf, type Cloud } from '../model/kinds'
-import { budgetText, signalsFor, stackName, TELEMETRY, type SignalKind } from '../model/observability'
-
-const SIGNAL_LABEL: Record<SignalKind, string> = { latency: 'Latency', traffic: 'Traffic', errors: 'Errors', saturation: 'Saturation' }
+import { budgetText, SIGNAL_LABEL, signalsFor, stackName, TELEMETRY, telemetryPart } from '../model/observability'
+import { TelemetryPartCard } from './TelemetryPartCard'
 
 const PRACTICES = [
   'Put one trace id on every request and every log line (propagate the W3C traceparent header between services).',
@@ -21,11 +20,13 @@ export function MonitoringPanel({ design, cloud, selected, onSelect }: {
   const byId = Object.fromEntries(design.nodes.map(n => [n.id, n]))
   const name = (id: string) => (byId[id] ? nameOf(byId[id], cloud) : id)
   const node = selected ? byId[selected] : undefined
+  const part = selected ? telemetryPart(selected) : undefined
   const sloName = (id: string) => o.slos.find(s => s.id === id)?.name ?? id
-  const extras = o.signals.filter(s => !node || s.target === node.id)
+  const extras = part ? [] : o.signals.filter(s => !node || s.target === node.id)
 
   return (
     <>
+      {part && <><TelemetryPartCard id={part.id} cloud={cloud} onSelect={onSelect} /><hr /></>}
       <h3>Monitoring</h3>
       <p className="muted small">Targets and thresholds here are illustrative: pick yours from the requirements and what users notice.</p>
 
@@ -62,8 +63,8 @@ export function MonitoringPanel({ design, cloud, selected, onSelect }: {
         </>
       )}
 
-      <h4>{node ? `What to watch on ${name(node.id)}` : 'What to watch'}</h4>
-      {node ? (
+      {!part && <h4>{node ? `What to watch on ${name(node.id)}` : 'What to watch'}</h4>}
+      {part ? null : node ? (
         <table className="kv signals">
           <tbody>
             {signalsFor(node.kind).map(s => (
@@ -102,7 +103,7 @@ export function MonitoringPanel({ design, cloud, selected, onSelect }: {
       <h4>Telemetry stack</h4>
       <ul className="stack">
         {TELEMETRY.map(t => (
-          <li key={t.id}><b>{stackName(t, cloud)}</b>{stackName(t, cloud) !== t.label && <span className="muted"> · {t.label}</span>}<p>{t.description}</p></li>
+          <li key={t.id} className={t.id === selected ? 'on' : undefined}><b>{stackName(t, cloud)}</b>{stackName(t, cloud) !== t.label && <span className="muted"> · {t.label}</span>}<p>{t.description}</p></li>
         ))}
       </ul>
 

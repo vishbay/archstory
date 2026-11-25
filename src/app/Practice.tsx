@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { edgeId, TIERS, type Design } from '../model/schema'
 import { KINDS, TIER_INFO, type Cloud } from '../model/kinds'
+import { isTelemetry } from '../model/observability'
 import { addNode, addNote, emptyObservability, appendStep, blankAttempt, connect, removeEdge, removeNode } from '../practice/attempt'
 import { runChecks } from '../practice/checks'
 import { compareDesigns } from '../practice/compare'
@@ -215,6 +216,8 @@ export function Practice({ problems, problemId, cloud, colorMode, leftOpen, righ
   }
   const onNode = (id: string | null) => {
     if (showRef) { setSelected(id); if (id) setRefTab(t => (t === 'monitoring' || t === 'questions' ? t : 'component')); return }
+    // a part of the telemetry stack in the Monitoring lane: show what it is, but never draw to or from it
+    if (id && isTelemetry(id)) { if (connecting || recording) return; setSelected(id); setPicked(null); setTab('monitoring'); return }
     if (connecting && id) {
       if (connFrom && connFrom !== id) setAttempt(connect(attempt, connFrom, id))
       setConnFrom(id)

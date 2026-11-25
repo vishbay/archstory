@@ -333,7 +333,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
           data: { title: 'Monitoring', color: '#14b8a6', blurb: 'Every component emits metrics, logs and traces; alerts page a person', w: L.obs.band.w, h: L.obs.band.h,
             strip: !L.obs.open, open: L.obs.open, summary: stack(cloud), onToggle: () => setObsOpen(o => !o) } },
         ...(L.obs.open ? telemetryNodes() : []).map(t => ({ id: t.id, type: 'component', position: L.obs!.pos[t.id], draggable: false,
-          data: { node: t, cloud, state: 'visited' as State, selected: false, compact: true, telemetry: true } satisfies NodeData })),
+          data: { node: t, cloud, state: 'visited' as State, selected: selected === t.id, compact: true, telemetry: true } satisfies NodeData })),
       ] : []),
       ...design.nodes.map(n => ({
         id: n.id, type: 'component', position: L.pos[n.id], draggable: false,
@@ -373,7 +373,7 @@ export function BandCanvas({ id, design, flow, player, cloud, network, monitorin
         dragFrom.current = null
       }}
       onEdgeClick={(_, e) => edit?.onEdgeClick(e.source, e.target)}
-      onNodeClick={(_, n) => onSelect(n.type === 'component' && !(n.data as NodeData).telemetry ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
+      onNodeClick={(_, n) => onSelect(n.type === 'component' ? (n.data as NodeData).node.id : null)} onPaneClick={() => onSelect(null)}
       fitView fitViewOptions={{ padding: pad(24, 24, 24) }}
       minZoom={0.2} maxZoom={1.3} proOptions={{ hideAttribution: true }}>
       <Background variant={BackgroundVariant.Dots} gap={24} size={2.4} color="var(--grid-dot)" />

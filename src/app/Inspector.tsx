@@ -7,6 +7,8 @@ import { QuestionsPanel } from './Questions'
 import { kindInfo, nameOf, TIER_INFO, tierOf, type Cloud } from '../model/kinds'
 import { NodeIcon } from './NodeIcon'
 import { MonitoringPanel } from './MonitoringPanel'
+import { TelemetryPartCard } from './TelemetryPartCard'
+import { telemetryPart } from '../model/observability'
 import { StepList } from './StepList'
 import { Legend } from './Legend'
 import { resolvePhases } from '../model/phases'
@@ -108,6 +110,7 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
   const { step, jump } = player
   const cur = flow?.steps[step]
   const node = selected ? byId[selected] : undefined
+  const part = selected ? telemetryPart(selected) : undefined   // a part of the telemetry stack, from the Monitoring lane
   const zones = network && (design.network?.zones ?? 1) > 1
   const mon = monitoring && !!design.observability
   const regions = !!design.regions
@@ -183,7 +186,8 @@ export function Inspector({ design, flow, player, cloud, network, monitoring = f
         )}
         {shown === 'step' && !flow && <p className="muted">This design has no request flows yet.</p>}
 
-        {shown === 'component' && !node && <p className="muted">Click a component on the canvas to see what it does, its cloud equivalents, and the flows that use it.</p>}
+        {shown === 'component' && part && <TelemetryPartCard id={part.id} cloud={cloud} onSelect={id => onSelect?.(id)} />}
+        {shown === 'component' && !node && !part && <p className="muted">Click a component on the canvas to see what it does, its cloud equivalents, and the flows that use it.</p>}
         {shown === 'component' && node && (
           <>
             <h3 className="with-icon"><NodeIcon node={node} cloud={cloud} size={24} /> {node.label}</h3>

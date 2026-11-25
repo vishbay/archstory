@@ -1,4 +1,6 @@
+import { telemetryPart } from '../model/observability'
 import { MonitoringEditor } from './MonitoringEditor'
+import { TelemetryPartCard } from './TelemetryPartCard'
 import { NodeNotes } from './NodeNotes'
 import { OutlineField } from './OutlineField'
 import { HA_MODES, STEP_KINDS, type Design, type Flow } from '../model/schema'
@@ -174,7 +176,12 @@ export function PracticeInspector(p: {
           </>
         )}
 
-        {shownTab === 'monitoring' && <MonitoringEditor design={d} setAttempt={setAttempt} layerOn={p.monitoringLayer} onLayer={p.onMonitoringLayer} />}
+        {shownTab === 'monitoring' && (
+          <>
+            {p.selected && telemetryPart(p.selected) && <><TelemetryPartCard id={p.selected} cloud={cloud} onSelect={p.onSelect} /><hr /></>}
+            <MonitoringEditor design={d} setAttempt={setAttempt} layerOn={p.monitoringLayer} onLayer={p.onMonitoringLayer} />
+          </>
+        )}
 
         {shownTab === 'check' && (
           <>

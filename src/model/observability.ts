@@ -186,6 +186,36 @@ const GOLDEN: Record<string, Golden[]> = {
   notification_provider: external('push or email provider'),
   external_api: external('external API'),
   client: client(), web_client: client(), mobile_client: client(),
+  metrics_store: [
+    g('latency', 'Query time for dashboards and alert rules', 'metrics_query_duration_seconds'),
+    g('traffic', 'Samples ingested per second', 'metrics_samples_ingested_total'),
+    g('errors', 'Rejected or dropped samples', 'metrics_samples_rejected_total'),
+    g('saturation', 'Active series against the limit (label cardinality) and retention storage', 'metrics_active_series'),
+  ],
+  log_store: [
+    g('latency', 'Delay from a log line being written to it being searchable', 'log_ingest_delay_seconds'),
+    g('traffic', 'Bytes ingested per day, which is the main cost', 'log_bytes_ingested_total'),
+    g('errors', 'Dropped or unparseable lines', 'log_lines_dropped_total'),
+    g('saturation', 'Retention storage and concurrent queries', 'log_storage_bytes'),
+  ],
+  trace_store: [
+    g('latency', 'Delay from a request finishing to its trace being visible', 'trace_ingest_delay_seconds'),
+    g('traffic', 'Spans ingested per second, and the sampling rate', 'trace_spans_total, trace_sample_ratio'),
+    g('errors', 'Dropped spans and broken traces (a span whose parent is missing)', 'trace_spans_dropped_total'),
+    g('saturation', 'Ingest volume against the sampling and cost budget', 'trace_ingest_bytes_total'),
+  ],
+  alerting: [
+    g('latency', 'Time from the condition becoming true to the page being sent', 'alert_eval_to_notify_seconds'),
+    g('traffic', 'Alerts firing, by severity', 'alerts_firing{severity}'),
+    g('errors', 'Notifications that failed, so nobody was told', 'alert_notification_failures_total'),
+    g('saturation', 'Noise: pages per week and the share closed with no action', 'pages_per_week, pages_no_action_ratio'),
+  ],
+  oncall: [
+    g('latency', 'Time from a page to someone acknowledging it', 'page_ack_seconds'),
+    g('traffic', 'Pages and tickets per week', 'pages_total, tickets_total'),
+    g('errors', 'Pages nobody acknowledged, which escalated', 'page_escalations_total'),
+    g('saturation', 'Pages per person per shift, and runbooks missing for alerts that fire', 'pages_per_shift'),
+  ],
   telemetry_collector: [
     g('latency', 'Delay from emit to stored', 'collector_export_delay_seconds'),
     g('traffic', 'Spans, metrics and log lines received per second', 'collector_received_total'),
@@ -247,6 +277,13 @@ export const TELEMETRY_EDGES: [string, string][] = [
   ['obs:metrics', 'obs:alerts'], ['obs:alerts', 'obs:oncall'],
 ]
 export const isTelemetry = (id: string) => id.startsWith('obs:')
+export const telemetryPart = (id: string) => TELEMETRY.find(t => t.id === id)
+/** What feeds a telemetry part and what it feeds, from the stack's own connections. */
+export const telemetryLinks = (id: string) => ({
+  from: TELEMETRY_EDGES.filter(([, b]) => b === id).map(([a]) => TELEMETRY.find(t => t.id === a)!),
+  to: TELEMETRY_EDGES.filter(([a]) => a === id).map(([, b]) => TELEMETRY.find(t => t.id === b)!),
+})
+export const SIGNAL_LABEL: Record<SignalKind, string> = { latency: 'Latency', traffic: 'Traffic', errors: 'Errors', saturation: 'Saturation' }
 export const telemetryNodes = (): DNode[] => TELEMETRY.map(t => ({ id: t.id, label: t.label, kind: t.kind, description: t.description, cloud: t.cloud }))
 
 export const stackName = (t: TelemetryPart, cloud: Cloud) => (cloud === 'aws' || cloud === 'gcp' ? t.cloud[cloud] : t.label)
