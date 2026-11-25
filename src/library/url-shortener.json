@@ -804,9 +804,18 @@
         },
         {
           "from": "api",
+          "to": "queue",
+          "kind": "async",
+          "phase": "Respond & record click",
+          "label": "publish click",
+          "detail": "A click is counted whether the link came from the cache or from the database, which is why the redirect is a 302 that is never cached. Same fire-and-forget publish as on a hit: the API does not wait for it.",
+          "payload": "{ \"id\": \"evt_01HZX3\", \"code\": \"aZ3k9Q\", \"ts\": 1794136000, \"ref\": \"twitter.com\", \"country\": \"US\" }"
+        },
+        {
+          "from": "api",
           "to": "lb",
           "kind": "res",
-          "phase": "Response",
+          "phase": "Respond & record click",
           "label": "302 Found",
           "detail": "The API answers with a redirect. Total time inside the origin is a couple of milliseconds.",
           "payload": "HTTP/2 302\nLocation: https://example.com/some/very/long/path?utm_source=…\nCache-Control: private, no-store"
@@ -815,7 +824,7 @@
           "from": "lb",
           "to": "cdn",
           "kind": "res",
-          "phase": "Response",
+          "phase": "Respond & record click",
           "label": "302 Found",
           "detail": "Response travels back through the load balancer."
         },
@@ -823,9 +832,25 @@
           "from": "cdn",
           "to": "client",
           "kind": "res",
-          "phase": "Response",
+          "phase": "Respond & record click",
           "label": "302 → long URL",
           "detail": "Slightly slower than a hit (extra DB round trip), still well within the 100 ms budget."
+        },
+        {
+          "from": "queue",
+          "to": "worker",
+          "kind": "async",
+          "phase": "Analytics (background)",
+          "label": "deliver batch (500)",
+          "detail": "Same background path as after a cache hit."
+        },
+        {
+          "from": "worker",
+          "to": "analytics",
+          "kind": "async",
+          "phase": "Analytics (background)",
+          "label": "INSERT batch",
+          "detail": "Same as after a cache hit: the batch is aggregated into the analytics store."
         }
       ]
     }
