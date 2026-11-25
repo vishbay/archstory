@@ -40,8 +40,13 @@ export function layoutBands(d: Design, opts: { network?: boolean; observability?
   const bandIdx = Object.fromEntries(tiers.map((t, i) => [t, i])) as Record<Tier, number>
   const cell = (t: Tier, s: string) => d.nodes.filter(n => tierOf(n) === t && segOf(n) === s)
   const present = (t: Tier) => segs.filter(s => cell(t, s).length)
-  // A band holding only un-boxed nodes is centred across the full width and doesn't reserve columns.
-  const lone = (t: Tier) => { const p = present(t); return p.length === 1 && !boxed(p[0]) }
+  // The rows the VPC outline spans, top to bottom. A managed service in one of them must stay beside the outline, not under it.
+  const vpcRows = (() => {
+    const idx = net ? d.nodes.filter(n => subnet(n)).map(n => bandIdx[tierOf(n)]) : []
+    return idx.length ? [Math.min(...idx), Math.max(...idx)] : null
+  })()
+  // A band holding only un-boxed nodes is centred across the full width and doesn't reserve columns (unless the VPC outline spans it).
+  const lone = (t: Tier) => { const p = present(t); return p.length === 1 && !boxed(p[0]) && !(vpcRows && bandIdx[t] >= vpcRows[0] && bandIdx[t] <= vpcRows[1]) }
 
   const segW: Record<string, number> = {}, segStart: Record<string, number> = {}
   let total = 0

@@ -162,4 +162,20 @@ describe('network view subnet boxes', () => {
       }
     }
   })
+  // A managed service drawn half inside the VPC outline would claim to live in your network.
+  it('keep every component either wholly inside or wholly outside each box, in any design', () => {
+    const area = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+      Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 1 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 1
+    for (const design of LIBRARY.filter(x => x.network)) {
+      const L = layoutBands(design, { network: true })
+      const boxes = [...L.subnets.map(b => ({ name: `${b.id} subnet`, ...b })), ...L.groups.map(b => ({ name: `${b.id} outline`, ...b })), ...(L.vpc ? [{ name: 'VPC', ...L.vpc }] : [])]
+      for (const [id, p] of Object.entries(L.pos)) {
+        const n = { x: p.x, y: p.y, w: NODE_W, h: NODE_H }
+        for (const b of boxes) {
+          const inside = n.x >= b.x - 1 && n.y >= b.y - 1 && n.x + n.w <= b.x + b.w + 1 && n.y + n.h <= b.y + b.h + 1
+          expect(!area(n, b) || inside, `${design.id}: ${id} straddles the edge of the ${b.name}`).toBe(true)
+        }
+      }
+    }
+  })
 })
