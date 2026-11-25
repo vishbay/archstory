@@ -270,10 +270,20 @@
       }
     },
     {
+      "id": "waf",
+      "label": "WAF",
+      "kind": "waf",
+      "description": "Rule set attached to the CDN: managed rules, bot control, and per-IP rate rules (much stricter on creating links than on redirects)",
+      "cloud": {
+        "aws": "AWS WAF",
+        "gcp": "Cloud Armor"
+      }
+    },
+    {
       "id": "cdn",
       "label": "CDN",
       "kind": "cdn",
-      "description": "Edge cache + TLS, with a WAF attached (AWS WAF / Cloud Armor)",
+      "description": "Edge cache + TLS; the WAF rule set is attached to it",
       "cloud": {
         "aws": "CloudFront",
         "gcp": "Cloud CDN"
@@ -382,6 +392,10 @@
     },
     {
       "from": "cdn",
+      "to": "waf"
+    },
+    {
+      "from": "cdn",
       "to": "lb"
     },
     {
@@ -464,19 +478,26 @@
         },
         {
           "from": "cdn",
-          "to": "cdn",
-          "kind": "local",
+          "to": "waf",
+          "kind": "req",
           "phase": "Request in",
-          "label": "WAF check; POST never cached",
-          "detail": "The WAF attached to the CDN checks the request first: managed rule sets, bot control, and a per-IP rate rule much stricter on POST /api/links than on redirects, since link creation is what spammers abuse. Writes then bypass the cache entirely; the CDN still terminates TLS close to the user and absorbs DDoS."
+          "label": "inspect",
+          "detail": "The CDN runs the attached WAF rules before forwarding: managed rule sets, bot control, and a per-IP rate rule much stricter on POST /api/links than on redirects, since link creation is what spammers abuse."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
           "to": "lb",
           "kind": "req",
           "phase": "Request in",
-          "label": "forward to origin",
-          "detail": "The load balancer is the single public origin. It health-checks API instances and routes only to healthy ones."
+          "label": "forward to origin, not cached",
+          "detail": "Writes bypass the cache entirely; the CDN still terminates TLS close to the user and absorbs DDoS. The load balancer is the single public origin. It health-checks API instances and routes only to healthy ones."
         },
         {
           "from": "lb",
@@ -596,19 +617,26 @@
         },
         {
           "from": "cdn",
-          "to": "cdn",
-          "kind": "local",
+          "to": "waf",
+          "kind": "req",
           "phase": "Request in",
-          "label": "WAF check; 302s not cached",
-          "detail": "The WAF attached to the CDN checks every click with a looser rate rule than for creates, so bots scanning random codes are stopped before they become cache misses. Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
+          "label": "inspect",
+          "detail": "The CDN runs the attached WAF rules on every click, with a looser rate rule than for creates, so bots scanning random codes are stopped before they become cache misses."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
           "to": "lb",
           "kind": "req",
           "phase": "Request in",
-          "label": "forward to origin",
-          "detail": "The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
+          "label": "forward to origin, 302 not cached",
+          "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter. The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
         },
         {
           "from": "lb",
@@ -703,19 +731,26 @@
         },
         {
           "from": "cdn",
-          "to": "cdn",
-          "kind": "local",
+          "to": "waf",
+          "kind": "req",
           "phase": "Request in",
-          "label": "WAF check; 302s not cached",
-          "detail": "The WAF attached to the CDN checks every click with a looser rate rule than for creates, so bots scanning random codes are stopped before they become cache misses. Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter."
+          "label": "inspect",
+          "detail": "The CDN runs the attached WAF rules on every click, with a looser rate rule than for creates, so bots scanning random codes are stopped before they become cache misses."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
           "to": "lb",
           "kind": "req",
           "phase": "Request in",
-          "label": "forward to origin",
-          "detail": "The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
+          "label": "forward to origin, 302 not cached",
+          "detail": "Trade-off: a 301 cached at the CDN and in browsers is fastest, but then the origin never sees the click. We return 302 + no-store so every click is counted. Use 301 if analytics don't matter. The CDN forwards over a pooled, already-warm connection to the origin, saving a TLS handshake per request."
         },
         {
           "from": "lb",
@@ -831,8 +866,13 @@
     },
     {
       "kind": "security",
-      "text": "The CDN carries a WAF (AWS WAF / Cloud Armor) with managed rule sets, bot control and per-IP rate rules. Link creation is anonymous here, so it is the abuse target: the strict rate rule on POST /api/links limits spam, and a production shortener also checks new URLs against a malware and phishing list. Requiring an account or API key for creates is the usual next step.",
-      "target": "cdn"
+      "text": "The WAF (AWS WAF / Cloud Armor) is attached to the CDN with managed rule sets, bot control and per-IP rate rules. Link creation is anonymous here, so it is the abuse target: the strict rate rule on POST /api/links limits spam, and a production shortener also checks new URLs against a malware and phishing list. Requiring an account or API key for creates is the usual next step.",
+      "target": "waf"
+    },
+    {
+      "target": "waf",
+      "kind": "tradeoff",
+      "text": "A WAF is priced per request it inspects, and here that is every request: about 4,000 redirects and 40 creates a second is roughly 10 billion a month, because 302 responses are never cached and a WAF sees a request whether or not the CDN has it. At AWS WAF's list rate of about $0.60 per million requests (check the current price) that is on the order of $6,000 a month before the fixed fees per web ACL and per rule, and managed bot control adds its own per-request fee. Cloud Armor prices the same way, per policy and rule plus per million requests. The levers: scope the expensive rules (bot control, the strict rate rule) to POST /api/links, where the abuse is, and keep only cheap rate rules on redirects. Skipping the WAF on redirects altogether saves the most, but then nothing slows a bot walking the code space, so a production shortener usually pays for at least a rate rule there."
     }
   ],
   "questions": [

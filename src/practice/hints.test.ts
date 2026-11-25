@@ -20,7 +20,7 @@ describe('hint ladder', () => {
       'Nothing in the Services tier yet', 'Nothing in the Data tier yet', 'Nothing in the Async tier yet'])
     expect(parts.lines).toContain('Where would repeated reads be served from? (a cache)')
     expect(parts.lines.join(' ')).not.toMatch(/DNS|service|client/i)
-    expect(flow.lines).toEqual(['Create link: Client (Web client) → DNS → CDN → Load Balancer (L7) → API Service → Key Gen Service (Key generator) → Primary DB (SQL database) → Read Replica → Cache'])
+    expect(flow.lines).toEqual(['Create link: Client (Web client) → DNS → CDN → WAF → Load Balancer (L7) → API Service → Key Gen Service (Key generator) → Primary DB (SQL database) → Read Replica → Cache'])
     expect([tiers, parts, flow].every(h => !h.done)).toBe(true)
   })
 
@@ -28,6 +28,7 @@ describe('hint ladder', () => {
     const [tiers, parts, flow] = hintsFor(build(['web_client', 'cdn', 'load_balancer', 'service', 'sql_db', 'cache']), url)
     expect(tiers.lines).toEqual(['Nothing in the Async tier yet'])
     expect(parts.lines).toEqual([
+      'What filters bad traffic before it reaches you? (a web application firewall)',
       'How are unique keys made without collisions? (a key generator)',
       'How would the database keep up with heavy reads? (read replicas)',
       'How is slow work handed off so the caller does not wait? (a queue or event stream)',
@@ -38,7 +39,7 @@ describe('hint ladder', () => {
   })
 
   it('says so when a complete attempt has nothing left to add', () => {
-    const done = walk(build(['web_client', 'cdn', 'load_balancer', 'service', 'key_gen', 'sql_db', 'db_replica', 'cache', 'stream', 'scheduler', 'analytics']))
+    const done = walk(build(['web_client', 'cdn', 'waf', 'load_balancer', 'service', 'key_gen', 'sql_db', 'db_replica', 'cache', 'stream', 'scheduler', 'analytics']))
     const hints = hintsFor(done, url)
     expect(hints.every(h => h.done && h.lines.length === 1)).toBe(true)
     expect(hints[0].lines[0]).toMatch(/^Every tier/)

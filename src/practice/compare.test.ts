@@ -12,7 +12,7 @@ const kindsOf = (d: Design, ids: Set<string>) => [...new Set(d.nodes.filter(n =>
 describe('compare with the reference', () => {
   it('marks every checked reference component missing from an empty attempt, and no extras', () => {
     const { missing, extra } = compareDesigns(blankAttempt(url), url)
-    expect(kindsOf(url, missing)).toEqual(['analytics', 'cache', 'cdn', 'db_replica', 'key_gen', 'load_balancer', 'queue', 'sql_db', 'worker'])
+    expect(kindsOf(url, missing)).toEqual(['analytics', 'cache', 'cdn', 'db_replica', 'key_gen', 'load_balancer', 'queue', 'sql_db', 'waf', 'worker'])
     expect(url.nodes.filter(n => missing.has(n.id)).map(familyOf)).not.toContain('service')
     expect(extra.size).toBe(0)
   })
