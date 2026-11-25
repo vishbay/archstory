@@ -186,6 +186,12 @@ const GOLDEN: Record<string, Golden[]> = {
   notification_provider: external('push or email provider'),
   external_api: external('external API'),
   client: client(), web_client: client(), mobile_client: client(),
+  secrets: [
+    g('latency', 'Time to fetch a secret', 'secret_fetch_duration_seconds'),
+    g('traffic', 'Reads per second: cache them in the caller, because every read is a billed call', 'secret_reads_total'),
+    g('errors', 'Access denied and failed rotations', 'secret_access_denied_total, secret_rotation_failures_total'),
+    g('saturation', 'Request rate against the service quota', 'secret_requests_throttled_total'),
+  ],
   metrics_store: [
     g('latency', 'Query time for dashboards and alert rules', 'metrics_query_duration_seconds'),
     g('traffic', 'Samples ingested per second', 'metrics_samples_ingested_total'),

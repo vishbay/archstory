@@ -26,7 +26,7 @@ export const FAMILY_NAME: Record<string, string> = {
   cache: 'a cache', cdn: 'a CDN', dns: 'DNS', waf: 'a web application firewall', db_replica: 'read replicas',
   object_store: 'object storage', push_gateway: 'a WebSocket or MQTT gateway', geo_index: 'a geo index', search_index: 'a search or vector index',
   catalog: 'a data catalog or schema registry', llm: 'a model endpoint (LLM)', hybrid_link: 'a hybrid link to the data centre',
-  analytics: 'an analytics store', auth: 'an auth / identity service', key_gen: 'a key generator', rate_limiter: 'a rate limiter',
+  analytics: 'an analytics store', auth: 'an auth / identity service', secrets: 'a secrets and key store', key_gen: 'a key generator', rate_limiter: 'a rate limiter',
   payment_provider: 'a payment provider', notification_provider: 'a push / email provider', external_api: 'an external API',
 }
 export const nameOfFamily = (f: string) => FAMILY_NAME[f] ?? `a ${f.replace(/_/g, ' ')}`

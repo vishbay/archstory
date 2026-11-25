@@ -27,6 +27,8 @@ describe('standard signals', () => {
     expect(metrics('waf')).toContain('waf_blocked_requests_total')
     expect(metrics('waf')).not.toContain('http_server_duration_seconds')
     expect(signalsFor('balancer')).toEqual(signalsFor('load_balancer'))
+    expect(signalsFor('secrets').map(x => x.metric).join(' ')).toContain('secret_rotation_failures_total')
+    expect(KINDS.secrets.label).toBe('Secrets and keys')
     for (const x of signalsFor('waf')) expect(x.what).not.toContain('—')
   })
   it('say what the edge components emit: DNS metrics, CDN and WAF metrics and logs, none of them traces', () => {

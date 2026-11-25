@@ -21,6 +21,7 @@ export const KINDS: Record<string, KindInfo> = {
   service:       { label: 'Service',         icon: '🖥️', color: '#10b981', tier: 'services' },
   auth:          { label: 'Auth service',    icon: '🔐', color: '#10b981', tier: 'services' },
   key_gen:       { label: 'Key generator',   icon: '🔑', color: '#a855f7', tier: 'services' },
+  secrets:       { label: 'Secrets and keys', icon: '🗝️', color: '#a855f7', tier: 'data' },
   search:        { label: 'Search',          icon: '🔎', color: '#10b981', tier: 'services' },
   hybrid_link:   { label: 'Hybrid link',     icon: '🛤️', color: '#0ea5e9', tier: 'services' },
   cache:         { label: 'Cache',           icon: '⚡', color: '#f59e0b', tier: 'data' },

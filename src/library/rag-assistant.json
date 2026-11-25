@@ -218,7 +218,40 @@
       "id": "sources",
       "label": "Source Systems",
       "kind": "external_api",
-      "description": "Confluence, SharePoint, Google Drive, Jira and ServiceNow, each with its own change API and permission model, plus the company directory (Entra ID or Okta) for group membership"
+      "description": "Confluence, SharePoint, Google Drive, Jira and ServiceNow, each with its own change API and permission model"
+    },
+    {
+      "id": "idp",
+      "label": "Identity Provider (SSO)",
+      "kind": "auth",
+      "tier": "entry",
+      "subnet": "none",
+      "description": "The company's single sign-on and directory (Entra ID or Okta): signs people in with multi-factor, issues the ID tokens the web app and the Slack link use, publishes the public keys the orchestrator verifies them with, and holds the group memberships the connectors sync",
+      "cloud": {
+        "aws": "Entra ID or Okta",
+        "gcp": "Entra ID or Okta"
+      }
+    },
+    {
+      "id": "secrets",
+      "label": "Secrets and Keys",
+      "kind": "secrets",
+      "subnet": "none",
+      "description": "Source credentials (service account tokens, OAuth clients) with automatic rotation, and the encryption keys for the stores; read through a private endpoint and never baked into an image or a config file",
+      "cloud": {
+        "aws": "Secrets Manager",
+        "gcp": "Secret Manager"
+      }
+    },
+    {
+      "id": "evals",
+      "label": "Eval Runner",
+      "kind": "scheduler",
+      "description": "Nightly job: replays a fixed question set and a sample of rated production answers through a judge model, scores retrieval and answers per source and prompt version, and flags regressions",
+      "cloud": {
+        "aws": "ECS scheduled task",
+        "gcp": "Cloud Run job"
+      }
     }
   ],
   "edges": [
@@ -301,6 +334,30 @@
       "from": "indexer",
       "to": "cache",
       "async": true
+    },
+    {
+      "from": "user",
+      "to": "idp"
+    },
+    {
+      "from": "chat_api",
+      "to": "idp"
+    },
+    {
+      "from": "connectors",
+      "to": "idp"
+    },
+    {
+      "from": "connectors",
+      "to": "secrets"
+    },
+    {
+      "from": "evals",
+      "to": "meta_db"
+    },
+    {
+      "from": "evals",
+      "to": "llm"
     }
   ],
   "flows": [
@@ -554,10 +611,112 @@
       ]
     },
     {
+      "id": "signin",
+      "title": "Sign in and link Slack",
+      "summary": "Employees sign in once through the company SSO, and the Slack bot links each Slack user the same way, so every question runs as the person who asked.",
+      "steps": [
+        {
+          "from": "user",
+          "to": "idp",
+          "kind": "req",
+          "phase": "Sign in",
+          "label": "OIDC sign-in (authorization code with PKCE)",
+          "detail": "The web app sends the browser to the company SSO. The person signs in there, with multi-factor if the company requires it, so the assistant never sees a password. PKCE ties the returned code to this browser.",
+          "payload": "GET /authorize?client_id=ask-web&response_type=code&scope=openid%20profile&code_challenge=…&code_challenge_method=S256&state=…"
+        },
+        {
+          "from": "idp",
+          "to": "user",
+          "kind": "res",
+          "phase": "Sign in",
+          "label": "ID token and refresh token",
+          "detail": "The web app exchanges the code for an ID token, a signed token naming the person, the issuer and the audience that is short lived (often about an hour), and a refresh token to get the next one without signing in again. The ID token travels with every question."
+        },
+        {
+          "from": "user",
+          "to": "idp",
+          "kind": "req",
+          "phase": "Link Slack",
+          "label": "Slack bot sends a sign-in link (once)",
+          "detail": "The first time someone messages the bot, it replies with a link to the same company SSO. A Slack user id proves nothing about who the person is, so the link is how the bot learns their company identity."
+        },
+        {
+          "from": "idp",
+          "to": "user",
+          "kind": "res",
+          "phase": "Link Slack",
+          "label": "identity for this Slack user",
+          "detail": "The bot keeps the link between that Slack user and their company identity, and from then on calls the API with a short-lived token issued for that person. There is no shared bot identity, so retrieval always runs with the asking person's permissions."
+        },
+        {
+          "from": "user",
+          "to": "waf",
+          "kind": "req",
+          "phase": "First question",
+          "label": "POST /v1/ask with the ID token",
+          "detail": "Web or Slack, the request carries a token for the person asking.",
+          "payload": "POST /v1/ask\nAuthorization: Bearer <SSO id token>\nAccept: text/event-stream"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "First question",
+          "label": "passed: POST /v1/ask"
+        },
+        {
+          "from": "lb",
+          "to": "chat_api",
+          "kind": "req",
+          "phase": "First question",
+          "label": "forward to any orchestrator"
+        },
+        {
+          "from": "chat_api",
+          "to": "idp",
+          "kind": "req",
+          "phase": "First question",
+          "label": "fetch signing keys (cache miss)",
+          "detail": "The orchestrator verifies the token's signature with the identity provider's public keys, published at a well-known address. It keeps them cached and fetches them again only when a token names a key it does not have, so the identity provider is not on the path of every question."
+        },
+        {
+          "from": "idp",
+          "to": "chat_api",
+          "kind": "res",
+          "phase": "First question",
+          "label": "public keys",
+          "detail": "Key ids and public keys. A key rotation at the identity provider shows up the first time a token signed with the new key arrives."
+        },
+        {
+          "from": "chat_api",
+          "to": "chat_api",
+          "kind": "local",
+          "phase": "First question",
+          "label": "verify issuer, audience, expiry and signature",
+          "detail": "The token must come from the company issuer, be meant for this app, be unexpired and verify against a key. Then the orchestrator knows which person is asking, and everything after this (groups, retrieval filter, limits) is for that person. The question continues as in Ask a question."
+        }
+      ]
+    },
+    {
       "id": "reindex",
       "title": "A changed document is re-indexed",
       "summary": "Connectors pull changes rather than waiting for webhooks, save the raw file, and queue the document. Workers re-chunk it, embed only chunks whose text changed, swap the chunks in the index and drop cached answers that cited it. Target: searchable within 15 minutes.",
       "steps": [
+        {
+          "from": "connectors",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Detect change",
+          "label": "get source credentials",
+          "detail": "The connectors read the Confluence OAuth client from the secrets store each run, over a private endpoint, and never keep it in a config file or an image. A rotation by the store is picked up on the next run."
+        },
+        {
+          "from": "secrets",
+          "to": "connectors",
+          "kind": "res",
+          "phase": "Detect change",
+          "label": "OAuth client for Confluence"
+        },
         {
           "from": "connectors",
           "to": "sources",
@@ -940,6 +1099,184 @@
           "label": "log security event, flag document",
           "detail": "The flagged ticket goes to a review queue for security and the owning team, who can edit or exclude it from the index.",
           "payload": "INSERT INTO security_events (kind, doc_id, answer_id, score) VALUES ('prompt_injection', 'jira:IT-88213', 'a_61b', 0.97);"
+        }
+      ]
+    },
+    {
+      "id": "groups",
+      "title": "A leaver loses access within minutes",
+      "summary": "The connectors copy group memberships from the company directory, so a person who is removed from a group stops matching the documents that group could read.",
+      "steps": [
+        {
+          "from": "connectors",
+          "to": "idp",
+          "kind": "req",
+          "phase": "Sync",
+          "label": "list group changes since cursor",
+          "detail": "Every few minutes the connectors ask the directory what changed since the saved cursor, with a delta query on Entra ID or the groups API on Okta."
+        },
+        {
+          "from": "idp",
+          "to": "connectors",
+          "kind": "res",
+          "phase": "Sync",
+          "label": "jdoe removed from HR-Restricted",
+          "detail": "The change names the person and the group. Someone who leaves the company is removed from every group at once."
+        },
+        {
+          "from": "connectors",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Update",
+          "label": "UPDATE group memberships",
+          "detail": "The registry now says jdoe is no longer in HR-Restricted.",
+          "payload": "DELETE FROM group_members\n WHERE user_id = 'u_jdoe' AND group_id = 'g_hr_restricted';"
+        },
+        {
+          "from": "meta_db",
+          "to": "connectors",
+          "kind": "res",
+          "phase": "Update",
+          "label": "COMMIT ok"
+        },
+        {
+          "from": "cache",
+          "to": "cache",
+          "kind": "local",
+          "phase": "Update",
+          "label": "cached group list expires (within 5 min)",
+          "detail": "The orchestrator keeps each person's resolved group list for 5 minutes, so a stale list lives at most that long. The sync interval plus those 5 minutes stays inside the 15 minute target for revoked access."
+        },
+        {
+          "from": "chat_api",
+          "to": "chat_api",
+          "kind": "local",
+          "phase": "Next question",
+          "label": "retrieval filter uses the new groups",
+          "detail": "jdoe's next question filters on the new group list, so chunks that only HR-Restricted could read no longer match, even though the index itself never changed."
+        }
+      ]
+    },
+    {
+      "id": "feedback",
+      "title": "Feedback and nightly evals",
+      "summary": "A thumbs down is saved with the trace that produced the answer, and a nightly job scores answers per source and prompt version, so the team can tell bad retrieval from bad generation.",
+      "steps": [
+        {
+          "from": "user",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Thumbs down",
+          "label": "POST /v1/feedback (thumbs down and a comment)",
+          "detail": "Every answer has a thumbs up or down with an optional comment. The request carries the answer id, which links to the saved trace.",
+          "payload": "POST /v1/feedback\nAuthorization: Bearer <SSO id token>\n\n{ \"answer_id\": \"a_5d2\", \"rating\": \"down\", \"comment\": \"policy changed in March\" }"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Thumbs down",
+          "label": "passed: POST /v1/feedback"
+        },
+        {
+          "from": "lb",
+          "to": "chat_api",
+          "kind": "req",
+          "phase": "Thumbs down",
+          "label": "forward to any orchestrator"
+        },
+        {
+          "from": "chat_api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Thumbs down",
+          "label": "INSERT feedback",
+          "detail": "Stored next to the answer trace (question, rewritten query, chunk ids, prompt version, model), so the team can tell later whether a thumbs down was bad retrieval or bad generation.",
+          "payload": "INSERT INTO answer_feedback (answer_id, user_id, rating, comment)\n  VALUES ('a_5d2', 'u_jdoe', 'down', 'policy changed in March');"
+        },
+        {
+          "from": "meta_db",
+          "to": "chat_api",
+          "kind": "res",
+          "phase": "Thumbs down",
+          "label": "row saved"
+        },
+        {
+          "from": "chat_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Thumbs down",
+          "label": "204 No Content"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Thumbs down",
+          "label": "204 No Content"
+        },
+        {
+          "from": "waf",
+          "to": "user",
+          "kind": "res",
+          "phase": "Thumbs down",
+          "label": "204 No Content",
+          "detail": "The answer view shows a short thanks. The comment is read later, in the nightly review."
+        },
+        {
+          "from": "evals",
+          "to": "evals",
+          "kind": "local",
+          "phase": "Nightly evals",
+          "label": "nightly schedule starts",
+          "detail": "The runner is a scheduled job, not part of the request path, so it can take as long as it needs and costs a fixed daily budget."
+        },
+        {
+          "from": "evals",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Nightly evals",
+          "label": "sample traces: rated answers and a fixed question set",
+          "detail": "It takes the answers people rated, a random sample of the rest, and a fixed set of questions with known good sources, so a change can be compared with yesterday."
+        },
+        {
+          "from": "meta_db",
+          "to": "evals",
+          "kind": "res",
+          "phase": "Nightly evals",
+          "label": "300 traces, 12 with a thumbs down",
+          "detail": "Illustrative sample sizes: enough to see a trend without paying to judge every answer."
+        },
+        {
+          "from": "evals",
+          "to": "llm",
+          "kind": "req",
+          "phase": "Nightly evals",
+          "label": "judge: does each cited chunk support its claim?",
+          "detail": "A separate judge model reads the question, the retrieved chunks and the answer. It scores whether the claims are in the sources, whether the citations point at the right chunks, and whether it should have said no answer was found."
+        },
+        {
+          "from": "llm",
+          "to": "evals",
+          "kind": "res",
+          "phase": "Nightly evals",
+          "label": "scores per answer"
+        },
+        {
+          "from": "evals",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Nightly evals",
+          "label": "INSERT eval scores by source and prompt version",
+          "detail": "Scores are grouped by source system and prompt version, so a drop after a prompt change, or after one connector started returning bad text, shows up as one line. A regression raises a ticket.",
+          "payload": "INSERT INTO eval_scores (run_id, source, prompt_ver, faithfulness, citation_ok, abstain_ok)\n  VALUES ('r_20261126', 'confluence', 'p17', 0.93, 0.96, 0.88);"
+        },
+        {
+          "from": "meta_db",
+          "to": "evals",
+          "kind": "res",
+          "phase": "Nightly evals",
+          "label": "COMMIT ok"
         }
       ]
     }
