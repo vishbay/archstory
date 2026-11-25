@@ -317,7 +317,8 @@
       "cloud": {
         "aws": "API Gateway",
         "gcp": "Apigee"
-      }
+      },
+      "subnet": "none"
     },
     {
       "id": "commerce",

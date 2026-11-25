@@ -315,7 +315,8 @@
       "cloud": {
         "aws": "API Gateway",
         "gcp": "API Gateway"
-      }
+      },
+      "subnet": "none"
     },
     {
       "id": "ilb",

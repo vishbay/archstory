@@ -331,11 +331,12 @@
       "id": "gw",
       "label": "API Gateway",
       "kind": "api_gateway",
-      "description": "Verifies tokens, resolves the tenant, applies per-tenant limits, signs the tenant context (tenant, database, limits) with a key from the secrets manager",
+      "description": "Verifies tokens, resolves the tenant, applies per-tenant limits, signs the tenant context (tenant, database, limits) with a key from the secrets manager. A managed gateway, so it runs outside the VPC and reaches the internal load balancer through a private integration",
       "cloud": {
         "aws": "API Gateway",
         "gcp": "API Gateway"
-      }
+      },
+      "subnet": "none"
     },
     {
       "id": "auth",
