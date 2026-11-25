@@ -249,6 +249,7 @@
     },
     {
       "id": "gw",
+      "tier": "services",
       "label": "Gateway + Limiter",
       "kind": "api_gateway",
       "replicas": 75,

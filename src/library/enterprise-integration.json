@@ -365,7 +365,7 @@
       "id": "bus",
       "label": "Event Backbone",
       "kind": "stream",
-      "subnet": "data",
+      "subnet": "app",
       "ha": "quorum",
       "description": "Canonical topics (OrderPlaced, CustomerUpdated, InventoryAdjusted) keyed by business id, 12 partitions, 7-day retention; retry and dead-letter topics per consumer; every event is serialized against a schema in the schema registry",
       "cloud": {

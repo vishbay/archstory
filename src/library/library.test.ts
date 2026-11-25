@@ -149,3 +149,17 @@ describe.each(LIBRARY.map(d => [d.id, d] as const))('%s monitoring', (_, d) => {
   })
   it('uses no em dashes', () => { expect(JSON.stringify(o)).not.toContain('—') })
 })
+
+describe('network view subnet boxes', () => {
+  // A tier row that mixes nodes from two subnets would draw both subnet strips over the same row, with their labels on top of each other.
+  it('never draw two subnet boxes over the same area, in any design', () => {
+    for (const design of LIBRARY.filter(x => x.network)) {
+      const S = layoutBands(design, { network: true }).subnets
+      for (let i = 0; i < S.length; i++) for (let j = i + 1; j < S.length; j++) {
+        const a = S[i], b = S[j]
+        const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+        expect(overlapX > 0 && overlapY > 0, `${design.id}: the ${a.id} and ${b.id} subnets overlap`).toBe(false)
+      }
+    }
+  })
+})

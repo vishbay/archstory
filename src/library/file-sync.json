@@ -107,6 +107,7 @@
     },
     {
       "id": "notify",
+      "tier": "services",
       "label": "Change Notifier",
       "kind": "websocket_gateway",
       "description": "Holds a long-poll from every online device and answers it when the account's sequence passes the device's cursor, or with \"nothing new\" after about 50 s so the load balancer's 60 s idle timeout never cuts it",

@@ -388,6 +388,7 @@
     },
     {
       "id": "events",
+      "tier": "data",
       "label": "Clickstream Topic",
       "kind": "stream",
       "subnet": "data",

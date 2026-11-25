@@ -380,6 +380,7 @@
     },
     {
       "id": "events",
+      "tier": "data",
       "label": "Order Events",
       "kind": "stream",
       "subnet": "data",

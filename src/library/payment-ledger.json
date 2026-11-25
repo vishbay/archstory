@@ -294,6 +294,19 @@
   },
   "nodes": [
     {
+      "id": "events",
+      "tier": "data",
+      "label": "Ledger Events",
+      "kind": "stream",
+      "subnet": "data",
+      "ha": "quorum",
+      "description": "TransferPosted, PayoutRequested, PayoutPaid; keyed by account id so each account's events stay in order; a retry and a dead-letter topic per consumer",
+      "cloud": {
+        "aws": "MSK (Kafka)",
+        "gcp": "Managed Service for Apache Kafka"
+      }
+    },
+    {
       "id": "client",
       "label": "Wallet App",
       "kind": "mobile_client",
@@ -399,18 +412,6 @@
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
-      }
-    },
-    {
-      "id": "events",
-      "label": "Ledger Events",
-      "kind": "stream",
-      "subnet": "data",
-      "ha": "quorum",
-      "description": "TransferPosted, PayoutRequested, PayoutPaid; keyed by account id so each account's events stay in order; a retry and a dead-letter topic per consumer",
-      "cloud": {
-        "aws": "MSK (Kafka)",
-        "gcp": "Managed Service for Apache Kafka"
       }
     },
     {

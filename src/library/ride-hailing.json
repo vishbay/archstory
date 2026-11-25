@@ -312,6 +312,7 @@
     },
     {
       "id": "ws",
+      "tier": "services",
       "label": "WebSocket Gateway",
       "kind": "websocket_gateway",
       "description": "Holds one persistent connection per online driver and rider; records which instance holds each user in a connection registry",

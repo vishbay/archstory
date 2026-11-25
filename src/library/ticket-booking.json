@@ -108,6 +108,7 @@
     },
     {
       "id": "room",
+      "tier": "services",
       "label": "Waiting Room",
       "kind": "rate_limiter",
       "description": "Gives each fan a signed place in line and admits them in order at a rate booking can take; its line counters live in the Seat Holds Redis",
@@ -119,6 +120,7 @@
     },
     {
       "id": "ilb",
+      "tier": "services",
       "label": "Internal Load Balancer",
       "kind": "load_balancer",
       "subnet": "app",

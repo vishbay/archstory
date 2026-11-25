@@ -96,6 +96,7 @@
     },
     {
       "id": "broker",
+      "tier": "services",
       "label": "MQTT Broker",
       "kind": "mqtt_broker",
       "subnet": "app",

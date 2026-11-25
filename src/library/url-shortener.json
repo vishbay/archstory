@@ -363,6 +363,7 @@
     },
     {
       "id": "analytics",
+      "tier": "data",
       "label": "Analytics Store",
       "kind": "analytics",
       "description": "Columnar store",
