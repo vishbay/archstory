@@ -152,6 +152,12 @@ const GOLDEN: Record<string, Golden[]> = {
     g('errors', '5xx from the edge and from the origin', 'edge_5xx_total, origin_5xx_total'),
     g('saturation', 'Cache hit ratio and origin request rate', 'edge_cache_hit_ratio, origin_requests_total'),
   ],
+  waf: [
+    g('latency', 'Time added by rule evaluation (most WAFs do not report it, so watch the edge time to first byte)', 'edge_ttfb_seconds'),
+    g('traffic', 'Requests inspected, by action: allowed, blocked, counted or challenged', 'waf_requests_total{action,rule}'),
+    g('errors', 'Blocked requests by rule: a jump is an attack or a rule that is too broad', 'waf_blocked_requests_total{rule}'),
+    g('saturation', 'Rate-based rules near their limit, and bodies larger than the WAF inspects', 'waf_rate_rule_hits_total, waf_oversize_requests_total'),
+  ],
   dns: [
     g('latency', 'Query response time from the resolver side', 'dns_query_duration_seconds'),
     g('traffic', 'Queries per second', 'dns_queries_total'),
@@ -207,7 +213,9 @@ function client(): Golden[] {
   ]
 }
 
-export const signalsFor = (kind: string): Golden[] => GOLDEN[kind] ?? SERVICE
+// The generic balancer kind reports like a load balancer; anything else without its own entry reports like a service.
+const ALIAS: Record<string, string> = { balancer: 'load_balancer' }
+export const signalsFor = (kind: string): Golden[] => GOLDEN[ALIAS[kind] ?? kind] ?? SERVICE
 
 /** Which kinds of telemetry a component emits. Third parties and clients are measured from our side. */
 export function emits(kind: string): { metrics: boolean; logs: boolean; traces: boolean } {

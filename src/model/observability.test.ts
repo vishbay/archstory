@@ -21,6 +21,21 @@ describe('standard signals', () => {
   })
 })
 
+describe('standard signals', () => {
+  it('give a WAF its own signals instead of the generic service ones, and a generic balancer the load balancer ones', () => {
+    const metrics = (k: string) => signalsFor(k).map(x => x.metric).join(' ')
+    expect(metrics('waf')).toContain('waf_blocked_requests_total')
+    expect(metrics('waf')).not.toContain('http_server_duration_seconds')
+    expect(signalsFor('balancer')).toEqual(signalsFor('load_balancer'))
+    for (const x of signalsFor('waf')) expect(x.what).not.toContain('—')
+  })
+  it('say what the edge components emit: DNS metrics, CDN and WAF metrics and logs, none of them traces', () => {
+    expect(emits('dns')).toEqual({ metrics: true, logs: false, traces: false })
+    expect(emits('cdn')).toEqual({ metrics: true, logs: true, traces: false })
+    expect(emits('waf')).toEqual({ metrics: true, logs: true, traces: false })
+  })
+})
+
 describe('error budgets', () => {
   it('turns an availability target into minutes of outage', () => {
     expect(budgetText({ kind: 'availability', target: 99.9, window: 30 })).toMatch(/^43\.2 minutes of full outage per 30 days/)
