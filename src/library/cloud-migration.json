@@ -429,14 +429,6 @@
       "to": "dns"
     },
     {
-      "from": "client",
-      "to": "waf"
-    },
-    {
-      "from": "waf",
-      "to": "cdn"
-    },
-    {
       "from": "cdn",
       "to": "lb"
     },
@@ -492,6 +484,14 @@
     {
       "from": "cdc",
       "to": "orders_db"
+    },
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "waf"
     }
   ],
   "flows": [
@@ -518,7 +518,7 @@
         },
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /api/orders",
@@ -526,12 +526,19 @@
           "payload": "POST /api/orders\nCookie: session=8c1f...; AWSALBTG=...\nIdempotency-Key: 3b9e6d2a\n\n{ \"customer_id\": 4471902, \"cart_id\": \"c_77k2\",\n  \"items\": [ { \"sku\": \"SKU-1182\", \"qty\": 2 } ],\n  \"shipping\": \"standard\" }"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
-          "label": "passed: POST /api/orders",
+          "label": "inspect",
           "detail": "The web ACL on the CDN checks every request against managed rule sets, rate limits and bot rules before it is forwarded, so legacy paths get the same protection as migrated ones without touching the monolith."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -640,13 +647,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "order confirmed"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -687,7 +687,7 @@
       "steps": [
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /cart/items",
@@ -695,12 +695,19 @@
           "payload": "POST /cart/items\nCookie: JSESSIONID=A1B2C3...\n\nsku=SKU-1182&qty=2"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
-          "label": "passed: POST /cart/items",
+          "label": "inspect",
           "detail": "The web ACL on the CDN checks every request against managed rule sets, rate limits and bot rules before it is forwarded, so legacy paths get the same protection as migrated ones without touching the monolith."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -774,13 +781,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "cart with 2 items"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond",
@@ -969,19 +969,26 @@
         },
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Served by monolith",
           "label": "POST /api/orders",
           "detail": "The next order from the same shopper is placed exactly as it was before the migration started."
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Served by monolith",
-          "label": "passed: POST /api/orders",
+          "label": "inspect",
           "detail": "The web ACL on the CDN checks every request against managed rule sets, rate limits and bot rules before it is forwarded, so legacy paths get the same protection as migrated ones without touching the monolith."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Served by monolith",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -1043,13 +1050,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Served by monolith",
-          "label": "order 48812210 confirmed"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Served by monolith",

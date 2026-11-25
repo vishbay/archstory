@@ -428,10 +428,6 @@
   "groups": [],
   "edges": [
     {
-      "from": "client",
-      "to": "waf"
-    },
-    {
       "from": "cdn",
       "to": "gw"
     },
@@ -481,12 +477,16 @@
       "to": "dns"
     },
     {
-      "from": "waf",
+      "from": "ilb",
+      "to": "order_svc"
+    },
+    {
+      "from": "client",
       "to": "cdn"
     },
     {
-      "from": "ilb",
-      "to": "order_svc"
+      "from": "cdn",
+      "to": "waf"
     }
   ],
   "flows": [
@@ -513,7 +513,7 @@
         },
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /orders",
@@ -521,20 +521,19 @@
           "payload": "POST /orders HTTP/2\nIdempotency-Key: 9b2e4c1a-…\n\n{ \"cart_id\": \"cart_88\", \"items\": [{ \"sku\": \"SHOE-42\", \"qty\": 1 }], \"payment_method\": \"pm_visa\" }"
         },
         {
-          "from": "waf",
+          "from": "cdn",
           "to": "waf",
-          "kind": "local",
+          "kind": "req",
           "phase": "Request in",
-          "label": "managed rules, bot + rate rules",
+          "label": "inspect",
           "detail": "AWS WAF runs on the CDN edge before anything is forwarded: managed rule sets block common exploits, bot control challenges scripted clients, and rate rules on POST /orders per IP and per account stop card testing (bots trying many stolen cards with small orders)."
         },
         {
           "from": "waf",
           "to": "cdn",
-          "kind": "req",
+          "kind": "res",
           "phase": "Request in",
-          "label": "allowed: forward",
-          "detail": "Only requests the web ACL allows reach the CDN."
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -716,13 +715,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Response",
-          "label": "Order confirmed"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Response",
@@ -775,18 +767,25 @@
       "steps": [
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /orders",
-          "detail": "Same path as a successful order: WAF, CDN (not cached), gateway, internal load balancer."
+          "detail": "Same path as a successful order: the CDN with its WAF (not cached), gateway, internal load balancer."
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
         },
         {
           "from": "waf",
           "to": "cdn",
-          "kind": "req",
+          "kind": "res",
           "phase": "Request in",
-          "label": "allowed: forward"
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -948,13 +947,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Response",
-          "label": "Card declined, try another"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Response",
@@ -1023,13 +1015,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond pending",
-          "label": "202"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Respond pending",

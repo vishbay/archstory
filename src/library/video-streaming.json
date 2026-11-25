@@ -233,16 +233,6 @@
   },
   "nodes": [
     {
-      "id": "cdn",
-      "label": "CDN",
-      "kind": "cdn",
-      "description": "Two distributions: the site and API (behind the WAF, API responses not cached) and video segments (cached for days, signed playback tokens checked at the edge, an origin shield in front of storage)",
-      "cloud": {
-        "aws": "CloudFront",
-        "gcp": "Cloud CDN"
-      }
-    },
-    {
       "id": "raw",
       "label": "Raw Uploads",
       "kind": "object_store",
@@ -290,6 +280,16 @@
       "cloud": {
         "aws": "Route 53",
         "gcp": "Cloud DNS"
+      }
+    },
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "cdn",
+      "description": "Two distributions: the site and API (behind the WAF, API responses not cached) and video segments (cached for days, signed playback tokens checked at the edge, an origin shield in front of storage)",
+      "cloud": {
+        "aws": "CloudFront",
+        "gcp": "Cloud CDN"
       }
     },
     {
@@ -374,14 +374,6 @@
   "edges": [
     {
       "from": "creator",
-      "to": "waf"
-    },
-    {
-      "from": "waf",
-      "to": "cdn"
-    },
-    {
-      "from": "creator",
       "to": "dns"
     },
     {
@@ -461,7 +453,11 @@
       "label": "segments"
     },
     {
-      "from": "viewer",
+      "from": "creator",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
       "to": "waf"
     }
   ],
@@ -489,7 +485,7 @@
         },
         {
           "from": "creator",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /uploads",
@@ -497,12 +493,19 @@
           "payload": "POST /uploads HTTP/2\nAuthorization: Bearer <creator token>\ntraceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01\n\n{ \"title\": \"My trip\", \"size_bytes\": 3221225472, \"content_type\": \"video/mp4\" }"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
-          "label": "inspect, then forward",
+          "label": "inspect",
           "detail": "Managed rule sets, rate rules (per creator for uploads, per IP for the API) and bot control run at the edge, before the request costs the origin anything."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -564,13 +567,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Create upload",
-          "label": "200 signed part URLs"
-        },
-        {
-          "from": "waf",
           "to": "creator",
           "kind": "res",
           "phase": "Create upload",
@@ -734,18 +730,25 @@
         },
         {
           "from": "viewer",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Load video page",
           "label": "GET /api/videos/v_123"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Load video page",
-          "label": "inspect, then forward",
+          "label": "inspect",
           "detail": "Managed rule sets, rate rules (per creator for uploads, per IP for the API) and bot control run at the edge, before the request costs the origin anything."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Load video page",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -801,13 +804,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Load video page",
-          "label": "200"
-        },
-        {
-          "from": "waf",
           "to": "viewer",
           "kind": "res",
           "phase": "Load video page",

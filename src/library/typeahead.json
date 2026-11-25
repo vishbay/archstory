@@ -317,14 +317,6 @@
   "groups": [],
   "edges": [
     {
-      "from": "client",
-      "to": "waf"
-    },
-    {
-      "from": "waf",
-      "to": "cdn"
-    },
-    {
       "from": "cdn",
       "to": "lb"
     },
@@ -364,6 +356,14 @@
     {
       "from": "client",
       "to": "dns"
+    },
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "waf"
     }
   ],
   "flows": [
@@ -398,19 +398,26 @@
         },
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Edge cache hit",
           "label": "GET /suggest?q=sys",
           "payload": "GET /suggest?q=sys&lang=en HTTP/2"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Edge cache hit",
-          "label": "inspect, then pass",
+          "label": "inspect",
           "detail": "Per-IP rate rules and bot control stop scrapers that walk every prefix to copy the suggestion list. A WAF is priced per request, so at ~50B requests a day it is a real cost line; the rules are kept to the few that matter."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Edge cache hit",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -422,13 +429,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Edge cache hit",
-          "label": "top 10"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Edge cache hit",
@@ -444,17 +444,24 @@
       "steps": [
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Edge cache miss",
           "label": "GET /suggest?q=system%20des"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Edge cache miss",
-          "label": "inspect, then pass"
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Edge cache miss",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -503,18 +510,11 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
+          "to": "client",
           "kind": "res",
           "phase": "Respond",
           "label": "top 10",
           "detail": "Now cached at this edge for the next five minutes."
-        },
-        {
-          "from": "waf",
-          "to": "client",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "top 10"
         }
       ]
     },

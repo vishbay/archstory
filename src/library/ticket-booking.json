@@ -212,10 +212,6 @@
       "to": "dns"
     },
     {
-      "from": "fan",
-      "to": "waf"
-    },
-    {
       "from": "cdn",
       "to": "lb"
     },
@@ -262,16 +258,20 @@
       "async": true
     },
     {
-      "from": "waf",
-      "to": "cdn"
-    },
-    {
       "from": "ilb",
       "to": "booking"
     },
     {
       "from": "room",
       "to": "holds"
+    },
+    {
+      "from": "fan",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "waf"
     }
   ],
   "flows": [
@@ -296,26 +296,26 @@
         },
         {
           "from": "fan",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "GET /events/123/seats",
-          "detail": "Every request, cached or not, passes the web ACL at the edge first."
+          "detail": "Every request, cached or not, is checked by the web ACL at the edge before any cache lookup."
         },
         {
-          "from": "waf",
+          "from": "cdn",
           "to": "waf",
-          "kind": "local",
+          "kind": "req",
           "phase": "Request in",
-          "label": "bot control + rate rules",
+          "label": "inspect",
           "detail": "Before an on-sale, bots hammer seat maps to find inventory. Bot control challenges scripted clients and rate rules cap requests per IP, so the CDN and origin only see people."
         },
         {
           "from": "waf",
           "to": "cdn",
-          "kind": "req",
+          "kind": "res",
           "phase": "Request in",
-          "label": "allowed: forward"
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -373,13 +373,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "seat map"
-        },
-        {
-          "from": "waf",
           "to": "fan",
           "kind": "res",
           "phase": "Respond",
@@ -394,7 +387,7 @@
       "steps": [
         {
           "from": "fan",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /holds (A12, A13)",
@@ -402,19 +395,19 @@
           "payload": "POST /holds HTTP/2\nCookie: admit=eyJmYW4iOiJ1OSIsImV2ZW50IjoxMjMsImV4cCI6MTc2MzAwMDYwMH0.sig\nIdempotency-Key: 4c1e…\n\n{ \"event_id\": 123, \"seats\": [\"A12\", \"A13\"] }"
         },
         {
-          "from": "waf",
+          "from": "cdn",
           "to": "waf",
-          "kind": "local",
+          "kind": "req",
           "phase": "Request in",
-          "label": "bot control + rate rules",
+          "label": "inspect",
           "detail": "Holds are what scalpers' bots want. The web ACL challenges suspected bots and caps holds per IP before they reach the waiting room."
         },
         {
           "from": "waf",
           "to": "cdn",
-          "kind": "req",
+          "kind": "res",
           "phase": "Request in",
-          "label": "allowed: forward",
+          "label": "allow",
           "detail": "POST /holds is never cached: the CDN only terminates TLS near the fan and forwards to the origin."
         },
         {
@@ -518,13 +511,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "pay within 10 minutes"
-        },
-        {
-          "from": "waf",
           "to": "fan",
           "kind": "res",
           "phase": "Respond",
@@ -539,17 +525,24 @@
       "steps": [
         {
           "from": "fan",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Request in",
           "label": "POST /bookings/b1/pay"
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Request in",
-          "label": "allowed: forward"
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -666,13 +659,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "tickets coming by email"
-        },
-        {
-          "from": "waf",
           "to": "fan",
           "kind": "res",
           "phase": "Respond",
@@ -793,13 +779,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Respond",
-          "label": "409"
-        },
-        {
-          "from": "waf",
           "to": "fan",
           "kind": "res",
           "phase": "Respond",

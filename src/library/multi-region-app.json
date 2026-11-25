@@ -413,10 +413,6 @@
     },
     {
       "from": "waf",
-      "to": "cdn"
-    },
-    {
-      "from": "waf",
       "to": "lb"
     },
     {
@@ -446,6 +442,14 @@
     {
       "from": "billing",
       "to": "warehouse"
+    },
+    {
+      "from": "client",
+      "to": "cdn"
+    },
+    {
+      "from": "cdn",
+      "to": "waf"
     }
   ],
   "flows": [
@@ -576,19 +580,26 @@
         },
         {
           "from": "client",
-          "to": "waf",
+          "to": "cdn",
           "kind": "req",
           "phase": "Avatar",
           "label": "GET avatar",
           "detail": "Images never touch the regional stack: the CDN serves them from an edge location near the user."
         },
         {
-          "from": "waf",
-          "to": "cdn",
+          "from": "cdn",
+          "to": "waf",
           "kind": "req",
           "phase": "Avatar",
-          "label": "passed: GET avatar",
+          "label": "inspect",
           "detail": "Same web ACL checks: allowed, so it is passed on."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Avatar",
+          "label": "allow"
         },
         {
           "from": "cdn",
@@ -607,13 +618,6 @@
         },
         {
           "from": "cdn",
-          "to": "waf",
-          "kind": "res",
-          "phase": "Avatar",
-          "label": "image"
-        },
-        {
-          "from": "waf",
           "to": "client",
           "kind": "res",
           "phase": "Avatar",
