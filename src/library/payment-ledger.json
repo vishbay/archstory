@@ -527,6 +527,15 @@
     {
       "from": "ilb",
       "to": "ledger_svc"
+    },
+    {
+      "from": "ledger_db",
+      "to": "ledger_replica",
+      "async_": true
+    },
+    {
+      "from": "ledger_svc",
+      "to": "ledger_replica"
     }
   ],
   "flows": [
@@ -1250,6 +1259,170 @@
           "kind": "res",
           "phase": "Resolve",
           "label": "settled"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "title": "Show a wallet balance and history",
+      "summary": "Reads go to the replica, which the primary feeds asynchronously, so showing history never slows a transfer.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /v1/wallets/acc_alice/entries?limit=50"
+        },
+        {
+          "from": "waf",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "allowed: forward"
+        },
+        {
+          "from": "gw",
+          "to": "ilb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "ilb",
+          "to": "ledger_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "to a healthy instance"
+        },
+        {
+          "from": "ledger_svc",
+          "to": "ledger_replica",
+          "kind": "req",
+          "phase": "Read history",
+          "label": "SELECT entries WHERE account = acc_alice ORDER BY id DESC LIMIT 50",
+          "detail": "History is read from the replica, so statements never compete with posting on the primary. It lags by under a second, and the balance shown is the one stored on the account row, with the page's own entries beside it."
+        },
+        {
+          "from": "ledger_replica",
+          "to": "ledger_svc",
+          "kind": "res",
+          "phase": "Read history",
+          "label": "50 entries, balance 118.40"
+        },
+        {
+          "from": "ledger_svc",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "ilb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "gw",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "waf",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        }
+      ]
+    },
+    {
+      "id": "payout-failed",
+      "title": "A payout fails for good",
+      "summary": "A definite failure from the provider releases the funds that were parked in flight back to the wallet, exactly once.",
+      "steps": [
+        {
+          "from": "psp",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Webhook",
+          "label": "payout.failed po_77"
+        },
+        {
+          "from": "waf",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Webhook",
+          "label": "allowed: forward"
+        },
+        {
+          "from": "gw",
+          "to": "ilb",
+          "kind": "req",
+          "phase": "Webhook",
+          "label": "route"
+        },
+        {
+          "from": "ilb",
+          "to": "ledger_svc",
+          "kind": "req",
+          "phase": "Webhook",
+          "label": "to a healthy instance"
+        },
+        {
+          "from": "ledger_svc",
+          "to": "ledger_svc",
+          "kind": "local",
+          "phase": "Webhook",
+          "label": "verify signature"
+        },
+        {
+          "from": "ledger_svc",
+          "to": "ledger_db",
+          "kind": "req",
+          "phase": "Reverse",
+          "label": "post reversal, status FAILED",
+          "detail": "Debits payouts_in_flight and credits the wallet back, guarded by a unique (payout_id, kind) so a repeated webhook reverses once. The user is told their money is back.",
+          "payload": "BEGIN;\nUPDATE payouts SET status = 'FAILED' WHERE id = 'po_77' AND status IN ('SUBMITTED', 'UNKNOWN');\nINSERT INTO transactions (id, kind, payout_id) VALUES ('tx_9410', 'payout_reverse', 'po_77');\nINSERT INTO entries (...) VALUES\n  ('tx_9410', 'payouts_in_flight', 'credit', 10000, 'USD'),\n  ('tx_9410', 'acc_alice', 'debit', 10000, 'USD');\nUPDATE accounts SET ... ;  -- both materialized balances\nCOMMIT;"
+        },
+        {
+          "from": "ledger_db",
+          "to": "ledger_svc",
+          "kind": "res",
+          "phase": "Reverse",
+          "label": "COMMIT"
+        },
+        {
+          "from": "ledger_svc",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "ilb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "gw",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "waf",
+          "to": "psp",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
         }
       ]
     }

@@ -802,6 +802,122 @@
           "detail": "Rare, because the hold is checked and extended just before charging. It is counted, since a rise means holds are being lost."
         }
       ]
+    },
+    {
+      "id": "join",
+      "title": "A fan joins the waiting room",
+      "summary": "Fans take a place in line with one atomic counter, and the signed token that lets them through is issued only when the admission pointer reaches them.",
+      "steps": [
+        {
+          "from": "fan",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /queue/join"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "room",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "room",
+          "to": "holds",
+          "kind": "req",
+          "phase": "Take a place",
+          "label": "INCR line:123",
+          "detail": "An atomic counter gives the fan a position without any lock. The line and the admission pointer live in this Redis, away from the seat keys."
+        },
+        {
+          "from": "holds",
+          "to": "room",
+          "kind": "res",
+          "phase": "Take a place",
+          "label": "place 48,213"
+        },
+        {
+          "from": "room",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Admitted",
+          "label": "place 48,213; poll for your turn"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Admitted",
+          "label": "200"
+        },
+        {
+          "from": "cdn",
+          "to": "fan",
+          "kind": "res",
+          "phase": "Admitted",
+          "label": "200 + signed admission token when the pointer reaches the place"
+        }
+      ]
+    },
+    {
+      "id": "sweep",
+      "title": "Sweep expired bookings",
+      "summary": "Redis frees the seat on its own; this sweep closes the pending booking rows and re-sends tickets that were never queued.",
+      "steps": [
+        {
+          "from": "booking",
+          "to": "booking",
+          "kind": "local",
+          "phase": "Find",
+          "label": "every minute: pending past expiry",
+          "detail": "Finds pending bookings past expires_at, and confirmed bookings whose ticket message was never sent."
+        },
+        {
+          "from": "booking",
+          "to": "db",
+          "kind": "req",
+          "phase": "Expire",
+          "label": "UPDATE pending to expired",
+          "detail": "Conditional on status = pending and expires_at < now(), so a payment that landed in the meantime is never expired by mistake."
+        },
+        {
+          "from": "db",
+          "to": "booking",
+          "kind": "res",
+          "phase": "Expire",
+          "label": "312 rows"
+        },
+        {
+          "from": "booking",
+          "to": "tickets_q",
+          "kind": "async",
+          "phase": "Re-send",
+          "label": "issue tickets for 4 confirmed, not yet enqueued",
+          "detail": "The sweep that covers a crash between the commit and the send; the issuer tolerates a duplicate."
+        }
+      ]
     }
   ],
   "notes": [

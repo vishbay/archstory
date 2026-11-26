@@ -1130,6 +1130,192 @@
           "detail": "Only Bob and Alice hold the key."
         }
       ]
+    },
+    {
+      "id": "group",
+      "title": "A message to a small group",
+      "summary": "The message is stored once; the member list is read from the store and each member is delivered to by the same online or offline path as a one-to-one message.",
+      "steps": [
+        {
+          "from": "alice",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Send",
+          "label": "WS frame: send to group g_9"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "phase": "Send",
+          "label": "same TCP connection"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "phase": "Send",
+          "label": "send"
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "phase": "Persist",
+          "label": "INSERT message (QUORUM)",
+          "detail": "Written once for the group, not once per member; each member reads the same partition."
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Persist",
+          "label": "OK, msg_id"
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "phase": "Group lookup",
+          "label": "SELECT members of g_9",
+          "detail": "Membership lives in the message store (partition = group id, one row per member). The group is small, so the list is read in one go."
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Group lookup",
+          "label": "bob, carol, dan"
+        },
+        {
+          "from": "chat_svc",
+          "to": "sessions",
+          "kind": "req",
+          "phase": "Fan out",
+          "label": "HGETALL session:bob, session:carol, session:dan",
+          "detail": "One pipelined lookup for all members. Each online device gets the message as in the one-to-one flow; the rest are sent to the push queue."
+        },
+        {
+          "from": "sessions",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Fan out",
+          "label": "bob: gateway-17, carol: gateway-3, dan: offline"
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "req",
+          "phase": "Fan out",
+          "label": "deliver to bob and carol"
+        },
+        {
+          "from": "chat_svc",
+          "to": "push_q",
+          "kind": "async",
+          "phase": "Fan out",
+          "label": "push for dan (offline)"
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "res",
+          "phase": "Acknowledge sender",
+          "label": "ack ✓"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Acknowledge sender",
+          "label": "ack ✓"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "res",
+          "phase": "Acknowledge sender",
+          "label": "ack ✓"
+        }
+      ]
+    },
+    {
+      "id": "receipt",
+      "title": "Read receipt",
+      "summary": "The receipt is saved on the message and pushed to every device Alice has online, so her phone and tablet agree.",
+      "steps": [
+        {
+          "from": "bob",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Report",
+          "label": "WS frame: read up to m_88"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "phase": "Report",
+          "label": "same TCP connection"
+        },
+        {
+          "from": "ws",
+          "to": "chat_svc",
+          "kind": "req",
+          "phase": "Report",
+          "label": "read receipt"
+        },
+        {
+          "from": "chat_svc",
+          "to": "msg_db",
+          "kind": "req",
+          "phase": "Store",
+          "label": "UPDATE status = read up to m_88",
+          "detail": "Stored on the message, so Alice's other devices and any later sync show the same tick."
+        },
+        {
+          "from": "msg_db",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Store",
+          "label": "OK"
+        },
+        {
+          "from": "chat_svc",
+          "to": "sessions",
+          "kind": "req",
+          "phase": "Notify the sender",
+          "label": "HGETALL session:alice"
+        },
+        {
+          "from": "sessions",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Notify the sender",
+          "label": "phone-1 on gateway-4, tablet on gateway-9"
+        },
+        {
+          "from": "chat_svc",
+          "to": "ws",
+          "kind": "req",
+          "phase": "Notify the sender",
+          "label": "deliver receipt"
+        },
+        {
+          "from": "ws",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Notify the sender",
+          "label": "receipt"
+        },
+        {
+          "from": "lb",
+          "to": "alice",
+          "kind": "req",
+          "phase": "Notify the sender",
+          "label": "✓✓ read"
+        }
+      ]
     }
   ],
   "notes": [

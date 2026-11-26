@@ -679,6 +679,142 @@
           "detail": "The client keeps both: version 8 under the original name and its own edit as a conflicted copy, which it uploads as a new file. Text editors could merge instead; a general file store cannot."
         }
       ]
+    },
+    {
+      "id": "delete-restore",
+      "title": "Delete and restore a file",
+      "summary": "Deletes keep every version for 30 days, so a restore is a metadata change, not a copy.",
+      "steps": [
+        {
+          "from": "laptop",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Delete",
+          "label": "DELETE /files/f_12"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Delete",
+          "label": "inspect, then forward"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Delete",
+          "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Delete",
+          "label": "mark f_12 deleted, keep its versions",
+          "detail": "A delete only sets a deleted flag and a timestamp; the file's versions and blocks stay for 30 days, which is what makes a restore instant."
+        },
+        {
+          "from": "meta_db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Delete",
+          "label": "1 row"
+        },
+        {
+          "from": "api",
+          "to": "changes",
+          "kind": "async",
+          "phase": "Delete",
+          "label": "publish change: f_12 deleted",
+          "detail": "Other devices see the delete through the same change log as any edit."
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Delete",
+          "label": "204 deleted"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Delete",
+          "label": "204 deleted"
+        },
+        {
+          "from": "waf",
+          "to": "laptop",
+          "kind": "res",
+          "phase": "Delete",
+          "label": "204 deleted"
+        },
+        {
+          "from": "laptop",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Restore",
+          "label": "POST /files/f_12/restore?version=3"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Restore",
+          "label": "inspect, then forward"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Restore",
+          "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Restore",
+          "label": "clear deleted flag, point to version 3",
+          "detail": "No block is copied: version 3 already lists the hashes of its blocks, and those blocks were never removed."
+        },
+        {
+          "from": "meta_db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Restore",
+          "label": "1 row"
+        },
+        {
+          "from": "api",
+          "to": "changes",
+          "kind": "async",
+          "phase": "Restore",
+          "label": "publish change: f_12 restored"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Restore",
+          "label": "200 restored"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Restore",
+          "label": "200 restored"
+        },
+        {
+          "from": "waf",
+          "to": "laptop",
+          "kind": "res",
+          "phase": "Restore",
+          "label": "200 restored"
+        }
+      ]
     }
   ],
   "notes": [

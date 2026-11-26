@@ -602,6 +602,77 @@
           "label": "snapshot"
         }
       ]
+    },
+    {
+      "id": "search",
+      "title": "A search is submitted",
+      "summary": "Submitting a search produces one log event; those events are what the hourly rebuild counts.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /search?q=system design"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "search_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "search_svc",
+          "to": "logs",
+          "kind": "async",
+          "phase": "Log the search",
+          "label": "emit one event",
+          "detail": "One event per submitted search, never per keystroke. This is the only source of the popularity numbers."
+        },
+        {
+          "from": "search_svc",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "results page"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "results page"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "results page"
+        }
+      ]
     }
   ],
   "notes": [

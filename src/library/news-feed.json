@@ -376,7 +376,8 @@
       "cloud": {
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
-      }
+      },
+      "replicas": 40
     },
     {
       "id": "timeline_cache",
@@ -493,6 +494,10 @@
     {
       "from": "client",
       "to": "media"
+    },
+    {
+      "from": "lb",
+      "to": "graph_svc"
     }
   ],
   "flows": [
@@ -850,6 +855,21 @@
         },
         {
           "from": "timeline_svc",
+          "to": "timeline_cache",
+          "kind": "req",
+          "phase": "Merge celebrity posts",
+          "label": "GET celeb_follows:1001",
+          "detail": "The list of celebrities this user follows changes rarely, so it is cached for a minute and the Graph Service is called only on a miss."
+        },
+        {
+          "from": "timeline_cache",
+          "to": "timeline_svc",
+          "kind": "res",
+          "phase": "Merge celebrity posts",
+          "label": "miss"
+        },
+        {
+          "from": "timeline_svc",
           "to": "graph_svc",
           "kind": "req",
           "phase": "Merge celebrity posts",
@@ -1113,6 +1133,84 @@
           "phase": "Respond",
           "label": "200 OK",
           "detail": "The returning user waits a little longer once; every later read is a normal cache hit."
+        }
+      ]
+    },
+    {
+      "id": "follow",
+      "title": "Follow and unfollow",
+      "summary": "A follow is two rows in the graph store. The next timeline rebuild picks up the new author; the cached list is trimmed on unfollow.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /api/follows/42"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "graph_svc",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "graph_svc",
+          "to": "graph_db",
+          "kind": "req",
+          "phase": "Follow",
+          "label": "INSERT follows(1001, 42)",
+          "detail": "Written under both keys, follower and followee, so 'who do I follow' and 'who follows them' are each one range scan. An unfollow is a DELETE."
+        },
+        {
+          "from": "graph_db",
+          "to": "graph_svc",
+          "kind": "res",
+          "phase": "Follow",
+          "label": "1 row"
+        },
+        {
+          "from": "graph_svc",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "204 followed"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "204"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "204"
         }
       ]
     }

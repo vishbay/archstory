@@ -443,6 +443,10 @@
     {
       "from": "kgs",
       "to": "db"
+    },
+    {
+      "from": "api",
+      "to": "analytics"
     }
   ],
   "flows": [
@@ -868,6 +872,206 @@
           "phase": "Analytics (background)",
           "label": "INSERT batch",
           "detail": "Same as after a cache hit: the batch is aggregated into the analytics store."
+        }
+      ]
+    },
+    {
+      "id": "stats",
+      "title": "Owner reads a link's click counts",
+      "summary": "Counts are served from the analytics store that the click worker fills, so the owner sees them a few minutes late but never slows a redirect.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /api/links/aZ3k9Q/stats"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "api",
+          "to": "analytics",
+          "kind": "req",
+          "phase": "Read clicks",
+          "label": "SELECT hourly clicks for aZ3k9Q",
+          "detail": "Reads the hourly aggregates for one code, not the raw click events. The numbers are minutes behind, because clicks reach the store through the queue."
+        },
+        {
+          "from": "analytics",
+          "to": "api",
+          "kind": "res",
+          "phase": "Read clicks",
+          "label": "clicks per hour, referrers, countries"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 {total: 4,812, by hour...}"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 {total: 4,812, by hour...}"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200 {total: 4,812, by hour...}"
+        }
+      ]
+    },
+    {
+      "id": "not-found",
+      "title": "A code that does not exist",
+      "summary": "The replica is checked, then the primary once, then the miss is cached briefly and answered with a 404.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /zzzzzz"
+        },
+        {
+          "from": "cdn",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "inspect"
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route"
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Cache miss",
+          "label": "GET zzzzzz"
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Cache miss",
+          "label": "MISS"
+        },
+        {
+          "from": "api",
+          "to": "replica",
+          "kind": "req",
+          "phase": "Read from replica",
+          "label": "SELECT long_url"
+        },
+        {
+          "from": "replica",
+          "to": "api",
+          "kind": "res",
+          "phase": "Read from replica",
+          "label": "no row"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Read from primary",
+          "label": "retry on primary",
+          "detail": "The replica had no row. The link may be newer than the replica, so the primary is asked once before giving up."
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Read from primary",
+          "label": "no row",
+          "detail": "Truly unknown or expired."
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Answer",
+          "label": "SET zzzzzz NOT_FOUND EX 60",
+          "detail": "A short negative entry, so a scanner trying random codes does not reach the database on every guess."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Answer",
+          "label": "OK"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "404 Not Found"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "404 Not Found"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "404 Not Found"
         }
       ]
     }
