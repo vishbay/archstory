@@ -556,6 +556,29 @@
         },
         {
           "from": "fetcher",
+          "to": "parse_q",
+          "kind": "async",
+          "phase": "Record the outcome",
+          "label": "outcome: blocked by robots",
+          "detail": "Every outcome that is not a stored page (blocked by robots, duplicate content, 404 or 410 gone, parked host) is published on the same stream as a page, with the URL and the reason, so the metadata store records it and the scheduler stops re-queuing a URL that will never succeed."
+        },
+        {
+          "from": "parse_q",
+          "to": "parser",
+          "kind": "async",
+          "phase": "Record the outcome",
+          "label": "deliver outcome"
+        },
+        {
+          "from": "parser",
+          "to": "meta_db",
+          "kind": "async",
+          "phase": "Record the outcome",
+          "label": "UPDATE url SET state = blocked, reason = robots",
+          "detail": "Outcome rows are small and idempotent, so a redelivered message is harmless."
+        },
+        {
+          "from": "fetcher",
           "to": "web",
           "kind": "req",
           "phase": "Fetch page",

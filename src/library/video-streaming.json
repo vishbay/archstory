@@ -233,6 +233,17 @@
   },
   "nodes": [
     {
+      "id": "chunk_state",
+      "label": "Chunk State",
+      "kind": "nosql_db",
+      "description": "One row per video, chunk and rendition, with a time-to-live; the counter for \"all chunks done\" lives here, away from the playback database",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Bigtable"
+      },
+      "tier": "async"
+    },
+    {
       "id": "raw",
       "label": "Raw Uploads",
       "kind": "object_store",
@@ -459,6 +470,14 @@
     {
       "from": "cdn",
       "to": "waf"
+    },
+    {
+      "from": "transcoder",
+      "to": "chunk_state"
+    },
+    {
+      "from": "transcoder",
+      "to": "transcode_q"
     }
   ],
   "flows": [
@@ -682,11 +701,11 @@
         },
         {
           "from": "transcoder",
-          "to": "meta_db",
+          "to": "chunk_state",
           "kind": "async",
           "phase": "Publish",
           "label": "mark chunk 17 / 1080p done",
-          "detail": "One row per chunk and rendition, inserted only if absent, so a redone chunk is not counted twice. The worker whose insert completes the set writes the manifests and marks the video ready; if two finish together, both write the same files, which is harmless.",
+          "detail": "One row per chunk and rendition, inserted only if absent, so a redone chunk is not counted twice. The worker whose insert completes the set writes the manifests and marks the video ready; if two finish together, both write the same files, which is harmless. Chunk bookkeeping goes to its own key-value table instead of the playback database: about 3.9 billion small writes a day would otherwise compete with the plays, and the rows are deleted when the video is READY.",
           "payload": "INSERT INTO chunks_done (video, chunk, rendition) VALUES ('v_123', 17, '1080p')\n  ON CONFLICT DO NOTHING;\nSELECT count(*) FROM chunks_done WHERE video = 'v_123';  -- 5400 of 5400"
         },
         {

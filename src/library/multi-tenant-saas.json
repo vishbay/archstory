@@ -441,7 +441,7 @@
       "label": "Acme Job Queue",
       "kind": "queue",
       "group": "silo",
-      "description": "Only Acme's jobs; own dead-letter queue",
+      "description": "Only Acme's jobs; own dead-letter queue (a dead-letter queue is a setting of this queue, not a separate component)",
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"
@@ -452,7 +452,7 @@
       "label": "Pooled Job Queue",
       "kind": "queue",
       "group": "pool",
-      "description": "Shared by all pooled tenants; messages carry tenant id; dead-letter queue after 5 failed attempts",
+      "description": "Shared by all pooled tenants; messages carry tenant id; dead-letter queue after 5 failed attempts (a dead-letter queue is a setting of this queue, not a separate component)",
       "cloud": {
         "aws": "SQS",
         "gcp": "Pub/Sub"

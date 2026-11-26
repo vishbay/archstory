@@ -78,6 +78,17 @@
   },
   "nodes": [
     {
+      "id": "slack_bot",
+      "label": "Slack Bot Gateway",
+      "kind": "service",
+      "description": "Receives Slack events, verifies the signing secret, acknowledges within 3 s, looks up the linked identity, exchanges it for a per-user token and updates the Slack message as the answer arrives",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      },
+      "tier": "async"
+    },
+    {
       "id": "evals",
       "label": "Eval Runner",
       "kind": "scheduler",
@@ -252,6 +263,17 @@
         "aws": "Secrets Manager and KMS",
         "gcp": "Secret Manager and Cloud KMS"
       }
+    },
+    {
+      "id": "ocr",
+      "label": "Document OCR and Layout",
+      "kind": "external_api",
+      "subnet": "none",
+      "description": "Managed OCR and layout extraction for scanned PDFs, images and tables, reached through a private endpoint",
+      "cloud": {
+        "aws": "Textract",
+        "gcp": "Document AI"
+      }
     }
   ],
   "edges": [
@@ -362,6 +384,30 @@
     {
       "from": "evals",
       "to": "chat_api"
+    },
+    {
+      "from": "indexer",
+      "to": "ocr"
+    },
+    {
+      "from": "waf",
+      "to": "slack_bot"
+    },
+    {
+      "from": "slack_bot",
+      "to": "chat_api"
+    },
+    {
+      "from": "slack_bot",
+      "to": "idp"
+    },
+    {
+      "from": "slack_bot",
+      "to": "meta_db"
+    },
+    {
+      "from": "slack_bot",
+      "to": "secrets"
     }
   ],
   "flows": [
@@ -800,6 +846,21 @@
           "kind": "res",
           "phase": "Parse and chunk",
           "label": "HTML, 18 KB"
+        },
+        {
+          "from": "indexer",
+          "to": "ocr",
+          "kind": "req",
+          "phase": "Parse and chunk",
+          "label": "OCR pages with no text layer (none in this HTML page)",
+          "detail": "Pages that give no text from the normal parser, such as scanned PDFs and images inside Office files, are sent to OCR; tables keep their row structure. Without this step those documents would be silently unsearchable."
+        },
+        {
+          "from": "ocr",
+          "to": "indexer",
+          "kind": "res",
+          "phase": "Parse and chunk",
+          "label": "text and table rows, or nothing to do"
         },
         {
           "from": "indexer",
@@ -1297,6 +1358,103 @@
           "kind": "res",
           "phase": "Nightly evals",
           "label": "COMMIT ok"
+        }
+      ]
+    },
+    {
+      "id": "slack-ask",
+      "title": "A question asked in Slack",
+      "summary": "The Slack bot acknowledges at once, turns the Slack user into a real directory identity, and asks the orchestrator as that person.",
+      "steps": [
+        {
+          "from": "user",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Slack event",
+          "label": "Slack message event: \"does that apply to contractors?\"",
+          "detail": "Slack calls this endpoint from its own servers. The WAF allows Slack's published address ranges and does not apply the per-person rate rule to them, because every Slack request arrives from the same few addresses."
+        },
+        {
+          "from": "waf",
+          "to": "slack_bot",
+          "kind": "req",
+          "phase": "Slack event",
+          "label": "forward the event"
+        },
+        {
+          "from": "slack_bot",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Slack event",
+          "label": "get Slack signing secret",
+          "detail": "The request signature and timestamp are checked first; an old or unsigned request is dropped."
+        },
+        {
+          "from": "secrets",
+          "to": "slack_bot",
+          "kind": "res",
+          "phase": "Slack event",
+          "label": "secret v3"
+        },
+        {
+          "from": "slack_bot",
+          "to": "slack_bot",
+          "kind": "local",
+          "phase": "Slack event",
+          "label": "acknowledge within 3 s",
+          "detail": "Slack retries any event not acknowledged in three seconds, so the bot answers 200 at once and does the work after, using the event id to ignore a repeat."
+        },
+        {
+          "from": "slack_bot",
+          "to": "meta_db",
+          "kind": "req",
+          "phase": "Identify",
+          "label": "look up the linked identity for Slack user U02ABC",
+          "detail": "The link made at sign-in (Slack user to directory user) is kept here. An unlinked user gets a sign-in link instead of an answer, so there is no shared bot identity."
+        },
+        {
+          "from": "meta_db",
+          "to": "slack_bot",
+          "kind": "res",
+          "phase": "Identify",
+          "label": "linked to dana@corp"
+        },
+        {
+          "from": "slack_bot",
+          "to": "idp",
+          "kind": "req",
+          "phase": "Identify",
+          "label": "exchange for a short-lived user token"
+        },
+        {
+          "from": "idp",
+          "to": "slack_bot",
+          "kind": "res",
+          "phase": "Identify",
+          "label": "token for dana"
+        },
+        {
+          "from": "slack_bot",
+          "to": "chat_api",
+          "kind": "req",
+          "phase": "Answer",
+          "label": "ask as dana",
+          "detail": "The same orchestrator call the web app makes, with the person's own token, so permission filtering is identical. No Server-Sent Events here: Slack has no streaming channel."
+        },
+        {
+          "from": "chat_api",
+          "to": "slack_bot",
+          "kind": "res",
+          "phase": "Answer",
+          "label": "answer with citations"
+        },
+        {
+          "from": "slack_bot",
+          "to": "slack_bot",
+          "kind": "local",
+          "phase": "Answer",
+          "label": "post a placeholder with chat.postMessage, then chat.update as tokens arrive",
+          "detail": "The bot calls Slack's own API to show the answer. It edits one message a few times, because Slack shows edits and has no stream."
         }
       ]
     }

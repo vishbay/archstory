@@ -450,6 +450,28 @@
       "label": "Payment Provider",
       "kind": "payment_provider",
       "description": "Bank payouts (Stripe, Adyen, a bank API); sends signed webhooks"
+    },
+    {
+      "id": "idp",
+      "label": "Identity Provider",
+      "kind": "auth",
+      "subnet": "none",
+      "description": "Sign-in and short-lived user tokens; the gateway checks them before any request reaches the ledger",
+      "cloud": {
+        "aws": "Cognito",
+        "gcp": "Identity Platform"
+      }
+    },
+    {
+      "id": "archive",
+      "label": "Ledger Archive",
+      "kind": "object_store",
+      "subnet": "none",
+      "description": "Closed monthly partitions exported as Parquet, write-once with object lock, kept for 7 years",
+      "cloud": {
+        "aws": "S3",
+        "gcp": "Cloud Storage"
+      }
     }
   ],
   "groups": [],
@@ -536,6 +558,14 @@
     {
       "from": "ledger_svc",
       "to": "ledger_replica"
+    },
+    {
+      "from": "gw",
+      "to": "idp"
+    },
+    {
+      "from": "recon",
+      "to": "archive"
     }
   ],
   "flows": [
@@ -584,6 +614,21 @@
           "phase": "Request in",
           "label": "allowed: forward",
           "detail": "Only requests the web ACL allows reach the gateway."
+        },
+        {
+          "from": "gw",
+          "to": "idp",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "verify user token",
+          "detail": "The token signature is checked against cached keys, so the provider is called only to refresh a session, not on every request."
+        },
+        {
+          "from": "idp",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Request in",
+          "label": "valid, user alice"
         },
         {
           "from": "gw",
@@ -1255,6 +1300,22 @@
         },
         {
           "from": "ledger_svc",
+          "to": "ledger_db",
+          "kind": "req",
+          "phase": "Resolve",
+          "label": "post the provider fee (25)",
+          "detail": "The provider's fee on the line is posted in the same transaction as the settlement, as its own transaction with its own key. Without it cash_at_provider drifts from the real cash by the fees and the nightly match fails on amount. The platform bears the fee here; if it were charged to the user it would be added to the hold when the payout is created.",
+          "payload": "INSERT INTO transactions (id, kind, payout_id) VALUES ('tx_9303', 'payout_fee', 'po_78');\nINSERT INTO entries (...) VALUES\n  ('tx_9303', 'fees_expense', 'debit', 25, 'USD'),\n  ('tx_9303', 'cash_at_provider', 'credit', 25, 'USD');"
+        },
+        {
+          "from": "ledger_db",
+          "to": "ledger_svc",
+          "kind": "res",
+          "phase": "Resolve",
+          "label": "COMMIT"
+        },
+        {
+          "from": "ledger_svc",
           "to": "recon",
           "kind": "res",
           "phase": "Resolve",
@@ -1423,6 +1484,44 @@
           "kind": "res",
           "phase": "Respond",
           "label": "200"
+        }
+      ]
+    },
+    {
+      "id": "archive-month",
+      "title": "Archive a closed month",
+      "summary": "Old partitions are exported, verified, locked in cheap storage and then detached from the database, keeping seven years of history reachable.",
+      "steps": [
+        {
+          "from": "recon",
+          "to": "ledger_replica",
+          "kind": "req",
+          "phase": "Export",
+          "label": "read closed partition 2026-03",
+          "detail": "A month's entries are read from the replica once the month is closed, so the export never competes with posting on the primary."
+        },
+        {
+          "from": "ledger_replica",
+          "to": "recon",
+          "kind": "res",
+          "phase": "Export",
+          "label": "48 million entries"
+        },
+        {
+          "from": "recon",
+          "to": "recon",
+          "kind": "local",
+          "phase": "Verify",
+          "label": "hash chain and balances for the month",
+          "detail": "The export is checked before anything is dropped: entries sum to zero per transaction, and the chain of hashes is unbroken."
+        },
+        {
+          "from": "recon",
+          "to": "archive",
+          "kind": "async",
+          "phase": "Archive",
+          "label": "PUT 2026-03.parquet (object lock)",
+          "detail": "Write-once, kept 7 years. Only after this is written and verified is the old partition detached from the primary, which keeps the database well under its size limit."
         }
       ]
     }

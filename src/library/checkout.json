@@ -423,6 +423,16 @@
       "cloud": {
         "aws": "SES"
       }
+    },
+    {
+      "id": "cart_svc",
+      "label": "Cart and Pricing Service",
+      "kind": "service",
+      "description": "Holds the shopper's cart and prices it from the catalog; checkout trusts its total, never the client's",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
     }
   ],
   "groups": [],
@@ -487,6 +497,10 @@
     {
       "from": "cdn",
       "to": "waf"
+    },
+    {
+      "from": "order_svc",
+      "to": "cart_svc"
     }
   ],
   "flows": [
@@ -567,6 +581,21 @@
           "phase": "Create order",
           "label": "to a healthy instance",
           "detail": "The internal load balancer spreads requests over the Order Service instances in all three zones and stops sending to any that fail health checks. A managed gateway scales itself; the fleet behind it still needs this."
+        },
+        {
+          "from": "order_svc",
+          "to": "cart_svc",
+          "kind": "req",
+          "phase": "Create order",
+          "label": "price cart c_81",
+          "detail": "The order service asks the cart for the items and the total instead of taking them from the request, so a shopper cannot name their own price. The prices come from the catalog at this moment and are copied onto the order."
+        },
+        {
+          "from": "cart_svc",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Create order",
+          "label": "2 items, total 12900"
         },
         {
           "from": "order_svc",

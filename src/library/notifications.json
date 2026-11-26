@@ -405,6 +405,26 @@
       "cloud": {
         "aws": "SES"
       }
+    },
+    {
+      "id": "templates",
+      "label": "Template Store",
+      "kind": "nosql_db",
+      "description": "Versioned message templates per locale; the API keeps rendered-ready templates in memory",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Firestore"
+      }
+    },
+    {
+      "id": "scheduler",
+      "label": "Delivery Scheduler",
+      "kind": "scheduler",
+      "description": "Holds non-critical messages until the user's quiet hours end, then releases them to the bulk queue",
+      "cloud": {
+        "aws": "EventBridge Scheduler",
+        "gcp": "Cloud Scheduler"
+      }
     }
   ],
   "groups": [],
@@ -484,6 +504,20 @@
     {
       "from": "push_worker",
       "to": "prefs"
+    },
+    {
+      "from": "notif_api",
+      "to": "templates"
+    },
+    {
+      "from": "notif_api",
+      "to": "scheduler",
+      "async": true
+    },
+    {
+      "from": "scheduler",
+      "to": "bulk_q",
+      "async": true
     }
   ],
   "flows": [
@@ -540,6 +574,21 @@
           "label": "push on, 2 devices",
           "detail": "Quiet hours apply to most messages, but security codes bypass them.",
           "payload": "{ \"push\": true, \"email\": true, \"quiet_hours\": \"22:00-07:00\", \"locale\": \"es-MX\", \"devices\": [\"apns:9f…\", \"fcm:c1…\"] }"
+        },
+        {
+          "from": "notif_api",
+          "to": "templates",
+          "kind": "req",
+          "phase": "Preferences & template",
+          "label": "GET login_code es-MX",
+          "detail": "Cached in the process for minutes, so the store is rarely read. A template change is a new version, so a message already queued still renders with the version it was accepted under."
+        },
+        {
+          "from": "templates",
+          "to": "notif_api",
+          "kind": "res",
+          "phase": "Preferences & template",
+          "label": "v14"
         },
         {
           "from": "notif_api",
@@ -781,6 +830,29 @@
           "phase": "Retry & park",
           "label": "after 5 attempts → DLQ",
           "detail": "Nothing is silently dropped. An alert fires, and messages are replayed from the DLQ once the cause is fixed."
+        }
+      ]
+    },
+    {
+      "id": "quiet-hours",
+      "title": "A marketing message held for quiet hours",
+      "summary": "Marketing messages for people in quiet hours are held until the morning in their own time zone, not dropped.",
+      "steps": [
+        {
+          "from": "notif_api",
+          "to": "scheduler",
+          "kind": "async",
+          "phase": "Hold",
+          "label": "hold until 07:00 in the user's time zone",
+          "detail": "A campaign message for someone in quiet hours is not dropped: it is handed to the scheduler with its release time. A queue delay tops out at minutes, so a long hold needs a real scheduler."
+        },
+        {
+          "from": "scheduler",
+          "to": "bulk_q",
+          "kind": "async",
+          "phase": "Release",
+          "label": "release at 07:00",
+          "detail": "At the release time the message goes to the bulk queue like any other, subject to the same frequency cap."
         }
       ]
     }

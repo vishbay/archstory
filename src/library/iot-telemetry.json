@@ -323,6 +323,15 @@
         },
         { "from": "registry", "to": "api", "kind": "res", "phase": "Check", "label": "active, group g-north" },
         {
+          "from": "api", "to": "registry", "kind": "req", "phase": "Check",
+          "label": "group command: SELECT devices WHERE group = g-north",
+          "detail": "For a group, the API reads the member list and then publishes to each device's own topic in batches, recording one pending entry per device in the twin. Replay of the errors prefix uses the same path."
+        },
+        {
+          "from": "registry", "to": "api", "kind": "res", "phase": "Check",
+          "label": "4,100 devices in g-north"
+        },
+        {
           "from": "api", "to": "shadow", "kind": "req", "phase": "Record intent",
           "label": "set desired, add pending c-889",
           "detail": "The desired state is written before anything is sent, so the intent survives even if the device stays offline longer than the broker keeps its session. The version check stops two operators overwriting each other.",

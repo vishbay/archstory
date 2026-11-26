@@ -288,6 +288,16 @@
         "aws": "DynamoDB",
         "gcp": "Firestore"
       }
+    },
+    {
+      "id": "admin",
+      "label": "Admin API",
+      "kind": "service",
+      "description": "Control plane: creates keys (stores only the hash), edits plans and per-key overrides, and validates changes before they go out",
+      "cloud": {
+        "aws": "ECS Fargate",
+        "gcp": "Cloud Run"
+      }
     }
   ],
   "groups": [],
@@ -315,6 +325,10 @@
     {
       "from": "client",
       "to": "dns"
+    },
+    {
+      "from": "admin",
+      "to": "config"
     }
   ],
   "flows": [
@@ -557,6 +571,36 @@
           "kind": "local",
           "phase": "Apply",
           "label": "swap in-memory table"
+        }
+      ]
+    },
+    {
+      "id": "change-limit",
+      "title": "Change a plan's limit without a deploy",
+      "summary": "An operator edits the limit in the store and every gateway applies it on its next refresh.",
+      "steps": [
+        {
+          "from": "admin",
+          "to": "config",
+          "kind": "req",
+          "phase": "Change a limit",
+          "label": "PutItem plan=pro rate=500 burst=1000",
+          "detail": "The admin API validates the change, writes it with an updated_at, and the gateways pick it up on their next refresh, so there is no deploy. New API keys are stored here as hashes only."
+        },
+        {
+          "from": "config",
+          "to": "admin",
+          "kind": "res",
+          "phase": "Change a limit",
+          "label": "ok"
+        },
+        {
+          "from": "admin",
+          "to": "admin",
+          "kind": "local",
+          "phase": "Roll out",
+          "label": "gateways refresh within 30 s",
+          "detail": "Each gateway asks for keys changed since its last refresh, so the change reaches the fleet in one refresh interval."
         }
       ]
     }

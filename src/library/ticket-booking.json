@@ -204,6 +204,17 @@
       "cloud": {
         "aws": "SES"
       }
+    },
+    {
+      "id": "kms",
+      "label": "Signing Key",
+      "kind": "secrets",
+      "subnet": "none",
+      "description": "The asymmetric key that signs ticket barcodes; the private key never leaves the key service",
+      "cloud": {
+        "aws": "KMS",
+        "gcp": "Cloud KMS"
+      }
     }
   ],
   "groups": [],
@@ -273,6 +284,10 @@
     {
       "from": "cdn",
       "to": "waf"
+    },
+    {
+      "from": "issuer",
+      "to": "kms"
     }
   ],
   "flows": [
@@ -697,10 +712,25 @@
         },
         {
           "from": "issuer",
+          "to": "kms",
+          "kind": "req",
+          "phase": "Issue tickets",
+          "label": "sign barcode payloads",
+          "detail": "Each barcode payload (event, seat, booking) is signed inside the key service, so the issuer never holds the private key. Venues verify with the public key and can check a ticket with no network call. Signing is deterministic, so a re-sent message gives the same barcode."
+        },
+        {
+          "from": "kms",
+          "to": "issuer",
+          "kind": "res",
+          "phase": "Issue tickets",
+          "label": "signatures"
+        },
+        {
+          "from": "issuer",
           "to": "issuer",
           "kind": "local",
           "phase": "Issue tickets",
-          "label": "sign barcodes",
+          "label": "assemble barcodes",
           "detail": "Each barcode is a signature over (event, seat, booking) with a key held in KMS, so the venue can check it offline. The same input always gives the same barcode, so a redelivered message re-sends identical tickets instead of minting new ones."
         },
         {

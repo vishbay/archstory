@@ -289,6 +289,17 @@
   },
   "nodes": [
     {
+      "id": "keys",
+      "label": "Key Directory",
+      "kind": "nosql_db",
+      "description": "Public identity keys and one-time pre-keys for every device; the server never holds a private key",
+      "cloud": {
+        "aws": "DynamoDB",
+        "gcp": "Firestore"
+      },
+      "tier": "services"
+    },
+    {
       "id": "alice",
       "label": "Alice (sender)",
       "kind": "mobile_client"
@@ -417,6 +428,17 @@
         "aws": "S3",
         "gcp": "Cloud Storage"
       }
+    },
+    {
+      "id": "auth",
+      "label": "Auth Service",
+      "kind": "auth",
+      "subnet": "none",
+      "description": "Issues short-lived tokens and checks that a device is registered to its account",
+      "cloud": {
+        "aws": "Cognito",
+        "gcp": "Identity Platform"
+      }
     }
   ],
   "groups": [],
@@ -493,6 +515,14 @@
     {
       "from": "chat_svc",
       "to": "ws"
+    },
+    {
+      "from": "chat_svc",
+      "to": "keys"
+    },
+    {
+      "from": "ws",
+      "to": "auth"
     }
   ],
   "flows": [
@@ -535,6 +565,21 @@
           "phase": "Connect",
           "label": "pick a gateway (least connections)",
           "detail": "Spreading connections evenly matters more than spreading requests: each gateway holds about a million sockets."
+        },
+        {
+          "from": "ws",
+          "to": "auth",
+          "kind": "req",
+          "phase": "Register session",
+          "label": "verify token",
+          "detail": "The token's signature is checked locally against cached keys, so the Auth Service is called only to refresh a token, not on every connection."
+        },
+        {
+          "from": "auth",
+          "to": "ws",
+          "kind": "res",
+          "phase": "Register session",
+          "label": "valid, device phone-1 of alice"
         },
         {
           "from": "ws",
@@ -614,6 +659,21 @@
           "label": "send",
           "detail": "The gateway adds a trace id that follows the message through storage, routing and delivery, so one slow delivery can be traced end to end.",
           "payload": "send { conv_id: c_alice_bob, client_msg_id: a1-0042, device: phone-1 }\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        },
+        {
+          "from": "chat_svc",
+          "to": "keys",
+          "kind": "req",
+          "phase": "Send",
+          "label": "fetch Bob's pre-key bundle (first message only)",
+          "detail": "The first message to a device needs that device's identity key, a signed pre-key and one one-time pre-key, so Alice can encrypt even though Bob is offline. The one-time key is deleted once handed out. Later messages reuse the session and skip this call."
+        },
+        {
+          "from": "keys",
+          "to": "chat_svc",
+          "kind": "res",
+          "phase": "Send",
+          "label": "bundle for phone-1"
         },
         {
           "from": "chat_svc",
