@@ -74,7 +74,7 @@ export function impactOf(d: Design, n: DNode, failed: number, cloud: Cloud): Imp
       const left = ps.length - 1
       if (!left) return down(`Its only instance is in ${zone}.`)
       if (n.kind === 'load_balancer' || n.kind === 'network_load_balancer') {
-        return { level: 'warn', tag: `−1/${ps.length} nodes`, text: `One load balancer for the region, with a node in each zone. The node in ${zone} is taken out of DNS and the other ${left} keep serving (it scales itself, and with cross-zone balancing they still reach targets in every zone). The servers behind it, not the balancer, are what must be sized for the loss.` }
+        return { level: 'warn', tag: `−1/${ps.length} nodes`, text: `One load balancer for the region, with a node in each zone. The node in ${zone} is taken out of DNS and the other ${left} keep serving (it scales itself, and with cross-zone balancing they still reach targets in every zone). The servers behind it, not the balancer, are what must be sized for the loss. Clients holding the dead address in their DNS cache (about 60 s) fail or retry until it expires, so the client's retry and DNS behaviour decide how long users notice.` }
       }
       return { level: 'warn', tag: `−1/${ps.length} capacity`, text: `Loses 1 of ${ps.length} zones; the other ${left} absorb all traffic, so each must be sized for 1/${left} of peak.` }
     }

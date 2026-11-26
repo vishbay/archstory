@@ -49,6 +49,7 @@ describe('zone failure impact', () => {
     const r = impactOf(url, node(url, 'lb'), 0, 'aws')!
     expect(r.tag).toBe('−1/3 nodes')
     expect(r.text).toMatch(/One load balancer for the region/)
+    expect(r.text).toMatch(/DNS cache/)
   })
   it('states the capacity rule', () => {
     expect(resilience(url, 0, 'aws')!.perZoneShare).toBe('50% of peak per zone (150% total)')
