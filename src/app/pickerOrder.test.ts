@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { LIBRARY } from '../library'
 import { PROTOCOLS } from '../protocols'
-import { byDifficulty } from './pickerOrder'
+import { MOST_ASKED } from '../library/popularity'
+import { byDifficulty, byPopularity } from './pickerOrder'
 
 const d = (_id: string, difficulty?: 'easy' | 'medium' | 'hard') => ({ meta: { difficulty } }) as never as import('../model/schema').Design & { id: string }
 
@@ -16,5 +17,21 @@ describe('picker order', () => {
     const ranks = order.filter(Boolean).map(x => rank[x!])
     expect(ranks).toEqual([...ranks].sort((a, b) => a - b))
     expect(PROTOCOLS.length).toBeGreaterThan(0)
+  })
+})
+
+describe('most asked order', () => {
+  it('ranks every built-in design exactly once, so a new design has to be placed', () => {
+    expect([...MOST_ASKED].sort()).toEqual(LIBRARY.map(d => d.id).sort())
+    expect(new Set(MOST_ASKED).size).toBe(MOST_ASKED.length)
+  })
+  it('lists the most asked first and your own designs last, keeping ties in order', () => {
+    const mine = { meta: {}, id: 'mine-a' } as never as import('../model/schema').Design
+    const mine2 = { meta: {}, id: 'mine-b' } as never as import('../model/schema').Design
+    const shuffled = [mine, ...[...LIBRARY].reverse(), mine2]
+    const ordered = byPopularity(shuffled, d => d).map(d => d.id)
+    expect(ordered.slice(0, 4)).toEqual(['url-shortener', 'news-feed', 'chat', 'rate-limiter'])
+    expect(ordered.slice(-2)).toEqual(['mine-a', 'mine-b'])
+    expect(ordered.indexOf('cloud-migration')).toBe(LIBRARY.length - 1)
   })
 })

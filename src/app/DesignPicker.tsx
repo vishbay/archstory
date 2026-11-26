@@ -2,7 +2,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Design } from '../model/schema'
 import { groupBySection } from '../protocols/sections'
-import { byDifficulty } from './pickerOrder'
+import { byDifficulty, byPopularity } from './pickerOrder'
 
 export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClose, kind = 'system' }: {
   library: Design[]; mine: Design[]; currentId: string
@@ -21,8 +21,8 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
     const ofKind = (d: Design) => (d.meta.kind ?? 'system') === kind
     const hit = (d: Design) => !s || d.meta.title.toLowerCase().includes(s) || d.meta.tags.some(t => t.includes(s)) || (d.meta.summary ?? '').toLowerCase().includes(s)
     const found = [...library.filter(ofKind).filter(hit).map(d => ({ d, mine: false })), ...mine.filter(ofKind).filter(hit).map(d => ({ d, mine: true }))]
-    // Easiest first. The keyboard moves through the list in this order.
-    if (kind !== 'protocol') return byDifficulty(found, x => x.d).map(x => ({ ...x, head: undefined as string | undefined }))
+    // Designs: the ones asked most often in interviews first. The keyboard moves through the list in this order.
+    if (kind !== 'protocol') return byPopularity(found, x => x.d).map(x => ({ ...x, head: undefined as string | undefined }))
     // Protocols are listed under their section headings (the same sections as on Home), easiest first within each.
     return groupBySection(found.map(x => x.d)).flatMap(g => byDifficulty(g.designs, d => d).map((d, i) => ({ d, mine: found.find(x => x.d === d)!.mine, head: i === 0 ? g.section : undefined })))
   }, [library, mine, q, kind])
@@ -63,7 +63,7 @@ export function DesignPicker({ library, mine, currentId, onOpen, onDelete, onClo
         ))}
         {!items.length && <li className="pick-empty muted">No {noun} match “{q}”.</li>}
       </ul>
-      <div className="picker-foot muted"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
+      <div className="picker-foot muted">{kind !== 'protocol' && <span title="Ranked by how often they come up in interview preparation lists">Most asked first</span>}<span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
     </dialog>
   )
 }
