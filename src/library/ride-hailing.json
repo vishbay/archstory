@@ -1043,6 +1043,80 @@
           "detail": "The driver goes back into the available set on their next location update, now that the busy flag is gone."
         }
       ]
+    },
+    {
+      "id": "decline",
+      "title": "Driver declines or ignores the offer",
+      "summary": "A declined or expired offer frees the driver and the next candidate is offered, until someone accepts or the list runs out.",
+      "steps": [
+        {
+          "from": "driver",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Driver declines",
+          "label": "decline t_552",
+          "detail": "The driver taps decline, or the 15 s offer runs out and the app sends the same call."
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Driver declines",
+          "label": "allowed: forward"
+        },
+        {
+          "from": "lb",
+          "to": "ws",
+          "kind": "req",
+          "phase": "Driver declines",
+          "label": "decline"
+        },
+        {
+          "from": "ws",
+          "to": "matching",
+          "kind": "req",
+          "phase": "Driver declines",
+          "label": "declined(t_552, d_7781)"
+        },
+        {
+          "from": "matching",
+          "to": "geo_index",
+          "kind": "req",
+          "phase": "Release and re-offer",
+          "label": "DEL busy:d_7781 if still t_552",
+          "detail": "A compare-and-delete: the lease is removed only if it still names this trip, so a late decline can never free a driver who has since taken another trip. The driver also goes on this trip's skip list."
+        },
+        {
+          "from": "geo_index",
+          "to": "matching",
+          "kind": "res",
+          "phase": "Release and re-offer",
+          "label": "1: released"
+        },
+        {
+          "from": "matching",
+          "to": "geo_index",
+          "kind": "req",
+          "phase": "Release and re-offer",
+          "label": "lock next candidate d_4410",
+          "detail": "The next of the ten candidates ranked at request time. SET NX with a 15 s expiry, exactly as for the first offer; if that driver is busy, the loop moves on to the next."
+        },
+        {
+          "from": "geo_index",
+          "to": "matching",
+          "kind": "res",
+          "phase": "Release and re-offer",
+          "label": "OK (locked)"
+        },
+        {
+          "from": "matching",
+          "to": "ws",
+          "kind": "req",
+          "phase": "Release and re-offer",
+          "label": "push offer to d_4410",
+          "detail": "The same offer path as the first driver. After the candidates run out, the rider is told no driver is available and can retry or widen the search."
+        }
+      ]
     }
   ],
   "notes": [

@@ -946,6 +946,83 @@
           "detail": "Each side keeps the version that descends from the other, and keeps both as siblings when the clocks are concurrent. A runs the same comparison with C, getting C's tree and streaming rows both ways, so differences between B and C are also fixed through A."
         }
       ]
+    },
+    {
+      "id": "add-node",
+      "title": "A storage node joins",
+      "summary": "Adding a node moves data in the background: the node claims tokens, existing owners stream it the ranges, and only then are the old copies dropped.",
+      "steps": [
+        {
+          "from": "storage-d",
+          "to": "storage-a",
+          "kind": "req",
+          "phase": "Join",
+          "label": "gossip join, claim 128 tokens",
+          "detail": "The new node picks its tokens and announces them; every node adds it to its ring view within a few gossip rounds. It does not serve reads yet."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-d",
+          "kind": "async",
+          "phase": "Stream",
+          "label": "stream owned ranges",
+          "detail": "Existing owners stream the SSTables for each slice the new node takes over. Reads and writes still go to the old owners until streaming finishes; writes arriving meanwhile are also sent to the new node."
+        },
+        {
+          "from": "storage-d",
+          "to": "storage-a",
+          "kind": "res",
+          "phase": "Stream",
+          "label": "ranges caught up",
+          "detail": "The new node announces it is ready and starts serving its ranges."
+        },
+        {
+          "from": "storage-a",
+          "to": "storage-a",
+          "kind": "local",
+          "phase": "Cleanup",
+          "label": "drop moved ranges",
+          "detail": "Old owners delete the data they no longer own, after the new node is serving it and a repair confirms it holds the same data."
+        }
+      ]
+    },
+    {
+      "id": "siblings-delete",
+      "title": "Concurrent writes and deletes",
+      "summary": "Two writers that did not see each other both survive as siblings for the client to merge, and a delete is a tombstone that outlives a replica outage.",
+      "steps": [
+        {
+          "from": "router",
+          "to": "storage-a",
+          "kind": "req",
+          "phase": "Concurrent writes",
+          "label": "GET cart:user-42",
+          "detail": "Two clients updated this cart at the same time through different coordinators, each from the same earlier context."
+        },
+        {
+          "from": "storage-a",
+          "to": "router",
+          "kind": "res",
+          "phase": "Concurrent writes",
+          "label": "siblings [{A:4}, {B:1}] + context",
+          "detail": "A sees that neither version descends from the other, so it returns both instead of choosing one. The client merges them (for a cart, the union of items) and writes back with the merged context, which supersedes both."
+        },
+        {
+          "from": "router",
+          "to": "storage-a",
+          "kind": "req",
+          "phase": "Delete",
+          "label": "DEL cart:user-42 (context)",
+          "detail": "A delete is a write of a tombstone with a new clock. It replicates like a put and is kept for the 10 day grace period, so a replica that was down cannot bring the old value back; after that, compaction drops it."
+        },
+        {
+          "from": "storage-a",
+          "to": "router",
+          "kind": "res",
+          "phase": "Delete",
+          "label": "tombstone written, W=2 acks"
+        }
+      ]
     }
   ],
   "notes": [

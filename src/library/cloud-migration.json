@@ -1068,6 +1068,117 @@
           "payload": "HTTP/1.1 201 Created\n\n{ \"order_id\": \"48812210\", \"status\": \"placed\" }"
         }
       ]
+    },
+    {
+      "id": "catalog",
+      "title": "Catalog read and price change (already migrated)",
+      "summary": "The first capability to move: reads are served from the cloud database, and price changes flow back to Oracle so the legacy side stays correct.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Read a product",
+          "label": "GET /api/products/8841",
+          "detail": "A cache miss goes to the origin."
+        },
+        {
+          "from": "waf",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Read a product",
+          "label": "allow"
+        },
+        {
+          "from": "cdn",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Read a product",
+          "label": "forward to origin"
+        },
+        {
+          "from": "lb",
+          "to": "catalog",
+          "kind": "req",
+          "phase": "Read a product",
+          "label": "rule: /api/products/* to catalog",
+          "detail": "The catalog was the first capability moved, so the router sends all of its paths to the new service."
+        },
+        {
+          "from": "catalog",
+          "to": "catalog_db",
+          "kind": "req",
+          "phase": "Read a product",
+          "label": "SELECT product 8841"
+        },
+        {
+          "from": "catalog_db",
+          "to": "catalog",
+          "kind": "res",
+          "phase": "Read a product",
+          "label": "row"
+        },
+        {
+          "from": "catalog",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Read a product",
+          "label": "200, cacheable 5 min"
+        },
+        {
+          "from": "lb",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Read a product",
+          "label": "200"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Read a product",
+          "label": "200"
+        },
+        {
+          "from": "catalog",
+          "to": "catalog_db",
+          "kind": "req",
+          "phase": "Merchandiser edit",
+          "label": "UPDATE price",
+          "detail": "The cloud is now the source of truth for products."
+        },
+        {
+          "from": "catalog_db",
+          "to": "catalog",
+          "kind": "res",
+          "phase": "Merchandiser edit",
+          "label": "COMMIT"
+        },
+        {
+          "from": "cdc",
+          "to": "catalog_db",
+          "kind": "async",
+          "phase": "Reverse CDC",
+          "label": "read commit from the log",
+          "detail": "The replicator reads the change from the catalog database's log, not from a query."
+        },
+        {
+          "from": "cdc",
+          "to": "hybrid",
+          "kind": "async",
+          "phase": "Reverse CDC",
+          "label": "apply to Oracle PRODUCTS",
+          "detail": "Over the private link."
+        },
+        {
+          "from": "hybrid",
+          "to": "onprem_db",
+          "kind": "async",
+          "phase": "Reverse CDC",
+          "label": "MERGE INTO PRODUCTS (read-only copy)",
+          "detail": "The monolith and the back office still read products from Oracle; the copy is marked ORIGIN='CLOUD' so the stream never loops it back."
+        }
+      ]
     }
   ],
   "notes": [

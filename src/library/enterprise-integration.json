@@ -521,6 +521,31 @@
     {
       "from": "crm_conn",
       "to": "crm"
+    },
+    {
+      "from": "wms_conn",
+      "to": "bus"
+    },
+    {
+      "from": "erp_conn",
+      "to": "bus"
+    },
+    {
+      "from": "crm_conn",
+      "to": "bus"
+    },
+    {
+      "from": "ops",
+      "to": "erp"
+    },
+    {
+      "from": "ops",
+      "to": "shop"
+    },
+    {
+      "from": "bus",
+      "to": "commerce",
+      "async_": true
     }
   ],
   "flows": [
@@ -1171,6 +1196,249 @@
           "kind": "res",
           "phase": "Re-deliver and dedupe",
           "label": "COMMIT"
+        }
+      ]
+    },
+    {
+      "id": "inventory",
+      "title": "Inventory adjustment from the warehouse",
+      "summary": "The warehouse system is polled, and each stock change reaches the ERP and the shop through the bus, in order per SKU.",
+      "steps": [
+        {
+          "from": "wms_conn",
+          "to": "wms",
+          "kind": "req",
+          "phase": "Poll",
+          "label": "GET stock movements since cursor",
+          "detail": "Every minute, from the last cursor the connector stored."
+        },
+        {
+          "from": "wms",
+          "to": "wms_conn",
+          "kind": "res",
+          "phase": "Poll",
+          "label": "38 movements"
+        },
+        {
+          "from": "wms_conn",
+          "to": "bus",
+          "kind": "async",
+          "phase": "Publish",
+          "label": "InventoryAdjusted key=sku",
+          "detail": "Keyed by SKU, so all adjustments for one SKU stay in order on one partition."
+        },
+        {
+          "from": "bus",
+          "to": "erp_conn",
+          "kind": "async",
+          "phase": "Apply",
+          "label": "post goods adjustment",
+          "detail": "Applies the stock change in SAP, with the same event-id dedup and version check as for customers."
+        },
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Apply",
+          "label": "POST stock adjustment"
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Apply",
+          "label": "201"
+        },
+        {
+          "from": "bus",
+          "to": "commerce",
+          "kind": "async",
+          "phase": "Apply",
+          "label": "update shop stock",
+          "detail": "The commerce service pushes the new level to the shop."
+        },
+        {
+          "from": "commerce",
+          "to": "shop",
+          "kind": "req",
+          "phase": "Apply",
+          "label": "PUT inventory level",
+          "detail": "Admin API call, with the SKU's version so an older event cannot overwrite a newer level."
+        },
+        {
+          "from": "shop",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Apply",
+          "label": "200"
+        }
+      ]
+    },
+    {
+      "id": "customer-erp",
+      "title": "Customer change that starts in the ERP",
+      "summary": "Billing address and credit changes are owned by the ERP; they flow the other way to the CRM through the same bus.",
+      "steps": [
+        {
+          "from": "erp_conn",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Detect change",
+          "label": "poll business-partner changes",
+          "detail": "Billing address and credit changes only: the ERP owns those fields."
+        },
+        {
+          "from": "erp",
+          "to": "erp_conn",
+          "kind": "res",
+          "phase": "Detect change",
+          "label": "1 changed"
+        },
+        {
+          "from": "erp_conn",
+          "to": "bus",
+          "kind": "async",
+          "phase": "Publish",
+          "label": "CustomerUpdated (billing address)",
+          "detail": "The event carries the source version, so the receiving side can ignore anything older than what it holds."
+        },
+        {
+          "from": "bus",
+          "to": "crm_conn",
+          "kind": "async",
+          "phase": "Apply",
+          "label": "deliver CustomerUpdated"
+        },
+        {
+          "from": "crm_conn",
+          "to": "crm",
+          "kind": "req",
+          "phase": "Apply",
+          "label": "PATCH Account (billing address)"
+        },
+        {
+          "from": "crm",
+          "to": "crm_conn",
+          "kind": "res",
+          "phase": "Apply",
+          "label": "204"
+        }
+      ]
+    },
+    {
+      "id": "partner-api",
+      "title": "Partner reads an order status",
+      "summary": "A partner call goes through the gateway to the commerce service and is answered from the tracking table, not from the ERP.",
+      "steps": [
+        {
+          "from": "partners",
+          "to": "apim",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "GET /v1/orders/SHOP-1001",
+          "detail": "The gateway checks the key and the quota."
+        },
+        {
+          "from": "apim",
+          "to": "ilb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward"
+        },
+        {
+          "from": "ilb",
+          "to": "commerce",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "route to a commerce task"
+        },
+        {
+          "from": "commerce",
+          "to": "store",
+          "kind": "req",
+          "phase": "Order status",
+          "label": "SELECT stamps FROM order_tracking",
+          "detail": "The stamps are written as each system confirms, so status is one indexed read and the 300 ms p99 never depends on the ERP being up."
+        },
+        {
+          "from": "store",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Order status",
+          "label": "shop, ERP, WMS stamped"
+        },
+        {
+          "from": "commerce",
+          "to": "ilb",
+          "kind": "res",
+          "phase": "Order status",
+          "label": "200 {status: in fulfilment}"
+        },
+        {
+          "from": "ilb",
+          "to": "apim",
+          "kind": "res",
+          "phase": "Order status",
+          "label": "200"
+        },
+        {
+          "from": "apim",
+          "to": "partners",
+          "kind": "res",
+          "phase": "Order status",
+          "label": "200"
+        }
+      ]
+    },
+    {
+      "id": "reconcile",
+      "title": "Nightly reconciliation",
+      "summary": "Shop orders are matched against ERP sales orders once each, by external reference, to prove nothing was dropped or duplicated.",
+      "steps": [
+        {
+          "from": "ops",
+          "to": "shop",
+          "kind": "req",
+          "phase": "Read the shop",
+          "label": "list yesterday's orders",
+          "detail": "Admin API."
+        },
+        {
+          "from": "shop",
+          "to": "ops",
+          "kind": "res",
+          "phase": "Read the shop",
+          "label": "1,204 orders"
+        },
+        {
+          "from": "ops",
+          "to": "erp",
+          "kind": "req",
+          "phase": "Read the ERP",
+          "label": "GET sales orders by PurchaseOrderByCustomer",
+          "detail": "The count must be exactly one per shop order; zero is a missing order, two is a duplicate."
+        },
+        {
+          "from": "erp",
+          "to": "ops",
+          "kind": "res",
+          "phase": "Read the ERP",
+          "label": "1,203 orders"
+        },
+        {
+          "from": "ops",
+          "to": "store",
+          "kind": "req",
+          "phase": "Compare",
+          "label": "record mismatches",
+          "detail": "One shop order has no ERP sales order. It is parked for an operator and raises the reconciliation alert."
+        },
+        {
+          "from": "store",
+          "to": "ops",
+          "kind": "res",
+          "phase": "Compare",
+          "label": "1 mismatch"
         }
       ]
     }

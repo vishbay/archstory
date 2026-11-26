@@ -454,6 +454,11 @@
       "from": "worker",
       "to": "history",
       "async": true
+    },
+    {
+      "from": "scheduler",
+      "to": "history",
+      "async_": true
     }
   ],
   "flows": [
@@ -806,6 +811,14 @@
         },
         {
           "from": "scheduler",
+          "to": "history",
+          "kind": "async",
+          "phase": "Retry with backoff",
+          "label": "record lost attempt 1",
+          "detail": "Appends attempt 1 as LEASE_EXPIRED, so the run's trail shows every attempt, including ones that never reported back. Without it a dead run would show no history to inspect."
+        },
+        {
+          "from": "scheduler",
           "to": "jobs_db",
           "kind": "req",
           "phase": "Give up after 5 attempts",
@@ -910,6 +923,129 @@
           "phase": "Respond",
           "label": "200 job + runs",
           "payload": "{ \"job_id\": \"j_8c2\", \"state\": \"active\", \"next_run_at\": \"2026-11-12T07:00:12Z\",\n  \"runs\": [ { \"run_id\": \"r_8c2_20261111T0700Z\", \"attempt\": 1, \"status\": \"SUCCEEDED\", \"duration_ms\": 241812 }, ... ] }"
+        }
+      ]
+    },
+    {
+      "id": "replay-cancel",
+      "title": "Replay a dead run, cancel a running one",
+      "summary": "Operators and tenants can put a dead run back in the schedule or stop one that is running; both are guarded state changes in the jobs table.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Replay a dead run",
+          "label": "POST /runs/r_88/replay"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Replay a dead run",
+          "label": "allowed: forward"
+        },
+        {
+          "from": "lb",
+          "to": "job_api",
+          "kind": "req",
+          "phase": "Replay a dead run",
+          "label": "route"
+        },
+        {
+          "from": "job_api",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Replay a dead run",
+          "label": "move DEAD back to SCHEDULED",
+          "detail": "Only a DEAD run can be replayed; the state check is part of the update, so a double click replays once.",
+          "payload": "UPDATE runs SET state = 'SCHEDULED', due_at = now(), attempt = 0\n WHERE id = 'r_88' AND state = 'DEAD';"
+        },
+        {
+          "from": "jobs_db",
+          "to": "job_api",
+          "kind": "res",
+          "phase": "Replay a dead run",
+          "label": "1 row"
+        },
+        {
+          "from": "job_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Replay a dead run",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Replay a dead run",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "waf",
+          "to": "client",
+          "kind": "res",
+          "phase": "Replay a dead run",
+          "label": "202 Accepted"
+        },
+        {
+          "from": "client",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Cancel a running run",
+          "label": "POST /runs/r_91/cancel"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Cancel a running run",
+          "label": "allowed: forward"
+        },
+        {
+          "from": "lb",
+          "to": "job_api",
+          "kind": "req",
+          "phase": "Cancel a running run",
+          "label": "route"
+        },
+        {
+          "from": "job_api",
+          "to": "jobs_db",
+          "kind": "req",
+          "phase": "Cancel a running run",
+          "label": "state = CANCELLED",
+          "detail": "The worker finds out on its next heartbeat: the lease update matches no row and it stops without reporting a result.",
+          "payload": "UPDATE runs SET state = 'CANCELLED' WHERE id = 'r_91' AND state IN ('SCHEDULED', 'RUNNING');"
+        },
+        {
+          "from": "jobs_db",
+          "to": "job_api",
+          "kind": "res",
+          "phase": "Cancel a running run",
+          "label": "1 row"
+        },
+        {
+          "from": "job_api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Cancel a running run",
+          "label": "200 OK"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Cancel a running run",
+          "label": "200 OK"
+        },
+        {
+          "from": "waf",
+          "to": "client",
+          "kind": "res",
+          "phase": "Cancel a running run",
+          "label": "200 OK"
         }
       ]
     }

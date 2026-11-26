@@ -556,6 +556,14 @@
     {
       "from": "pool_worker",
       "to": "pool_db"
+    },
+    {
+      "from": "app",
+      "to": "catalog"
+    },
+    {
+      "from": "app",
+      "to": "auth"
     }
   ],
   "flows": [
@@ -1083,6 +1091,99 @@
           "kind": "res",
           "phase": "Work in batches",
           "label": "1,000 rows"
+        }
+      ]
+    },
+    {
+      "id": "onboard",
+      "title": "Onboard a new tenant",
+      "summary": "Signing up creates a catalog entry and gives the first admin a tenant claim, so a pooled tenant is ready in seconds.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "cdn",
+          "kind": "req",
+          "phase": "Sign up",
+          "label": "POST /signup (company: initech)"
+        },
+        {
+          "from": "cdn",
+          "to": "gw",
+          "kind": "req",
+          "phase": "Sign up",
+          "label": "forward to origin"
+        },
+        {
+          "from": "gw",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Sign up",
+          "label": "route to the app"
+        },
+        {
+          "from": "lb",
+          "to": "app",
+          "kind": "req",
+          "phase": "Sign up",
+          "label": "route"
+        },
+        {
+          "from": "app",
+          "to": "catalog",
+          "kind": "req",
+          "phase": "Provision",
+          "label": "PUT tenant initech: pool, pool-1, plan=starter",
+          "detail": "A catalog row is all a pooled tenant needs: no new infrastructure, which is why onboarding takes minutes. A tenant that pays for a silo gets one created by automation, and the row points at it."
+        },
+        {
+          "from": "catalog",
+          "to": "app",
+          "kind": "res",
+          "phase": "Provision",
+          "label": "OK"
+        },
+        {
+          "from": "app",
+          "to": "auth",
+          "kind": "req",
+          "phase": "Provision",
+          "label": "set custom:tenant_id = initech on the first admin",
+          "detail": "The token the user receives from now on carries the tenant, which the gateway checks against the subdomain."
+        },
+        {
+          "from": "auth",
+          "to": "app",
+          "kind": "res",
+          "phase": "Provision",
+          "label": "OK"
+        },
+        {
+          "from": "app",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 tenant ready"
+        },
+        {
+          "from": "lb",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201"
+        },
+        {
+          "from": "gw",
+          "to": "cdn",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201"
+        },
+        {
+          "from": "cdn",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "201 tenant ready"
         }
       ]
     }

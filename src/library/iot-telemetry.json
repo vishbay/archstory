@@ -180,6 +180,7 @@
     { "from": "processor", "to": "archive", "async": true },
     { "from": "processor", "to": "registry" },
     { "from": "broker", "to": "api", "async": true },
+    { "from": "api", "to": "archive" },
     { "from": "processor", "to": "notify", "async": true }
   ],
   "flows": [
@@ -514,6 +515,194 @@
           "label": "raw to archive, invalid to quarantine/",
           "detail": "Invalid messages go to a quarantine prefix with the device id, so a meter with corrupt firmware is found and fixed instead of silently skewing the data.",
           "payload": "s3://telemetry-raw/quarantine/dt=2026-11-10/device=m-0450981/part-0001.json"
+        }
+      ]
+    },
+    {
+      "id": "firmware",
+      "title": "Roll out firmware in waves",
+      "summary": "A small canary gets the image first, devices download it directly from storage, and health numbers decide whether the next wave goes.",
+      "steps": [
+        {
+          "from": "console",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Start wave",
+          "label": "POST /campaigns (wave 1, 1%)"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Start wave",
+          "label": "passed"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Start wave",
+          "label": "forward to any API instance"
+        },
+        {
+          "from": "api",
+          "to": "registry",
+          "kind": "req",
+          "phase": "Select wave",
+          "label": "mark 1% of devices with the target version",
+          "detail": "A canary slice, chosen across groups, with the target version recorded on each row."
+        },
+        {
+          "from": "registry",
+          "to": "api",
+          "kind": "res",
+          "phase": "Select wave",
+          "label": "1,200 devices"
+        },
+        {
+          "from": "api",
+          "to": "broker",
+          "kind": "req",
+          "phase": "Notify",
+          "label": "PUBLISH fw/m-0012345/offer (presigned URL)",
+          "detail": "The URL points at the signed image in object storage and expires."
+        },
+        {
+          "from": "broker",
+          "to": "api",
+          "kind": "res",
+          "phase": "Notify",
+          "label": "accepted"
+        },
+        {
+          "from": "devices",
+          "to": "archive",
+          "kind": "req",
+          "phase": "Download",
+          "label": "GET image over HTTPS",
+          "detail": "The device checks the signature, writes the other slot and swaps on reboot, so a bad image rolls back by itself."
+        },
+        {
+          "from": "archive",
+          "to": "devices",
+          "kind": "res",
+          "phase": "Download",
+          "label": "image"
+        },
+        {
+          "from": "api",
+          "to": "tsdb",
+          "kind": "req",
+          "phase": "Gate",
+          "label": "check crash and reconnect rates for the wave",
+          "detail": "The next wave starts only if the health numbers stay inside the limits; otherwise the campaign halts automatically."
+        },
+        {
+          "from": "tsdb",
+          "to": "api",
+          "kind": "res",
+          "phase": "Gate",
+          "label": "crash rate 0.1%"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Gate",
+          "label": "200 wave 1 healthy, wave 2 queued"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Gate",
+          "label": "200 wave 1 healthy, wave 2 queued"
+        },
+        {
+          "from": "waf",
+          "to": "console",
+          "kind": "res",
+          "phase": "Gate",
+          "label": "200 wave 1 healthy, wave 2 queued"
+        }
+      ]
+    },
+    {
+      "id": "revoke",
+      "title": "Revoke one device",
+      "summary": "A stolen or compromised device is cut off without touching the rest of the fleet.",
+      "steps": [
+        {
+          "from": "console",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "POST /v1/devices/m-0012345/revoke"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "passed"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Request in",
+          "label": "forward to any API instance"
+        },
+        {
+          "from": "api",
+          "to": "registry",
+          "kind": "req",
+          "phase": "Revoke",
+          "label": "status = REVOKED",
+          "detail": "The broker reads this on every connect, behind a short cache."
+        },
+        {
+          "from": "registry",
+          "to": "api",
+          "kind": "res",
+          "phase": "Revoke",
+          "label": "1 row"
+        },
+        {
+          "from": "api",
+          "to": "broker",
+          "kind": "req",
+          "phase": "Revoke",
+          "label": "deactivate the certificate and disconnect the client",
+          "detail": "On AWS this marks the certificate inactive in IoT Core; either way the live session is dropped, and the device cannot reconnect."
+        },
+        {
+          "from": "broker",
+          "to": "api",
+          "kind": "res",
+          "phase": "Revoke",
+          "label": "disconnected"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Revoke",
+          "label": "200 revoked"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Revoke",
+          "label": "200 revoked"
+        },
+        {
+          "from": "waf",
+          "to": "console",
+          "kind": "res",
+          "phase": "Revoke",
+          "label": "200 revoked"
         }
       ]
     }

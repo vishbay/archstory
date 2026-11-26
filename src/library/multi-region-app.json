@@ -450,6 +450,14 @@
     {
       "from": "cdn",
       "to": "waf"
+    },
+    {
+      "from": "api",
+      "to": "media"
+    },
+    {
+      "from": "client",
+      "to": "media"
     }
   ],
   "flows": [
@@ -925,6 +933,172 @@
           "phase": "What is lost",
           "label": "unreplicated us-east-1 writes stranded",
           "detail": "Writes us-east-1 committed in its last second or so never reached eu-west-1. They replicate when the region returns, where last writer wins may overwrite a newer edit made since. The nightly billing job runs only in us-east-1, so billing stops until that region is back or the job is redeployed, and the warehouse has to be restored in eu-west-1 from yesterday's snapshot."
+        }
+      ]
+    },
+    {
+      "id": "edit-profile",
+      "title": "Edit a profile with a new avatar",
+      "summary": "A write is committed in the nearest region and replicated; two regions editing the same profile at once is the active-active conflict case.",
+      "steps": [
+        {
+          "from": "client",
+          "to": "waf",
+          "kind": "req",
+          "phase": "Edit profile",
+          "label": "PATCH /v1/me"
+        },
+        {
+          "from": "waf",
+          "to": "lb",
+          "kind": "req",
+          "phase": "Edit profile",
+          "label": "allowed: forward"
+        },
+        {
+          "from": "lb",
+          "to": "api",
+          "kind": "req",
+          "phase": "Edit profile",
+          "label": "route"
+        },
+        {
+          "from": "api",
+          "to": "api",
+          "kind": "local",
+          "phase": "Edit profile",
+          "label": "verify token, validate"
+        },
+        {
+          "from": "api",
+          "to": "media",
+          "kind": "req",
+          "phase": "Upload avatar",
+          "label": "presign PUT avatars/u_4417/a81d.webp",
+          "detail": "The API signs a short-lived upload URL; the image goes straight to the bucket, not through the API."
+        },
+        {
+          "from": "media",
+          "to": "api",
+          "kind": "res",
+          "phase": "Upload avatar",
+          "label": "signed URL"
+        },
+        {
+          "from": "client",
+          "to": "media",
+          "kind": "req",
+          "phase": "Upload avatar",
+          "label": "PUT image"
+        },
+        {
+          "from": "media",
+          "to": "client",
+          "kind": "res",
+          "phase": "Upload avatar",
+          "label": "200 OK"
+        },
+        {
+          "from": "api",
+          "to": "db",
+          "kind": "req",
+          "phase": "Write",
+          "label": "UpdateItem users u_4417 (local replica)",
+          "detail": "Committed in this region and replicated to the other region in about a second. If the same item is edited in both regions at once, the later write wins per item, which is why the profile holds only data where that is acceptable."
+        },
+        {
+          "from": "db",
+          "to": "api",
+          "kind": "res",
+          "phase": "Write",
+          "label": "OK"
+        },
+        {
+          "from": "db",
+          "to": "db",
+          "kind": "local",
+          "phase": "Write",
+          "label": "replicate to the other region",
+          "detail": "Asynchronous, lag p99 under a second."
+        },
+        {
+          "from": "api",
+          "to": "cache",
+          "kind": "req",
+          "phase": "Write",
+          "label": "DEL profile:u_4417",
+          "detail": "Only this region's cache is cleared; the other region's copy expires on its short TTL."
+        },
+        {
+          "from": "cache",
+          "to": "api",
+          "kind": "res",
+          "phase": "Write",
+          "label": "1"
+        },
+        {
+          "from": "api",
+          "to": "lb",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "lb",
+          "to": "waf",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        },
+        {
+          "from": "waf",
+          "to": "client",
+          "kind": "res",
+          "phase": "Respond",
+          "label": "200"
+        }
+      ]
+    },
+    {
+      "id": "nightly-billing",
+      "title": "Nightly billing and finance export",
+      "summary": "A scheduled job reads yesterday's paid orders from the replica and loads invoices into the warehouse.",
+      "steps": [
+        {
+          "from": "billing",
+          "to": "db",
+          "kind": "req",
+          "phase": "Export",
+          "label": "query yesterday's PAID orders",
+          "detail": "Reads this region's replica of the global table, off the request path, so it takes no capacity from order traffic."
+        },
+        {
+          "from": "db",
+          "to": "billing",
+          "kind": "res",
+          "phase": "Export",
+          "label": "order items"
+        },
+        {
+          "from": "billing",
+          "to": "billing",
+          "kind": "local",
+          "phase": "Build",
+          "label": "invoices and finance report"
+        },
+        {
+          "from": "billing",
+          "to": "warehouse",
+          "kind": "req",
+          "phase": "Load",
+          "label": "COPY orders and invoices"
+        },
+        {
+          "from": "warehouse",
+          "to": "billing",
+          "kind": "res",
+          "phase": "Load",
+          "label": "loaded"
         }
       ]
     }
