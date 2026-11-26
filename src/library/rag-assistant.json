@@ -78,6 +78,16 @@
   },
   "nodes": [
     {
+      "id": "evals",
+      "label": "Eval Runner",
+      "kind": "scheduler",
+      "description": "Nightly job: replays a fixed question set and a sample of rated production answers through a judge model, scores retrieval and answers per source and prompt version, and flags regressions",
+      "cloud": {
+        "aws": "ECS scheduled task",
+        "gcp": "Cloud Run job"
+      }
+    },
+    {
       "id": "user",
       "label": "Employees (web and Slack)",
       "kind": "web_client",
@@ -239,18 +249,8 @@
       "subnet": "none",
       "description": "Source credentials (service account tokens, OAuth clients) with automatic rotation, and the encryption keys for the stores; read through a private endpoint and never baked into an image or a config file",
       "cloud": {
-        "aws": "Secrets Manager",
-        "gcp": "Secret Manager"
-      }
-    },
-    {
-      "id": "evals",
-      "label": "Eval Runner",
-      "kind": "scheduler",
-      "description": "Nightly job: replays a fixed question set and a sample of rated production answers through a judge model, scores retrieval and answers per source and prompt version, and flags regressions",
-      "cloud": {
-        "aws": "ECS scheduled task",
-        "gcp": "Cloud Run job"
+        "aws": "Secrets Manager and KMS",
+        "gcp": "Secret Manager and Cloud KMS"
       }
     }
   ],
@@ -358,6 +358,10 @@
     {
       "from": "evals",
       "to": "llm"
+    },
+    {
+      "from": "evals",
+      "to": "chat_api"
     }
   ],
   "flows": [
@@ -439,7 +443,7 @@
           "kind": "req",
           "phase": "Rewrite query",
           "label": "small model: make the question standalone",
-          "detail": "\"Does that apply to contractors too?\" retrieves nothing useful on its own. A small, cheap model (about 300 ms, about 800 tokens in) rewrites it using the conversation into a standalone search query.",
+          "detail": "\"Does that apply to contractors too?\" retrieves nothing useful on its own. A small, cheap model (about 300 ms, about 800 tokens in) rewrites it using the conversation into a standalone search query. On the first turn of a conversation there is nothing to rewrite, so this step is skipped and the raw question is embedded straight away.",
           "payload": "{ \"model\": \"small\", \"max_tokens\": 60,\n  \"system\": \"Rewrite the last user message as a standalone search query. Output only the query.\",\n  \"messages\": [ ...last 4 turns..., { \"role\": \"user\", \"content\": \"does that apply to contractors too?\" } ] }"
         },
         {
@@ -455,7 +459,7 @@
           "kind": "req",
           "phase": "Rewrite query",
           "label": "look up answer for the rewritten query",
-          "detail": "The lookup uses the standalone rewritten query, not the raw text: \"does that apply to contractors too?\" means something different in every conversation. The key also holds the hash of the user's group list and the index build, so users with different access never share an answer.",
+          "detail": "The lookup uses the standalone rewritten query, not the raw text: \"does that apply to contractors too?\" means something different in every conversation. The key also holds a hash of the user's full principal set (their id and their groups, exactly what the retrieval filter uses) and the index build, so two people who can open different documents never share an answer, even when their group lists match and only one holds a direct share.",
           "payload": "GET answer:{sha256(\"parental leave eligibility for contractors us\")}:{acl_fp 9c1e}:{index build v7}"
         },
         {
@@ -544,7 +548,7 @@
           "kind": "res",
           "phase": "Stream back",
           "label": "SSE token events",
-          "detail": "Tokens are forwarded as they arrive, held back by about one sentence so an output scan for secrets and personal data can stop the stream before a bad sentence is shown.",
+          "detail": "Tokens are forwarded as they arrive, held back by about the first 10 tokens or the first clause so an output scan for secrets and personal data can stop the stream before a bad sentence is shown. First-token budget on a follow-up: about 0.3 s rewrite, 0.04 embed, 0.08 search, 0.15 rerank, 0.7 model first token and 0.2 hold-back, about 1.5 s with Redis and the network. On a first question the rewrite is skipped, about 1.2 s.",
           "payload": "event: token\ndata: {\"t\": \"No. Contractors engaged through an agency are not eligible [1]; \"}"
         },
         {
@@ -552,14 +556,14 @@
           "to": "waf",
           "kind": "res",
           "phase": "Stream back",
-          "label": "answer renders word by word (first token about 1.4 s)"
+          "label": "answer renders word by word (first token about 1.5 s)"
         },
         {
           "from": "waf",
           "to": "user",
           "kind": "res",
           "phase": "Stream back",
-          "label": "answer renders word by word (first token about 1.4 s)"
+          "label": "answer renders word by word (first token about 1.5 s)"
         },
         {
           "from": "chat_api",
@@ -606,7 +610,7 @@
           "kind": "async",
           "phase": "Record",
           "label": "cache answer for this permission set",
-          "detail": "The cached answer is keyed by the rewritten query, the hash of the user's group list and the index build (which changes only on a full rebuild), expires after a day so newly added documents are picked up, and is listed under each cited document so a change to that document drops it."
+          "detail": "The cached answer is keyed by the rewritten query, a hash of the user's full principal set (id and groups) and the index build (which changes only on a full rebuild), expires after a day so newly added documents are picked up, and is listed under each cited document so a change to that document drops it."
         }
       ]
     },
@@ -1249,6 +1253,22 @@
         },
         {
           "from": "evals",
+          "to": "chat_api",
+          "kind": "req",
+          "phase": "Nightly evals",
+          "label": "replay fixed questions as test users",
+          "detail": "Runs retrieval and generation for each fixed question through an internal, non-streaming route, as test users with known principals and with the answer cache bypassed, and returns the retrieved chunk ids and the answer. That is what lets recall at k and faithfulness be scored after a chunking or embedding change."
+        },
+        {
+          "from": "chat_api",
+          "to": "evals",
+          "kind": "res",
+          "phase": "Nightly evals",
+          "label": "chunk ids and answers",
+          "detail": "Ranks of the first relevant chunk can now be computed against the known good sources."
+        },
+        {
+          "from": "evals",
           "to": "llm",
           "kind": "req",
           "phase": "Nightly evals",
@@ -1300,7 +1320,7 @@
     {
       "target": "cache",
       "kind": "tradeoff",
-      "text": "An answer cache is only safe when scoped to a permission set: the key includes a hash of the user's group list, so two users with different access never share an answer. Exact match on the normalized rewritten question is safe and gives an assumed 10 to 20% hits on internal help questions; a semantic cache (embedding similarity above about 0.97) adds hits but can return an answer to a subtly different question, so use it only for high-traffic FAQ-style questions and drop entries when a cited document changes."
+      "text": "An answer cache is only safe when scoped to a permission set: the key includes a hash of the user's full principal set (their id and their groups, the same list the retrieval filter uses), so two users with different access never share an answer, even when their groups match and only one has a direct share. Exact match on the normalized rewritten question is safe and gives an assumed 5 to 10% hits (fewer than a groups-only key would give, because people with direct grants share nothing) on internal help questions; a semantic cache (embedding similarity above about 0.97) adds hits but can return an answer to a subtly different question, so use it only for high-traffic FAQ-style questions and drop entries when a cited document changes."
     },
     {
       "target": "llm",

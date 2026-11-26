@@ -41,7 +41,7 @@
       },
       {
         "label": "Writes",
-        "value": "~4,000/s peak (profile, cart and order updates); orders ~3M/day, 400/s peak"
+        "value": "~4,000/s peak (profile, cart and order updates); orders ~3M/day, ~100/s at peak (400/s in a flash sale)"
       },
       {
         "label": "Data",
@@ -53,7 +53,7 @@
       },
       {
         "label": "Capacity",
-        "value": "each region sized for 60,000 reads/s and 4,000 writes/s, so normally at about half load"
+        "value": "each region sized for 100% of the global peak (60,000 reads/s and 4,000 writes/s), so about 60% busy in us-east-1 and 40% in eu-west-1 in normal times"
       }
     ],
     "estimate": {
@@ -204,8 +204,8 @@
       {
         "id": "headroom",
         "severity": "ticket",
-        "when": "Either region above 50% of its tested capacity at daily peak (CPU, task count or table capacity), for 3 days",
-        "why": "Above half, the surviving region could not take the other region's users in a failover. This is the alert that protects the RTO.",
+        "when": "The busier region's daily peak plus the other region's peak is above 100% of the busier region's tested capacity (CPU, task count or table capacity), for 3 days",
+        "why": "Above that, the surviving region could not take the other region's users in a failover. This is the alert that protects the RTO.",
         "target": "api",
         "slo": "read-latency"
       },

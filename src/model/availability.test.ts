@@ -58,8 +58,10 @@ describe('zones view routing', () => {
   it('keeps a request in its entry zone and crosses zones only to reach a primary', () => {
     const hops = resolveFlow(layoutZones(url, null), create, 1, null)
     expect(hops.map(pair)).toContain('lb@1→api@1')
-    const write = hops.find(h => h.to === 'db@0')!
-    expect(write.from).toBe('api@1'); expect(write.cross).toBe(true)
+    const write = hops.find(h => h.from === 'api@1' && h.to === 'db@0')!
+    expect(write.cross).toBe(true)
+    const claim = hops.find(h => h.from === 'kgs@1' && h.to === 'db@0')!   // the key service reaches the same primary
+    expect(claim.cross).toBe(true)
     expect(hops.every(h => h.from === h.to || h.edge)).toBe(true)
   })
   it('responses retrace the request path', () => {

@@ -38,7 +38,7 @@
       },
       {
         "label": "Orders",
-        "value": "150k / day, 60 / s at peak; 5% currently created by the new orders service"
+        "value": "150k / day (about 2 / s average), up to 60 / s in a sale spike; 5% currently created by the new orders service"
       },
       {
         "label": "On-premises database",
@@ -471,7 +471,8 @@
     },
     {
       "from": "cdc",
-      "to": "hybrid"
+      "to": "hybrid",
+      "async": true
     },
     {
       "from": "hybrid",
@@ -479,11 +480,13 @@
     },
     {
       "from": "cdc",
-      "to": "catalog_db"
+      "to": "catalog_db",
+      "async": true
     },
     {
       "from": "cdc",
-      "to": "orders_db"
+      "to": "orders_db",
+      "async": true
     },
     {
       "from": "client",
@@ -898,6 +901,14 @@
           "payload": "aws elbv2 modify-rule --rule-arn <orders-post-rule> --actions '[{\"Type\":\"forward\",\"TargetGroupArn\":\"tg-monolith-onprem\"}]'"
         },
         {
+          "from": "lb",
+          "to": "lb",
+          "kind": "local",
+          "phase": "Stop new writes",
+          "label": "freeze changes to /api/orders/N-*",
+          "detail": "A router rule answers 503 with Retry-After to changes on N- orders (reads still go to the orders service), so the reverse stream can drain to zero and stay there while ownership flips. It is the same short write freeze the cutover uses (under a minute)."
+        },
+        {
           "from": "cdc",
           "to": "orders_db",
           "kind": "req",
@@ -963,7 +974,7 @@
           "to": "lb",
           "kind": "local",
           "phase": "Hand back ownership",
-          "label": "route /api/orders/N-* to monolith",
+          "label": "replace the freeze with a route to the monolith",
           "detail": "Only after the ownership flip has committed does the rule for changes to N- orders point at the monolith, so there is never a moment with two writers.",
           "payload": "rule path-pattern /api/orders/N-* forward to tg-monolith-onprem"
         },

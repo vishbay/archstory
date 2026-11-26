@@ -31,7 +31,7 @@
       },
       {
         "label": "Channels",
-        "value": "~80% push, ~20% email (~2.3k emails/s average)"
+        "value": "~80% push, ~20% email (~2.3k emails/s average, ~11.6k/s at the 5x peak)"
       },
       {
         "label": "Critical share",
@@ -185,7 +185,7 @@
         "id": "bulk-age",
         "severity": "ticket",
         "when": "Oldest bulk message above 2 hours",
-        "why": "A campaign is draining far slower than its quota allows (a 5M campaign takes under 20 minutes at 5k/s). Not urgent, but worth knowing.",
+        "why": "A campaign is draining far slower than its quota allows (a 5M campaign takes about 30 minutes alongside regular email at 5k/s). Not urgent, but worth knowing.",
         "target": "bulk_q"
       },
       {
@@ -668,6 +668,23 @@
         },
         {
           "from": "notif_api",
+          "to": "dedupe",
+          "kind": "req",
+          "phase": "Accept campaign",
+          "label": "SET NX idem:camp-winback-nov",
+          "detail": "The campaign request carries an idempotency key, claimed here before anything is expanded. A producer that retries the same campaign is acknowledged and not expanded a second time, which is the difference between 1.4M emails and 2.8M.",
+          "payload": "SET idem:camp-winback-nov c_77 NX EX 604800"
+        },
+        {
+          "from": "dedupe",
+          "to": "notif_api",
+          "kind": "res",
+          "phase": "Accept campaign",
+          "label": "claimed",
+          "detail": "First time this campaign id has been seen."
+        },
+        {
+          "from": "notif_api",
           "to": "prefs",
           "kind": "req",
           "phase": "Filter recipients",
@@ -732,7 +749,7 @@
           "kind": "local",
           "phase": "Send in batches",
           "label": "token bucket, 5k/s fleet-wide",
-          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled: the account's sending rate quota (assumed here to have been raised to 5k/s; SES accounts start at 1 message per second in the sandbox and need an increase request, also for the daily quota) is split across the worker fleet, and critical emails are taken first, so a campaign uses only what is left. 1.4M emails take about 5 minutes."
+          "detail": "Workers pace sends to the provider's quota instead of hammering it and getting throttled: the account's sending rate quota (assumed here to have been raised to 5k/s; SES accounts start at 1 message per second in the sandbox and need an increase request, also for the daily quota) is split across the worker fleet, and critical emails are taken first, so a campaign uses only what is left. Regular email already uses about 2.3k/s on average, so a campaign gets about 2.7k/s of the 5k/s: 1.4M emails take about 9 minutes, and a 5M campaign about 30 minutes. Regular email peaks above the quota (about 11.6k/s at 5x), so the workers drain a backlog after a peak rather than send everything at once."
         },
         {
           "from": "email_worker",

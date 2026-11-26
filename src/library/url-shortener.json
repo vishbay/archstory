@@ -518,6 +518,23 @@
         },
         {
           "from": "kgs",
+          "to": "db",
+          "kind": "req",
+          "phase": "Generate key",
+          "label": "claim the next free batch",
+          "detail": "Both KGS instances do this against the primary: one atomic UPDATE whose subquery picks the next unclaimed batch with FOR UPDATE SKIP LOCKED, so two instances never get the same batch and KGS keeps no state of its own.",
+          "payload": "UPDATE key_batches SET claimed_by = 'kgs-2'\n WHERE id = (SELECT id FROM key_batches WHERE claimed_by IS NULL\n             ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)\nRETURNING id, first_code, last_code;"
+        },
+        {
+          "from": "db",
+          "to": "kgs",
+          "kind": "res",
+          "phase": "Generate key",
+          "label": "batch 48213 claimed",
+          "detail": "The batch is now recorded as taken before any code in it is used."
+        },
+        {
+          "from": "kgs",
           "to": "api",
           "kind": "res",
           "phase": "Generate key",

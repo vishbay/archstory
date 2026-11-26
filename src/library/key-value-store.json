@@ -301,8 +301,8 @@
       "id": "router",
       "label": "Request Router",
       "kind": "service",
-      "replicas": 12,
-      "description": "Stateless. Holds the ring (learned by gossip), hashes each key and forwards to the first healthy replica. Large instances: about 100k requests/s each at the 1.25M/s peak",
+      "replicas": 18,
+      "description": "Stateless. Holds the ring (learned by gossip), hashes each key and forwards to the first healthy replica. Large instances: about 70k requests/s each at the 1.25M/s peak, 105k with a zone down",
       "cloud": {
         "aws": "EKS",
         "gcp": "GKE"
@@ -370,7 +370,7 @@
       "id": "backups",
       "label": "Snapshot Backups",
       "kind": "object_store",
-      "description": "SSTable snapshots and commit log segments for point in time restore",
+      "description": "SSTable snapshots and commit log segments for point in time restore, uploaded by every storage node (one is drawn as the source)",
       "cloud": {
         "aws": "S3",
         "gcp": "Cloud Storage"
@@ -429,6 +429,24 @@
       "to": "backups",
       "label": "snapshots",
       "async": true
+    },
+    {
+      "from": "router",
+      "to": "storage-b"
+    },
+    {
+      "from": "router",
+      "to": "storage-c"
+    },
+    {
+      "from": "storage-b",
+      "to": "backups",
+      "async_": true
+    },
+    {
+      "from": "storage-c",
+      "to": "backups",
+      "async_": true
     }
   ],
   "flows": [

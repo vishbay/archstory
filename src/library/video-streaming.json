@@ -977,7 +977,7 @@
     {
       "id": "metadata",
       "q": "The Playback API is read heavily for titles, thumbnails and manifest URLs. How do you scale it?",
-      "a": "Metadata changes rarely, so cache it: an in-process cache in the Playback API with a few seconds' TTL absorbs popular videos, and read replicas take the rest. The API response itself is not cached at the CDN because it carries a per-viewer playback token and records a view; thumbnails and the page shell are static and are cached there. Invalidate on the few writes, such as a title change or a newly finished transcode.",
+      "a": "Metadata changes rarely, so cache it: an in-process cache in the Playback API with a few seconds' TTL absorbs popular videos, and the metadata database, which only sees the misses, takes the rest. The API response itself is not cached at the CDN because it carries a per-viewer playback token and records a view; thumbnails and the page shell are static and are cached there. Invalidate on the few writes, such as a title change or a newly finished transcode.",
       "topic": "scale",
       "targets": [
         "meta_svc",

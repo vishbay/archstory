@@ -709,6 +709,21 @@
         },
         {
           "from": "app",
+          "to": "pool_cache",
+          "kind": "req",
+          "phase": "Handle request",
+          "label": "SET globex:projects EX 60",
+          "detail": "Fills the cache under the tenant-prefixed key; the guard in the next step still checks tenant ids."
+        },
+        {
+          "from": "pool_cache",
+          "to": "app",
+          "kind": "res",
+          "phase": "Handle request",
+          "label": "OK"
+        },
+        {
+          "from": "app",
           "to": "app",
           "kind": "local",
           "phase": "Handle request",
@@ -856,6 +871,14 @@
           "kind": "res",
           "phase": "Handle request",
           "label": "job_9"
+        },
+        {
+          "from": "app",
+          "to": "app",
+          "kind": "local",
+          "phase": "Handle request",
+          "label": "tenant guard",
+          "detail": "The same guard as for pooled tenants: the record's tenant_id must equal acme or the response is blocked. The app code is identical for both."
         },
         {
           "from": "app",

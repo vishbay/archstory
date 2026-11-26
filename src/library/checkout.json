@@ -388,7 +388,7 @@
       "description": "Kafka topic: OrderPaid, OrderFailed; a dead-letter topic for events a consumer keeps failing on",
       "cloud": {
         "aws": "MSK (Kafka)",
-        "gcp": "Kafka on GKE"
+        "gcp": "Managed Service for Apache Kafka"
       }
     },
     {
@@ -614,6 +614,22 @@
           "kind": "res",
           "phase": "Reserve stock",
           "label": "reserved"
+        },
+        {
+          "from": "order_svc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Charge card",
+          "label": "record payment attempt 1",
+          "detail": "Before the card is touched, the order records that an attempt started. A crash after this write means the sweeper must ask the provider, not release the stock; no record means no charge was started, so releasing the reservation is safe.",
+          "payload": "UPDATE orders SET payment_attempt_at = now(), attempts = attempts + 1\n WHERE id = 'o_501' AND status = 'PENDING';"
+        },
+        {
+          "from": "orders_db",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Charge card",
+          "label": "attempt recorded"
         },
         {
           "from": "order_svc",
@@ -852,6 +868,22 @@
         },
         {
           "from": "order_svc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Payment declined",
+          "label": "record payment attempt 1",
+          "detail": "Before the card is touched, the order records that an attempt started. A crash after this write means the sweeper must ask the provider, not release the stock; no record means no charge was started, so releasing the reservation is safe.",
+          "payload": "UPDATE orders SET payment_attempt_at = now(), attempts = attempts + 1\n WHERE id = 'o_502' AND status = 'PENDING';"
+        },
+        {
+          "from": "orders_db",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Payment declined",
+          "label": "attempt recorded"
+        },
+        {
+          "from": "order_svc",
           "to": "payment_svc",
           "kind": "req",
           "phase": "Payment declined",
@@ -960,6 +992,22 @@
       "title": "Provider timeout, settled by the sweeper",
       "summary": "The charge outcome is unknown, so the order stays PENDING with its stock held. The sweeper asks the provider again and finishes the order.",
       "steps": [
+        {
+          "from": "order_svc",
+          "to": "orders_db",
+          "kind": "req",
+          "phase": "Charge times out",
+          "label": "record payment attempt 1",
+          "detail": "Before the card is touched, the order records that an attempt started. A crash after this write means the sweeper must ask the provider, not release the stock; no record means no charge was started, so releasing the reservation is safe.",
+          "payload": "UPDATE orders SET payment_attempt_at = now(), attempts = attempts + 1\n WHERE id = 'o_503' AND status = 'PENDING';"
+        },
+        {
+          "from": "orders_db",
+          "to": "order_svc",
+          "kind": "res",
+          "phase": "Charge times out",
+          "label": "attempt recorded"
+        },
         {
           "from": "order_svc",
           "to": "payment_svc",

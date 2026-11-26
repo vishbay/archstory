@@ -498,6 +498,10 @@
       "from": "tracker",
       "to": "trips_db",
       "async": true
+    },
+    {
+      "from": "ws",
+      "to": "matching"
     }
   ],
   "flows": [
@@ -915,6 +919,21 @@
           "kind": "req",
           "phase": "Request in",
           "label": "route"
+        },
+        {
+          "from": "trip_svc",
+          "to": "trips_db",
+          "kind": "req",
+          "phase": "Compute fare",
+          "label": "read GPS trace",
+          "detail": "Loads the trace rows the Trip Tracker appended. The tracker flushes its per-trip buffer when it sees the complete event, so the last seconds of the trip are not lost."
+        },
+        {
+          "from": "trips_db",
+          "to": "trip_svc",
+          "kind": "res",
+          "phase": "Compute fare",
+          "label": "trace, 212 points"
         },
         {
           "from": "trip_svc",

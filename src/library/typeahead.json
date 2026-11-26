@@ -15,7 +15,7 @@
     "functional": [
       "Return the top 10 completions for a typed prefix",
       "Rank suggestions by popularity",
-      "Trending queries show up within about an hour"
+      "Trending queries show up within about 90 minutes (an hourly rebuild, then a rolling load)"
     ],
     "nonFunctional": [
       "< 100 ms p99 per keystroke, including the network",
@@ -551,7 +551,7 @@
         {
           "from": "builder",
           "to": "counts",
-          "kind": "async",
+          "kind": "req",
           "phase": "Build the trie",
           "label": "parallel scan, keep top 100M",
           "detail": "A full parallel scan once an hour, applying each row's decay and keeping the best 100M queries in a heap."
@@ -559,7 +559,7 @@
         {
           "from": "counts",
           "to": "builder",
-          "kind": "async",
+          "kind": "res",
           "phase": "Build the trie",
           "label": "queries + scores"
         },
@@ -574,9 +574,17 @@
         {
           "from": "builder",
           "to": "snapshots",
-          "kind": "async",
+          "kind": "req",
           "phase": "Build the trie",
           "label": "PUT trie-v1234"
+        },
+        {
+          "from": "snapshots",
+          "to": "builder",
+          "kind": "res",
+          "phase": "Build the trie",
+          "label": "stored",
+          "detail": "The version is written and the checks run before any suggest instance is told to load it."
         },
         {
           "from": "suggest",

@@ -489,6 +489,10 @@
     {
       "from": "cdn",
       "to": "waf"
+    },
+    {
+      "from": "chat_svc",
+      "to": "ws"
     }
   ],
   "flows": [
@@ -634,7 +638,7 @@
           "kind": "res",
           "phase": "Acknowledge sender",
           "label": "ack ✓",
-          "detail": "Internal RPC straight to the node that holds Bob's socket, by its address, not through any balancer. No broadcast to all gateways. If the node answers that Bob is no longer there (he reconnected elsewhere), the service falls back to the offline path."
+          "detail": "The ack goes back down Alice's own connection as soon as the write is durable. Delivery to Bob follows and does not delay it."
         },
         {
           "from": "ws",

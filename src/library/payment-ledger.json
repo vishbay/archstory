@@ -442,7 +442,8 @@
       "cloud": {
         "aws": "S3",
         "gcp": "Cloud Storage"
-      }
+      },
+      "subnet": "none"
     },
     {
       "id": "psp",
@@ -1146,8 +1147,8 @@
           "kind": "req",
           "phase": "Park",
           "label": "UPDATE payouts UNKNOWN",
-          "payload": "BEGIN;\nUPDATE payouts SET status = 'PAID', provider_ref = 'tr_7Hc2', reconciled_at = now()\n  WHERE id = 'po_78' AND status = 'UNKNOWN';\nINSERT INTO transactions (id, kind, payout_id, source) VALUES ('tx_9302', 'payout_settle', 'po_78', 'reconciliation');\nINSERT INTO entries (...) VALUES\n  ('tx_9302', 'payouts_in_flight', 'debit', 4200, 'USD'),\n  ('tx_9302', 'cash_at_provider', 'credit', 4200, 'USD');\nUPDATE accounts SET ... ;  -- both materialized balances\nCOMMIT;",
-          "detail": "The same settle transaction the webhook uses. A unique constraint on (payout_id, kind) means that if the late webhook also arrives, only one of them posts: the other's insert fails and its whole transaction rolls back."
+          "payload": "UPDATE payouts SET status = 'UNKNOWN'\n  WHERE id = 'po_78' AND status IN ('PENDING', 'SUBMITTED');",
+          "detail": "Only the status record changes; the funds stay in payouts_in_flight. A unique constraint on (payout_id, kind) later guarantees that the settlement posts once, even if the late webhook and reconciliation both arrive."
         },
         {
           "from": "ledger_db",

@@ -178,6 +178,8 @@
     { "from": "stream", "to": "processor" },
     { "from": "processor", "to": "tsdb", "async": true },
     { "from": "processor", "to": "archive", "async": true },
+    { "from": "processor", "to": "registry" },
+    { "from": "broker", "to": "api", "async": true },
     { "from": "processor", "to": "notify", "async": true }
   ],
   "flows": [
@@ -223,6 +225,15 @@
           "from": "stream", "to": "processor", "kind": "async", "phase": "Process",
           "label": "read shard from checkpoint",
           "detail": "The processor reads every shard and checkpoints its position; the stream keeps 24 hours of records, so a crashed or redeployed job resumes where it stopped."
+        },
+        {
+          "from": "processor", "to": "registry", "kind": "req", "phase": "Process",
+          "label": "load rules and device groups",
+          "detail": "Alert rules and the device to group map are loaded at start and refreshed every minute, then held in operator state, so the registry is not read for every reading."
+        },
+        {
+          "from": "registry", "to": "processor", "kind": "res", "phase": "Process",
+          "label": "rules, 4,100 groups"
         },
         {
           "from": "processor", "to": "processor", "kind": "local", "phase": "Process",

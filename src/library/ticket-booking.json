@@ -155,7 +155,7 @@
       "id": "holds",
       "label": "Seat Holds",
       "kind": "cache",
-      "description": "One key per held seat with a 10-minute expiry; keys hash-tagged by event so a multi-seat hold is one atomic script",
+      "description": "One key per held seat with a 10-minute expiry, and a permanent sold marker for every seat that has sold; keys hash-tagged by event so a multi-seat hold is one atomic script",
       "cloud": {
         "aws": "ElastiCache Redis",
         "gcp": "Memorystore Redis"
@@ -179,7 +179,8 @@
         "aws": "SQS",
         "gcp": "Pub/Sub"
       },
-      "description": "At-least-once delivery; a dead-letter queue after 5 failed attempts"
+      "description": "At-least-once delivery; a dead-letter queue after 5 failed attempts",
+      "subnet": "none"
     },
     {
       "id": "issuer",
@@ -455,7 +456,7 @@
           "kind": "req",
           "phase": "Hold seats",
           "label": "hold A12 + A13 atomically, 10 min",
-          "detail": "One Lua script holds all the seats or none: two fans asking for overlapping seats can never each end up with half. The {123} hash tag puts an event's seat keys in one Redis slot so the script may touch them all, and a seat already held by u9 counts as success, so a retried request is harmless.",
+          "detail": "One Lua script holds all the seats or none: two fans asking for overlapping seats can never each end up with half. The {123} hash tag puts an event's seat keys in one Redis slot so the script may touch them all, and a seat already held by u9 counts as success, so a retried request is harmless. The script also refuses any seat carrying a sold marker, so a stale seat map cannot win a hold on a seat that has already gone.",
           "payload": "EVALSHA hold_all 2 hold:{123}:A12 hold:{123}:A13 u9 600\n-- for each key: if it exists and is not u9, return 0 (nothing set)\n-- otherwise SET key u9 EX 600 for every key, return 1"
         },
         {
@@ -619,6 +620,21 @@
           "kind": "res",
           "phase": "Confirm",
           "label": "COMMIT: 2 seats sold"
+        },
+        {
+          "from": "booking",
+          "to": "holds",
+          "kind": "req",
+          "phase": "Confirm",
+          "label": "mark A12, A13 sold (no expiry)",
+          "detail": "After the commit the two hold keys are replaced by permanent sold markers, so the hold script rejects these seats from now on. If this write is lost in a Redis failover, the seat row in the database is still the final guard against a double sale."
+        },
+        {
+          "from": "holds",
+          "to": "booking",
+          "kind": "res",
+          "phase": "Confirm",
+          "label": "OK"
         },
         {
           "from": "booking",
