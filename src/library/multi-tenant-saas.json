@@ -468,6 +468,17 @@
         "aws": "ECS Fargate",
         "gcp": "Cloud Run"
       }
+    },
+    {
+      "id": "secrets",
+      "label": "Secrets and Keys",
+      "kind": "secrets",
+      "subnet": "none",
+      "description": "The gateway's context-signing key (rotated with an overlap window so old and new both verify) and the customer-managed key for the silo database",
+      "cloud": {
+        "aws": "Secrets Manager",
+        "gcp": "Secret Manager"
+      }
     }
   ],
   "groups": [
@@ -564,6 +575,10 @@
     {
       "from": "app",
       "to": "auth"
+    },
+    {
+      "from": "gw",
+      "to": "secrets"
     }
   ],
   "flows": [
@@ -634,6 +649,21 @@
           "phase": "Authenticate",
           "label": "valid, tenant=globex",
           "detail": "The gateway also checks the token's tenant matches the subdomain."
+        },
+        {
+          "from": "gw",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Authenticate",
+          "label": "signing key (cached)",
+          "detail": "The key that signs the tenant context the app trusts. It is cached in the gateway and refreshed on rotation, so this is not a call on every request."
+        },
+        {
+          "from": "secrets",
+          "to": "gw",
+          "kind": "res",
+          "phase": "Authenticate",
+          "label": "key v12"
         },
         {
           "from": "gw",

@@ -269,6 +269,18 @@
   },
   "nodes": [
     {
+      "id": "secrets",
+      "label": "Secrets and Keys",
+      "kind": "secrets",
+      "subnet": "none",
+      "description": "The payment provider key and the token signing keys, rotated without a deploy",
+      "cloud": {
+        "aws": "Secrets Manager",
+        "gcp": "Secret Manager"
+      },
+      "tier": "external"
+    },
+    {
       "id": "rider",
       "label": "Rider App",
       "kind": "mobile_client"
@@ -502,6 +514,10 @@
     {
       "from": "ws",
       "to": "matching"
+    },
+    {
+      "from": "trip_svc",
+      "to": "secrets"
     }
   ],
   "flows": [
@@ -957,6 +973,21 @@
           "phase": "Compute fare",
           "label": "fare = base + km + min × surge",
           "detail": "The surge multiplier comes from the quote the rider accepted before requesting, stored on the trip, so the rider pays the price they were shown. Pricing itself runs outside this design."
+        },
+        {
+          "from": "trip_svc",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Charge",
+          "label": "payment provider key",
+          "detail": "Cached in the service and refreshed when the key rotates, so it never sits in an image or a config file."
+        },
+        {
+          "from": "secrets",
+          "to": "trip_svc",
+          "kind": "res",
+          "phase": "Charge",
+          "label": "key"
         },
         {
           "from": "trip_svc",

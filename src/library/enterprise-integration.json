@@ -282,6 +282,18 @@
   },
   "nodes": [
     {
+      "id": "secrets",
+      "label": "Secrets and Keys",
+      "kind": "secrets",
+      "subnet": "none",
+      "description": "Webhook signing secrets and each connector's credentials for its system, with an alert before any expires",
+      "cloud": {
+        "aws": "Secrets Manager",
+        "gcp": "Secret Manager"
+      },
+      "tier": "external"
+    },
+    {
       "id": "ilb",
       "label": "Internal Load Balancer (L7)",
       "kind": "load_balancer",
@@ -546,6 +558,22 @@
       "from": "bus",
       "to": "commerce",
       "async_": true
+    },
+    {
+      "from": "commerce",
+      "to": "secrets"
+    },
+    {
+      "from": "erp_conn",
+      "to": "secrets"
+    },
+    {
+      "from": "wms_conn",
+      "to": "secrets"
+    },
+    {
+      "from": "crm_conn",
+      "to": "secrets"
     }
   ],
   "flows": [
@@ -587,6 +615,21 @@
           "phase": "Validate and map",
           "label": "verify HMAC signature",
           "detail": "An HMAC with the shop's shared secret, loaded from the secrets manager, proves the shop sent it. Anything unsigned is rejected before it can become a business event."
+        },
+        {
+          "from": "commerce",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Validate and map",
+          "label": "get webhook secret",
+          "detail": "Cached and rotated automatically; a connector reads its own credentials the same way."
+        },
+        {
+          "from": "secrets",
+          "to": "commerce",
+          "kind": "res",
+          "phase": "Validate and map",
+          "label": "secret v4"
         },
         {
           "from": "commerce",

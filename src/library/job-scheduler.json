@@ -268,6 +268,18 @@
   },
   "nodes": [
     {
+      "id": "secrets",
+      "label": "Secrets and Keys",
+      "kind": "secrets",
+      "subnet": "none",
+      "description": "The per-tenant request-signing keys and any credentials the worker presents to a target, rotated without a deploy and read through a private endpoint",
+      "cloud": {
+        "aws": "Secrets Manager",
+        "gcp": "Secret Manager"
+      },
+      "tier": "external"
+    },
+    {
       "id": "client",
       "label": "Tenant Services",
       "kind": "client",
@@ -459,6 +471,10 @@
       "from": "scheduler",
       "to": "history",
       "async_": true
+    },
+    {
+      "from": "worker",
+      "to": "secrets"
     }
   ],
   "flows": [
@@ -659,6 +675,21 @@
           "phase": "Claim with a lease",
           "label": "DeleteMessage",
           "detail": "Once the row is claimed, the lease in the database protects the run, so the message is deleted. If the worker had died before claiming, the message would reappear after the visibility timeout and another worker would take it."
+        },
+        {
+          "from": "worker",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Run",
+          "label": "get signing key",
+          "detail": "Read once per task and cached until it rotates. The worker signs the request body so the target can tell the call is really from the scheduler."
+        },
+        {
+          "from": "secrets",
+          "to": "worker",
+          "kind": "res",
+          "phase": "Run",
+          "label": "key v7"
         },
         {
           "from": "worker",

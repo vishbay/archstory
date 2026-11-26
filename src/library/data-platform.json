@@ -446,10 +446,23 @@
         "aws": "QuickSight",
         "gcp": "Looker"
       }
+    },
+    {
+      "id": "secrets",
+      "label": "Secrets and Keys",
+      "kind": "secrets",
+      "subnet": "none",
+      "tier": "external",
+      "description": "Credentials for the third-party exports, read at job start and never stored in the DAG or the job image",
+      "cloud": {
+        "aws": "Secrets Manager",
+        "gcp": "Secret Manager"
+      }
     }
   ],
   "groups": [],
   "edges": [
+    { "from": "spark", "to": "secrets" },
     {
       "from": "app",
       "to": "dns"
@@ -845,6 +858,21 @@
           "kind": "res",
           "phase": "Merge changes",
           "label": "snapshot committed, 2.1M orders touched"
+        },
+        {
+          "from": "spark",
+          "to": "secrets",
+          "kind": "req",
+          "phase": "Third-party exports",
+          "label": "get API credentials",
+          "detail": "Read at job start from the secrets store, never stored in the DAG or the job image; rotated without a redeploy."
+        },
+        {
+          "from": "secrets",
+          "to": "spark",
+          "kind": "res",
+          "phase": "Third-party exports",
+          "label": "credentials"
         },
         {
           "from": "spark",

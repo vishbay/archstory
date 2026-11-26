@@ -156,6 +156,18 @@
         "aws": "Kinesis Data Streams",
         "gcp": "Pub/Sub"
       }
+    },
+    {
+      "id": "idp",
+      "label": "Identity Provider",
+      "kind": "auth",
+      "subnet": "none",
+      "tier": "entry",
+      "description": "Sign-in and device tokens; the API checks each token and the account it belongs to before touching any file",
+      "cloud": {
+        "aws": "Cognito",
+        "gcp": "Identity Platform"
+      }
     }
   ],
   "groups": [],
@@ -213,6 +225,10 @@
       "from": "api",
       "to": "blocks",
       "label": "confirm uploads"
+    },
+    {
+      "from": "api",
+      "to": "idp"
     }
   ],
   "flows": [
@@ -266,6 +282,21 @@
           "kind": "req",
           "phase": "Find missing blocks",
           "label": "route to metadata API"
+        },
+        {
+          "from": "api",
+          "to": "idp",
+          "kind": "req",
+          "phase": "Find missing blocks",
+          "label": "verify device token",
+          "detail": "The token names the account and the device; the account decides which block hashes and which folders this request may touch. Public keys are cached, so this is not a call on every request."
+        },
+        {
+          "from": "idp",
+          "to": "api",
+          "kind": "res",
+          "phase": "Find missing blocks",
+          "label": "account a_7731, device laptop-2"
         },
         {
           "from": "api",
