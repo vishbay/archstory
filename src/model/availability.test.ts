@@ -45,6 +45,11 @@ describe('zone failure impact', () => {
     expect(impactOf(d, node(d, 'w'), 0, 'aws')).toMatchObject({ level: 'warn', tag: 'down (background)' })
     expect(resilience(d, 0, 'aws')!.spofs.map(n => n.id)).toEqual(['db'])
   })
+  it('describes a load balancer as one regional resource with a node per zone', () => {
+    const r = impactOf(url, node(url, 'lb'), 0, 'aws')!
+    expect(r.tag).toBe('−1/3 nodes')
+    expect(r.text).toMatch(/One load balancer for the region/)
+  })
   it('states the capacity rule', () => {
     expect(resilience(url, 0, 'aws')!.perZoneShare).toBe('50% of peak per zone (150% total)')
   })
